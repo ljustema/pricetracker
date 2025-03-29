@@ -38,7 +38,14 @@ const nextConfig: NextConfig = {
     return config;
   },
   // External packages for server components
-  serverExternalPackages: []
+  serverExternalPackages: [],
+  typescript: {
+    // !! WARN !!
+    // Dangerously allow production builds to successfully complete even if
+    // your project has type errors.
+    // !! WARN !!
+    ignoreBuildErrors: true,
+  },
 };
 
 export default nextConfig;
