@@ -26,13 +26,12 @@ PriceTracker is a SaaS application that helps businesses monitor competitor pric
 
 ```mermaid
 graph TD
-    A[User Browser] --> B{Next.js Frontend (React)};
-    B --> C{Next.js API Routes};
-    C --> D[Supabase (Auth, DB)];
-    C --> E[Stripe API];
-    D --> C;
-    E --> C;
-```
+    A[User Browser] --> B[Next.js Frontend]
+    B --> C[Next.js API Routes]
+    C --> D[Supabase Auth, DB]
+    C --> E[Stripe API]
+    D --> C
+    E --> 
 
 ## Getting Started
 
