@@ -31,7 +31,8 @@ graph TD
     C --> D[Supabase Auth, DB]
     C --> E[Stripe API]
     D --> C
-    E --> 
+    E --> C
+```
 
 ## Getting Started
 
