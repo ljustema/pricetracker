@@ -235,7 +235,21 @@ export async function DELETE(
       // Optionally re-throw or return an error if deletion of products is critical
       // throw new Error(`Failed to delete associated products: ${deleteProductsError.message}`);
     }
+// Then, delete associated scraper runs
+const { error: deleteRunsError } = await supabase
+  .from('scraper_runs')
+  .delete()
+  .eq('scraper_id', scraperId);
 
+if (deleteRunsError) {
+  // Log the error but attempt to continue deleting the scraper itself if desired,
+  // or handle it more strictly depending on requirements.
+  console.error(`Failed to delete associated runs for scraper ${scraperId}: ${deleteRunsError.message}`);
+  // Optionally re-throw or return an error if deletion of runs is critical
+  // throw new Error(`Failed to delete associated runs: ${deleteRunsError.message}`);
+}
+
+// Now, delete the scraper
     // Now, delete the scraper
     const { error: deleteError } = await supabase
       .from('scrapers')
