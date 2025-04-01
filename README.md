@@ -8,7 +8,7 @@ PriceTracker is a SaaS application that helps businesses monitor competitor pric
 - **Dashboard**: Overview of competitors, products, and recent price changes
 - **Competitors**: Manage competitor information
 - **Products**: Track your products and compare prices
-- **Scrapers**: AI-powered web scraping to automatically collect price data
+- **Scrapers**: AI-powered web scraping to automatically collect price data, view run history, and track performance (Products/sec).
 - **Insights**: Analyze price trends and get actionable insights
 - **Settings**: Configure API integrations and account settings
 - **Admin**: Manage users and system settings

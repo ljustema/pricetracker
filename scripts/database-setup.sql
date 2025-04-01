@@ -284,7 +284,8 @@ CREATE TABLE IF NOT EXISTS scrapers (
   last_run TIMESTAMP WITH TIME ZONE,
   execution_time BIGINT, -- Time in milliseconds it took to run the scraper
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  last_products_per_second DECIMAL(10, 2) -- Products per second metric from the most recently completed successful run.
 );
 
 -- Add indexes for improved query performance
@@ -662,7 +663,9 @@ CREATE TABLE IF NOT EXISTS scraper_runs (
   total_batches INTEGER,
   error_message TEXT,
   progress_messages TEXT[],
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  execution_time_ms BIGINT, -- Total execution time of the scraper run in milliseconds (calculated from completed_at - started_at).
+  products_per_second DECIMAL(10, 2) -- Calculated metric: product_count / (execution_time_ms / 1000.0). Null if execution time is zero or product_count is null.
 );
 
 -- Add indexes for improved query performance

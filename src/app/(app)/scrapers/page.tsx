@@ -1,15 +1,22 @@
-import { Metadata } from "next";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth/options";
+"use client"; // Make this a client component to use state and effects
+
+import { useState, useEffect } from "react"; // Import hooks
+// import { Metadata } from "next"; // Removed as it's unused now
+import { useSession } from "next-auth/react"; // Use client-side session hook
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { ScraperService } from "@/lib/services/scraper-service";
+// import { ScraperService } from "@/lib/services/scraper-service"; // No longer needed directly
+import { ScraperConfig } from "@/lib/services/scraper-types"; // Import type directly
+import { Button } from "@/components/ui/button"; // Import Button component
 import DeleteButton from "@/components/ui/delete-button";
+import ScraperRunHistoryModal from "@/components/scrapers/scraper-run-history-modal"; // Import the modal
 
-export const metadata: Metadata = {
-  title: "Scrapers | PriceTracker",
-  description: "Manage your web scrapers for competitor price tracking",
-};
+// Metadata needs to be handled differently for client components if needed,
+// or moved to a parent server component/layout. For now, we remove it here.
+// export const metadata: Metadata = {
+//   title: "Scrapers | PriceTracker",
+//   description: "Manage your web scrapers for competitor price tracking",
+// };
 
 // Helper function to format execution time in hours, minutes, seconds
 function formatExecutionTime(milliseconds?: number): string {
@@ -28,41 +35,63 @@ function formatExecutionTime(milliseconds?: number): string {
   return parts.join(" ");
 }
 
-export default async function ScrapersPage() {
-  // Get the current user from the session
-  const session = await getServerSession(authOptions);
-  
-  // Redirect to login if not authenticated
-  if (!session?.user) {
-    redirect("/login");
-  }
-  // Get all scrapers for the user
-  const scrapers = await ScraperService.getScrapersByUser(session.user.id);
-  
-  // Get competitor information for each scraper
-  const competitorIds = [...new Set(scrapers.map(scraper => scraper.competitor_id))];
-  
-  let competitors: Record<string, { id: string; name: string; website: string }> = {};
-  
-  if (competitorIds.length > 0) {
-    // Import here to avoid circular dependencies
-    const { createSupabaseAdminClient } = await import('@/lib/supabase/server');
-    const supabaseAdmin = createSupabaseAdminClient();
-    
-    const { data: competitorsData, error: competitorsError } = await supabaseAdmin
-      .from("competitors")
-      .select("id, name, website")
-      .in("id", competitorIds);
-    
-    if (competitorsError) {
-      console.error("Error fetching competitors:", competitorsError);
-    } else if (competitorsData) {
-      competitors = competitorsData.reduce((acc, competitor) => {
-        acc[competitor.id] = competitor;
-        return acc;
-      }, {} as Record<string, { id: string; name: string; website: string }>);
+export default function ScrapersPage() {
+  const { data: session, status } = useSession(); // Use client hook
+  // Combined scraper and competitor data state
+  const [scraperData, setScraperData] = useState<(ScraperConfig & { competitor: { name: string; website: string } | null })[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [selectedScraperId, setSelectedScraperId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (status === "authenticated" && session?.user?.id) {
+      const fetchData = async () => {
+        setIsLoading(true);
+        try {
+          // Fetch combined scraper and competitor data from the new API route
+          const response = await fetch('/api/scrapers/list');
+          if (!response.ok) {
+            throw new Error(`Failed to fetch scrapers: ${response.statusText}`);
+          }
+          const data = await response.json();
+          setScraperData(data);
+
+        } catch (error) {
+          console.error("Error fetching scraper data:", error);
+          // Handle error state if needed (e.g., show error message)
+        } finally {
+          setIsLoading(false);
+        }
+      };
+      fetchData();
+    } else if (status === "unauthenticated") {
+      redirect("/login");
     }
+  }, [session, status]);
+
+  // Handle loading state
+  if (status === "loading" || isLoading) {
+    return <div className="container mx-auto px-4 py-8 text-center">Loading scrapers...</div>;
   }
+
+  // Handle unauthenticated state (redundant due to redirect but good practice)
+  if (!session?.user) {
+     // Redirect logic is handled by useEffect, this is a fallback.
+     // Consider returning null or a specific message if redirect hasn't happened yet.
+     return null;
+  }
+
+  const openHistoryModal = (scraperId: string) => {
+    setSelectedScraperId(scraperId);
+    setIsHistoryModalOpen(true);
+  };
+
+  const closeHistoryModal = () => {
+    setIsHistoryModalOpen(false);
+    setSelectedScraperId(null);
+  };
+  
+  // Competitor fetching logic moved to useEffect
   
   return (
     <div className="container mx-auto px-4 py-8">
@@ -76,9 +105,11 @@ export default async function ScrapersPage() {
         </Link>
       </div>
       
-      {scrapers && scrapers.length > 0 ? (
-        <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow">
-          <table className="min-w-full divide-y divide-gray-200">
+      {scraperData.length > 0 ? ( // Use scraperData
+        <div className="rounded-lg border border-gray-200 bg-white shadow">
+          {/* Add a wrapper div for horizontal scrolling */}
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
                 <th
@@ -123,6 +154,14 @@ export default async function ScrapersPage() {
                 >
                   Execution Time
                 </th>
+                {/* Split header onto two lines */}
+                <th
+                  scope="col"
+                  className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                >
+                  <div>Products</div>
+                  <div>/ sec</div>
+                </th>
                 <th
                   scope="col"
                   className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500"
@@ -131,11 +170,7 @@ export default async function ScrapersPage() {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
-              {scrapers.map((scraper) => {
-                const competitor = competitors[scraper.competitor_id];
-                
-                return (
+            <tbody className="divide-y divide-gray-200 bg-white">{scraperData.map((scraper) => (
                   <tr key={scraper.id}>
                     <td className="whitespace-nowrap px-6 py-4">
                       <div className="text-sm font-medium text-gray-900">
@@ -144,7 +179,8 @@ export default async function ScrapersPage() {
                     </td>
                     <td className="whitespace-nowrap px-6 py-4">
                       <div className="text-sm text-gray-900">
-                        {competitor ? competitor.name : "Unknown"}
+                        {/* Access nested competitor name */}
+                        {scraper.competitor?.name ?? "Unknown"}
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-6 py-4">
@@ -189,40 +225,52 @@ export default async function ScrapersPage() {
                     <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
                       {formatExecutionTime(scraper.execution_time)}
                     </td>
+                    <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
+                      {/* Display Products/sec, formatted to 2 decimal places */}
+                      {typeof scraper.last_products_per_second === 'number'
+                        ? scraper.last_products_per_second.toFixed(2)
+                        : 'N/A'}
+                    </td>
+                    {/* Actions Column - Cleaned up with Shadcn Buttons */}
                     <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium">
-                      <div className="flex justify-end space-x-2">
-                        <Link
-                          href={`/scrapers/${scraper.id}/edit`}
-                          className="rounded-md bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
-                        >
-                          Edit
-                        </Link>
-                        <Link
-                          href={`/scrapers/${scraper.id}/run`}
-                          className="rounded-md bg-green-50 px-2 py-1 text-xs font-medium text-green-700 hover:bg-green-100"
-                        >
-                          Run
-                        </Link>
-                        {(scraper.scraper_type === 'python' || scraper.scraper_type === 'ai') && (
-                          <Link
-                            href={`/scrapers/${scraper.id}/test-run`}
-                            className="rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                          >
-                            Run Test
-                          </Link>
+                      <div className="flex items-center justify-end space-x-2">
+                        {scraper.id && ( // Ensure scraper.id exists before rendering actions
+                          <>
+                            <Button
+                              variant="outline"
+                              className="px-1.5 py-0.5 text-xs h-auto" // Smaller padding, text, auto height
+                              onClick={() => openHistoryModal(scraper.id!)}
+                            >
+                              History
+                            </Button>
+                            <Button variant="outline" className="px-1.5 py-0.5 text-xs h-auto" asChild>
+                              <Link href={`/scrapers/${scraper.id}/edit`}>Edit</Link>
+                            </Button>
+                            {/* Consider making Run/Test Run buttons that trigger API calls */}
+                            <Button variant="outline" className="text-green-700 border-green-200 hover:bg-green-50 px-1.5 py-0.5 text-xs h-auto" asChild>
+                               <Link href={`/scrapers/${scraper.id}/run`}>Run</Link>
+                            </Button>
+                            {(scraper.scraper_type === 'python' || scraper.scraper_type === 'ai') && (
+                               <Button variant="outline" className="text-blue-700 border-blue-200 hover:bg-blue-50 leading-tight text-center px-1.5 py-0.5 text-xs h-auto" asChild>
+                                <Link href={`/scrapers/${scraper.id}/test-run`}><div>Run</div><div>Test</div></Link>
+                               </Button>
+                            )}
+                            {/* DeleteButton likely already uses Shadcn Button internally */}
+                            <DeleteButton
+                              id={scraper.id}
+                              name={scraper.name}
+                              endpoint="/api/scrapers"
+                              // onDeleted={() => setScraperData(prev => prev.filter(s => s.id !== scraper.id))} // Example refresh
+                            />
+                          </>
                         )}
-                        <DeleteButton
-                          id={scraper.id}
-                          name={scraper.name}
-                          endpoint="/api/scrapers"
-                        />
                       </div>
                     </td>
                   </tr>
-                );
-              })}
+              ))} {/* Correct closing for map */}
             </tbody>
-          </table>
+            </table>
+          </div> {/* Close the scrolling wrapper div */}
         </div>
       ) : (
         <div className="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center">
@@ -269,6 +317,14 @@ export default async function ScrapersPage() {
           </div>
         </div>
       )}
+      {/* Removed extra closing tag */}
+
+      {/* Render the Modal */}
+      <ScraperRunHistoryModal
+        isOpen={isHistoryModalOpen}
+        onClose={closeHistoryModal}
+        scraperId={selectedScraperId}
+      />
     </div>
   );
 }

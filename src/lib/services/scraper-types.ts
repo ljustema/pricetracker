@@ -39,6 +39,7 @@ export interface ScraperConfig {
   status?: 'idle' | 'running' | 'success' | 'failed';
   error_message?: string;
   execution_time?: number; // Time in milliseconds it took to run the scraper
+  last_products_per_second?: number | null; // Products per second from the last successful run
 }
 
 // Types for scraper results

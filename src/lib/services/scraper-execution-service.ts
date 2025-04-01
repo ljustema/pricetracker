@@ -963,17 +963,39 @@ export class ScraperExecutionService {
       }
       
       // Calculate execution time
-      const executionTime = Date.now() - (progress?.startTime || Date.now());
+      const endTime = Date.now();
+      const executionTime = endTime - (progress?.startTime || endTime); // Use endTime if startTime is missing
       const finalProgress = this.progressCache.get(runId);
+
+      // Calculate products per second
+      let products_per_second: number | null = null;
+      const executionTimeSeconds = executionTime / 1000.0;
+      if (executionTimeSeconds > 0 && totalProducts > 0) {
+        // Calculate and round to 2 decimal places
+        products_per_second = parseFloat((totalProducts / executionTimeSeconds).toFixed(2));
+      }
+
+      // Prepare scraper update data
+      const scraperUpdateData: {
+        status: string;
+        error_message: string | null;
+        execution_time: number;
+        last_products_per_second?: number | null; // Optional field
+      } = {
+        status: hasErrors ? 'failed' : 'success',
+        error_message: hasErrors ? 'Errors occurred during batch processing. Check logs for details.' : null,
+        execution_time: executionTime,
+      };
+
+      // Only update last_products_per_second on success
+      if (!hasErrors) {
+        scraperUpdateData.last_products_per_second = products_per_second;
+      }
       
       // Update scraper status based on results
       await supabaseAdmin
         .from('scrapers')
-        .update({
-          status: hasErrors ? 'failed' : 'success',
-          error_message: hasErrors ? 'Errors occurred during batch processing. Check logs for details.' : null,
-          execution_time: executionTime
-        })
+        .update(scraperUpdateData)
         .eq('id', scraperId);
       
       // Update run record in the database
@@ -981,12 +1003,14 @@ export class ScraperExecutionService {
         .from('scraper_runs')
         .update({
           status: hasErrors ? 'failed' : 'success',
-          completed_at: new Date().toISOString(),
+          completed_at: new Date(endTime).toISOString(), // Use calculated endTime
           product_count: totalProducts,
           current_batch: batchCount,
           total_batches: finalProgress?.totalBatches || null,
           error_message: hasErrors ? 'Errors occurred during batch processing. Check logs for details.' : null,
-          execution_time: executionTime
+          // execution_time: executionTime, // This column might not exist, using execution_time_ms instead
+          execution_time_ms: executionTime, // Add execution time in ms
+          products_per_second: products_per_second // Add calculated products/sec
         })
         .eq('id', runId);
       

@@ -2,20 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import { createClient } from '@supabase/supabase-js';
-import crypto from 'crypto';
-
-// Helper function to ensure user ID is a valid UUID
-function ensureUUID(id: string): string {
-  // Check if the ID is already a valid UUID
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (uuidRegex.test(id)) {
-    return id;
-  }
-  
-  // If not a UUID, create a deterministic UUID v5 from the ID
-  // Using the DNS namespace as a base
-  return crypto.createHash('md5').update(id).digest('hex').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
-}
+import { ensureUUID } from '@/lib/utils/uuid';
 
 export async function GET(
   request: NextRequest,
