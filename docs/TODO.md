@@ -12,8 +12,9 @@
   - Product detail page with competitor price comparison
   - Price history visualization
   - API routes for product operations
+- [ ] **Products page** - Need to fix better DB integration. Now we make one req and get them all loaded. (caped at 10 000 in supabase)
 - [ ] **Brands Management** - Implementation needed.
-- [x] **Scrapers** (AI-Powered) - Implementation complete with:
+- [x] **Scrapers** (Manual build from python template) - Implementation complete with:
   - Scraper listing page
   - Scraper creation page
   - Scraper editing page
@@ -23,7 +24,8 @@
 - [ ] **Settings** - Implementation needed.
 - [ ] **Admin Section** - Implementation needed.
 - [ ] **Billing/Payments** (Stripe) - Implementation needed.
-- [ ] **Marketing Pages** - Structure exists (`src/app/(marketing)`), implementation status unknown.
+- [ ] **Marketing Pages** - Structure exists (`src/app/(marketing)`), implementation status unknown. (Think this is frontpage before login)
+- [ ] **Ecommerce Integration** - New page for integration with different e-commerce platforms.
 
 ### Development Processes
 
@@ -137,23 +139,27 @@
 ### Competitor Scraping Improvements (Priority)
 
 - [ ] **Python Scraper Support**:
-  - [ ] Create a Python scraper template with clear documentation on required inputs/outputs
+  - [x] Create a Python scraper template with clear documentation on required inputs/outputs
   - [ ] Develop a guide explaining the database schema and how scraped data is processed
-  - [ ] Add functionality to upload custom Python scraper scripts
-  - [ ] Implement a secure execution environment for running Python scrapers
-  - [ ] Add validation to ensure uploaded scripts meet security requirements
+  - [x] Add functionality to upload custom Python scraper scripts
+  - [x] Implement a secure execution environment for running Python scrapers
+  - [x] Add validation to ensure uploaded scripts meet security requirements
 
-- [ ] **Scraper UI Improvements**:
-  - [ ] Add an upload button for Python scraper scripts in the competitor management UI
-  - [ ] Create a testing interface for uploaded scrapers
-  - [ ] Add a scraper log viewer to help debug issues
+- [x] **Scraper UI Improvements**:
+  - [x] Add an upload button for Python scraper scripts in the competitor management UI
+  - [x] Create a testing interface for uploaded scrapers
+  - [-] Add a scraper log viewer to help debug issues (I think we only have a error row in run_jobs, maybe need further dev)
 
 ### Testing and Validation
 
-- [ ] Test the scraping process to ensure products are correctly matched or created
-- [ ] Verify price changes are properly recorded
-- [ ] Test the UI to ensure it correctly displays competitor prices
-- [ ] Test Python scraper uploads and execution
+- [x] Test the scraping process to ensure products are correctly matched or created
+- [x] Verify price changes are properly recorded
+- [x] Test the UI to ensure it correctly displays competitor prices
+- [x] Test Python scraper uploads and execution
+
+### Architecture / Scalability Improvements
+
+- [ ] **Migrate Scraper Execution to Vercel Queues**: Implement the plan outlined in `docs/future/vercel-queues-migration.md` to improve scalability and reliability of the scraping process by decoupling it from synchronous API route execution.
 
 ### E-commerce Integration
 
@@ -188,126 +194,7 @@
   - Add our own price changes to the `price_changes` table with a special competitor_id
   - Create a separate table if we need different tracking logic for our prices
 
-## Python Scraper Template and Guide
-
-### Python Scraper Template Structure
-
-```python
-# pricetracker_scraper_template.py
-
-"""
-PriceTracker Python Scraper Template
-
-This template provides the structure for creating custom Python scrapers
-for the PriceTracker application. Implement the required functions below
-to create a working scraper that can be uploaded to the application.
-"""
-
-import json
-from typing import Dict, List, Optional, Any
-
-# Configuration (will be populated by the system)
-COMPETITOR_ID = "{{competitor_id}}"
-USER_ID = "{{user_id}}"
-
-def get_metadata() -> Dict[str, Any]:
-    """
-    Return metadata about this scraper.
-    
-    This function is required and will be called when the scraper is uploaded.
-    """
-    return {
-        "name": "My Custom Scraper",  # Change this to your scraper name
-        "description": "Scrapes product data from example.com",  # Brief description
-        "version": "1.0.0",
-        "author": "Your Name",
-        "target_url": "https://example.com/products",  # The main URL this scraper targets
-        "required_libraries": [  # List any third-party libraries your scraper needs
-            "requests",
-            "beautifulsoup4"
-        ]
-    }
-
-def scrape() -> List[Dict[str, Any]]:
-    """
-    Main scraping function. Implement your scraping logic here.
-    
-    Returns:
-        A list of dictionaries, each representing a scraped product with the following fields:
-        - name (required): Product name
-        - price (required): Product price as a float
-        - currency (optional): Currency code (default: USD)
-        - url (optional): URL to the product page
-        - image_url (optional): URL to the product image
-        - sku (optional): Product SKU/code from the competitor
-        - brand (optional): Product brand
-        - ean (optional): Product EAN/barcode
-    """
-    # Implement your scraping logic here
-    # Example:
-    scraped_products = [
-        {
-            "name": "Example Product 1",
-            "price": 19.99,
-            "currency": "USD",
-            "url": "https://example.com/product1",
-            "image_url": "https://example.com/images/product1.jpg",
-            "sku": "PROD001",
-            "brand": "Example Brand",
-            "ean": "1234567890123"
-        },
-        # Add more products as needed
-    ]
-    
-    return scraped_products
-
-def test(url: str) -> List[Dict[str, Any]]:
-    """
-    Test function that will be called when testing the scraper.
-    
-    Args:
-        url: A specific URL to test the scraper on
-        
-    Returns:
-        Same format as the scrape() function
-    """
-    # Implement test logic here, usually a simplified version of scrape()
-    # that works on a single page
-    
-    # Example:
-    return [
-        {
-            "name": "Test Product",
-            "price": 29.99,
-            "currency": "USD",
-            "url": url,
-            "image_url": "https://example.com/images/test.jpg",
-            "sku": "TEST001",
-            "brand": "Test Brand",
-            "ean": "1234567890123"
-        }
-    ]
-
-# Don't modify this section - it's used by the application to run the scraper
-if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1:
-        command = sys.argv[1]
-        if command == "metadata":
-            print(json.dumps(get_metadata()))
-        elif command == "test" and len(sys.argv) > 2:
-            test_url = sys.argv[2]
-            print(json.dumps(test(test_url)))
-        elif command == "scrape":
-            print(json.dumps(scrape()))
-        else:
-            print(json.dumps({"error": "Invalid command"}))
-    else:
-        print(json.dumps({"error": "No command provided"}))
-```
-
-### Scraper Guide Documentation
+## Python Scraper Guide
 
 The guide will include:
 
