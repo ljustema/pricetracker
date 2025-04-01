@@ -1,4 +1,4 @@
-# pricetracker_scraper_template.py
+# pricetracker_scraper_template.py (Updated with Comments)
 
 """
 PriceTracker Python Scraper Template (Batch Processing Version)
@@ -8,10 +8,23 @@ for the PriceTracker application that process and yield products in batches.
 Implement the required functions below.
 """
 
+# --- Minimal Top-Level Imports ---
+# Only import standard libraries needed globally or for type hints here.
 import json
 import sys
 import math
-from typing import Dict, List, Optional, Any, Generator # Added Generator
+from typing import Dict, List, Optional, Any, Generator
+
+# IMPORTANT: Delay Imports for Required Libraries
+# Any libraries listed in get_metadata()["required_libraries"] MUST be imported
+# *inside* the functions that use them (e.g., within scrape() or helper functions).
+# This is because the validation process runs get_metadata() *before* installing
+# these libraries. Top-level imports of required libraries will cause validation to fail.
+# Example:
+# def scrape():
+#     import requests
+#     import beautifulsoup4
+#     # ... rest of your scraping logic ...
 
 # Configuration (will be populated by the system)
 COMPETITOR_ID = "{{competitor_id}}"
@@ -22,16 +35,17 @@ def get_metadata() -> Dict[str, Any]:
     Return metadata about this scraper.
 
     This function is required and will be called when the scraper is uploaded
-    or validated.
+    or validated. Ensure it does not rely on any external libraries listed
+    in 'required_libraries'.
     """
     return {
         "name": "My Custom Batch Scraper",  # Change this to your scraper name
         "description": "Scrapes product data from example.com in batches",  # Brief description
-        "version": "1.1.0", # Updated version
+        "version": "1.2.0", # Updated version reflecting delayed import guidance
         "author": "Your Name",
         "target_url": "https://example.com/products",  # The main URL this scraper targets
         "required_libraries": [  # List any third-party libraries your scraper needs
-            "requests",
+            "requests",          # These MUST be imported inside functions, not at the top level.
             "beautifulsoup4"
         ]
     }
@@ -40,8 +54,9 @@ def scrape() -> Generator[List[Dict[str, Any]], None, None]:
     """
     Main scraping function - processes and yields products in batches.
 
-    Implement your scraping logic here. Instead of returning a single large list,
-    this function should yield batches (lists) of product dictionaries.
+    Implement your scraping logic here. Remember to import any libraries
+    listed in get_metadata()["required_libraries"] *inside* this function
+    or any helper functions it calls.
 
     Yields:
         A list of dictionaries, each representing a scraped product batch.
@@ -63,8 +78,17 @@ def scrape() -> Generator[List[Dict[str, Any]], None, None]:
     "PROGRESS: Batch X/Y processed, Z products found."
     """
     # --- Implement your scraping logic here ---
+
+    # Example: If using requests and beautifulsoup4, import them here:
+    # try:
+    #     import requests
+    #     from bs4 import BeautifulSoup
+    # except ImportError as e:
+    #     print(f"PROGRESS: Error importing required libraries: {e}. Ensure they are listed in get_metadata().", file=sys.stderr)
+    #     # Optionally raise the error or yield an empty list/error structure
+    #     return # Stop execution if imports fail
+
     # Example: Simulate fetching a large list of product data
-    # In a real scraper, you'd fetch data page by page or from an API
     print("PROGRESS: Starting scrape...", file=sys.stderr) # Initial progress message
     all_potential_products = [
         {
@@ -125,8 +149,14 @@ def scrape() -> Generator[List[Dict[str, Any]], None, None]:
 # Don't modify this section - it's used by the application to run the scraper
 if __name__ == "__main__":
     # Ensure stdout and stderr are UTF-8 encoded
-    sys.stdout.reconfigure(encoding='utf-8')
-    sys.stderr.reconfigure(encoding='utf-8')
+    try:
+        # Attempt to reconfigure stdout/stderr for UTF-8
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except AttributeError:
+        # Fallback for environments where reconfigure might not be available
+        print("PROGRESS: sys.stdout/stderr.reconfigure not available. Relying on wrapper/environment for UTF-8.", file=sys.stderr)
+        pass # Continue execution
 
     if len(sys.argv) > 1:
         command = sys.argv[1]
@@ -142,19 +172,43 @@ if __name__ == "__main__":
             # Run the main scrape function and print each yielded batch
             try:
                 batch_count = 0
+                # Remember: scrape() or its helpers must handle internal imports
+                # for libraries listed in get_metadata()["required_libraries"]
                 for batch in scrape():
-                    print(json.dumps(batch)) # Print each batch to stdout
-                    batch_count += 1
+                    if batch: # Ensure batch is not empty
+                         # Ensure the batch itself is valid JSON before printing
+                        try:
+                            output_json = json.dumps(batch)
+                            print(output_json)
+                            sys.stdout.flush() # Ensure immediate output
+                            batch_count += 1
+                        except TypeError as json_err:
+                             print(f"PROGRESS: Error serializing batch to JSON: {json_err}. Batch content: {batch}", file=sys.stderr)
+                             # Decide whether to skip this batch or fail
+                    else:
+                        print("PROGRESS: Warning - scrape() yielded an empty or None batch.", file=sys.stderr)
+
                 if batch_count == 0:
-                     print("PROGRESS: Main scrape function finished but yielded zero batches.", file=sys.stderr)
+                     print("PROGRESS: Main scrape function finished but yielded zero non-empty batches.", file=sys.stderr)
+                else:
+                     print(f"PROGRESS: Main scrape function finished, yielded {batch_count} batches.", file=sys.stderr)
+
             except Exception as e:
-                print(json.dumps({"error": f"Error during scraping: {str(e)}"}), file=sys.stderr)
-                # Optionally print stack trace for debugging
-                # import traceback
-                # traceback.print_exc(file=sys.stderr)
+                 # Ensure error message is also JSON for consistency
+                error_payload = {"error": f"Error during scraping: {str(e)}"}
+                try:
+                    # Attempt to include traceback if possible
+                    import traceback
+                    error_payload["traceback"] = traceback.format_exc()
+                except ImportError:
+                    pass # Cannot import traceback
+                except Exception:
+                    pass # Ignore errors during traceback formatting
+
+                print(json.dumps(error_payload), file=sys.stderr)
                 sys.exit(1) # Exit with error code if scrape fails
         else:
-            print(json.dumps({"error": f"Invalid command: {command}"}), file=sys.stderr)
+            print(json.dumps({"error": f"Invalid command: {command}. Expected 'metadata' or 'scrape'."}), file=sys.stderr)
             sys.exit(1)
     else:
         print(json.dumps({"error": "No command provided (expected 'metadata' or 'scrape')"}), file=sys.stderr)
