@@ -138,7 +138,12 @@ def scrape() -> Generator[List[Dict[str, Any]], None, None]:
         if valid_batch:
             products_yielded_count += len(valid_batch)
             print(f"PROGRESS: Batch {current_batch_num}/{total_batches} processed, yielding {len(valid_batch)} valid products.", file=sys.stderr)
-            yield valid_batch # Yield the valid batch
+            # Print the valid batch directly to stdout
+            try:
+                print(json.dumps(valid_batch), flush=True)
+            except TypeError as json_err:
+                 print(f"PROGRESS: Error serializing batch to JSON before printing: {json_err}. Batch content snippet: {str(valid_batch)[:200]}...", file=sys.stderr)
+            # yield None # No longer need to yield the batch itself
         else:
             print(f"PROGRESS: Batch {current_batch_num}/{total_batches} processed, no valid products found to yield.", file=sys.stderr)
 
@@ -174,19 +179,19 @@ if __name__ == "__main__":
                 batch_count = 0
                 # Remember: scrape() or its helpers must handle internal imports
                 # for libraries listed in get_metadata()["required_libraries"]
-                for batch in scrape():
-                    if batch: # Ensure batch is not empty
-                         # Ensure the batch itself is valid JSON before printing
-                        try:
-                            output_json = json.dumps(batch)
-                            print(output_json)
-                            sys.stdout.flush() # Ensure immediate output
-                            batch_count += 1
-                        except TypeError as json_err:
-                             print(f"PROGRESS: Error serializing batch to JSON: {json_err}. Batch content: {batch}", file=sys.stderr)
-                             # Decide whether to skip this batch or fail
-                    else:
-                        print("PROGRESS: Warning - scrape() yielded an empty or None batch.", file=sys.stderr)
+                # Iterate through scrape() to execute it. Printing now happens inside scrape().
+                # We still need to consume the generator.
+                for _ in scrape():
+                     # We don't expect scrape() to yield anything meaningful now,
+                     # but we iterate to drive its execution.
+                     # We can increment the count here based on iteration if needed for logging,
+                     # but the actual batch printing is handled inside scrape().
+                     batch_count += 1 # Increment based on iterations (assumes scrape yields once per processed batch print)
+                     pass
+
+                # Note: The batch_count here might not perfectly reflect the number
+                # of *successfully printed* batches if scrape() encounters serialization errors,
+                # but it reflects the number of times the print logic was reached.
 
                 if batch_count == 0:
                      print("PROGRESS: Main scrape function finished but yielded zero non-empty batches.", file=sys.stderr)

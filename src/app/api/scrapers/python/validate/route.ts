@@ -352,15 +352,54 @@ async function validateScriptExecution(
     }
 
 
-    // --- Step 2: Execute 'scrape' command ---
-    // Pass the required_libraries obtained from the successful metadata step
-    console.log("Proceeding to scrape command execution with libraries:", metadata.required_libraries);
+    // --- Step 2: Install Libraries Directly ---
+    let installError: string | null = null;
+    if (metadata.required_libraries && metadata.required_libraries.length > 0) {
+        console.log("Attempting to install libraries directly:", metadata.required_libraries);
+        const installArgs = ['-m', 'pip', 'install', ...metadata.required_libraries];
+        try {
+            const installProcess = spawn(pythonCommand, installArgs);
+            let installStderr = '';
+            installProcess.stderr.on('data', (data) => { installStderr += data.toString(); });
+            await new Promise<void>((resolveInstall, rejectInstall) => {
+                installProcess.on('close', (code) => {
+                    if (code === 0) {
+                        console.log("Direct library installation successful.");
+                        resolveInstall();
+                    } else {
+                        console.error(`Direct library installation failed with code ${code}. Stderr:\n${installStderr}`);
+                        rejectInstall(new Error(`Direct pip install failed with code ${code}. Stderr:\n${installStderr}`));
+                    }
+                });
+                installProcess.on('error', (err) => {
+                     console.error("Error spawning direct pip install process:", err);
+                     rejectInstall(new Error(`Failed to start pip install process: ${err.message}. Stderr captured before error:\n${installStderr}`));
+                });
+            });
+        } catch (error) {
+            console.error("Error during direct library installation:", error);
+            installError = error instanceof Error ? error.message : String(error);
+            // If install failed, resolve early
+            resolve({
+                products: [], totalProductsFound: 0,
+                executionError: `Failed to install required libraries directly: ${installError}`,
+                rawStdout: '', rawStderr: metadataRawStderr + (installError ? `\n--- Install Stderr ---\n${installError}` : ''), // Combine stdouts/stderrs
+                batchesProcessed: 0, progressMessages: [], metadata
+            });
+            return;
+        }
+    } else {
+         console.log("No required libraries specified in metadata, skipping direct installation.");
+    }
+
+
+    // --- Step 3: Execute 'scrape' command DIRECTLY (Bypass Wrapper) ---
+    console.log("Executing scrape command directly (bypassing wrapper)...");
     const scrapeArgs = [
-        wrapperPath,
-        scriptPath,
-        'scrape',
-        ...(metadata.required_libraries || []) // Use potentially updated metadata list
+        scriptPath, // Execute the original script directly
+        'scrape'
      ];
+    console.log(`Executing: ${pythonCommand} ${scrapeArgs.join(' ')}`);
     const process = spawn(pythonCommand, scrapeArgs);
 
     let scrapeStdoutBuffer = '';
@@ -381,61 +420,50 @@ async function validateScriptExecution(
     // Process stdout (JSON batches) from scrape process using markers
     process.stdout.on('data', (data) => {
       const chunk = data.toString();
+      // console.log('>>> RAW STDOUT CHUNK:', JSON.stringify(chunk)); // DEBUG: Keep commented for now
       scrapeStdoutBuffer += chunk;
 
-      // Process complete batches using markers
-      const startMarker = "__BATCH_START__";
-      const endMarker = "__BATCH_END__";
-      let startIdx = scrapeStdoutBuffer.indexOf(startMarker);
-      let endIdx = scrapeStdoutBuffer.indexOf(endMarker);
+      // --- Process real JSON batches line-by-line ---
+      // console.log('>>> CURRENT STDOUT BUFFER:', JSON.stringify(scrapeStdoutBuffer)); // DEBUG: Keep commented for now
 
-      // Loop while we can find a complete start and end marker pair
-      while (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-        // Extract the content between the markers
-        const jsonContent = scrapeStdoutBuffer.substring(startIdx + startMarker.length, endIdx).trim();
+      const lines = scrapeStdoutBuffer.split('\n');
+      scrapeStdoutBuffer = lines.pop() || ''; // Keep potential partial line
 
-        if (jsonContent) {
+      for (let line of lines) {
+          line = line.trim();
+          if (!line) continue; // Skip empty lines
+
           try {
-            const batch = JSON.parse(jsonContent);
-            if (Array.isArray(batch)) {
-              // Add products from this batch
-              allProducts.push(...batch);
-              batchesProcessed++;
-              console.log(`Successfully processed batch ${batchesProcessed}. Total products so far: ${allProducts.length}`);
+              const batch = JSON.parse(line);
+              if (Array.isArray(batch)) {
+                  allProducts.push(...batch);
+                  batchesProcessed++;
+                  console.log(`Successfully parsed batch ${batchesProcessed} from stdout line. Total products so far: ${allProducts.length}`);
 
-              // Stop after processing MAX_BATCHES_TO_VALIDATE
-              if (batchesProcessed >= MAX_BATCHES_TO_VALIDATE) {
-                console.log(`Reached maximum batches (${MAX_BATCHES_TO_VALIDATE}) for validation, stopping process`);
-                process.kill(); // Sends SIGTERM
-                // No need to break here, process.kill() will eventually trigger 'close' or 'error' events
+                  // Stop after processing MAX_BATCHES_TO_VALIDATE
+                  if (batchesProcessed >= MAX_BATCHES_TO_VALIDATE) {
+                      console.log(`Reached maximum batches (${MAX_BATCHES_TO_VALIDATE}) for validation, stopping process`);
+                      process.kill(); // Sends SIGTERM
+                      break; // Stop processing lines in this chunk
+                  }
+              } else {
+                  console.warn("Parsed JSON from stdout line, but it was not an array:", line);
               }
-            } else {
-              console.warn("Parsed JSON from batch markers, but it was not an array:", jsonContent);
-            }
           } catch (error) {
-            console.error("Error parsing JSON between batch markers:", error, "Content:", jsonContent);
-            // Decide if an error here should count as an executionError
-            if (!executionError) { // Only set the first error
-               executionError = `Error parsing batch JSON: ${error instanceof Error ? error.message : String(error)}`;
-            }
+              console.error("Error parsing JSON from stdout line:", error, "Line content:", line);
+              // Decide if an error here should count as an executionError
+              if (!executionError) { // Only set the first error
+                  executionError = `Error parsing batch JSON from stdout line: ${error instanceof Error ? error.message : String(error)}`;
+              }
           }
-        } else {
-            console.warn("Found batch markers but no content in between.");
-        }
-
-        // Remove the processed batch (including markers) from the buffer
-        scrapeStdoutBuffer = scrapeStdoutBuffer.substring(endIdx + endMarker.length);
-
-        // Find the next pair of markers in the remaining buffer
-        startIdx = scrapeStdoutBuffer.indexOf(startMarker);
-        endIdx = scrapeStdoutBuffer.indexOf(endMarker);
       }
-      // Any remaining data in scrapeStdoutBuffer is an incomplete batch, wait for more data
+      // --- END Process real JSON batches ---
     }); // End of process.stdout.on('data', ...) handler
     
     // Process stderr (progress messages) from scrape process
     process.stderr.on('data', (data) => {
       const chunk = data.toString();
+      // console.log('>>> RAW STDERR CHUNK:', JSON.stringify(chunk)); // DEBUG: Keep commented for now
       scrapeStderrBuffer += chunk;
 
       // Process complete lines
