@@ -12,7 +12,7 @@
   - Product detail page with competitor price comparison
   - Price history visualization
   - API routes for product operations
-- [ ] **Products page** - Need to fix better DB integration. Now we make one req and get them all loaded. (caped at 10 000 in supabase)
+- [x] **Products page** - Need to fix better DB integration. Now we make one req and get them all loaded. (caped at 10 000 in supabase)
 - [ ] **Brands Management** - Implementation needed.
 - [x] **Scrapers** (Manual build from python template) - Implementation complete with:
   - Scraper listing page

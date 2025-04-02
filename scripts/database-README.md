@@ -1,45 +1,68 @@
 # Database Setup Instructions
 
-This directory contains scripts for setting up the PriceTracker database in Supabase.
+This directory contains scripts for setting up and managing the PriceTracker database in Supabase.
 
-## Setting up the database
+## New Setup Structure (Recommended)
 
-1. Log in to your Supabase dashboard at https://app.supabase.com/
-2. Select your project (the one with the URL: https://adctclbumozqgwkepipl.supabase.co)
-3. Navigate to the SQL Editor (in the left sidebar)
-4. Create a new query
-5. Copy the contents of `complete-setup.sql` and paste it into the SQL Editor
-6. Run the query
+The database setup has been refactored into multiple, ordered scripts located in the `db_setup/` subdirectory. This improves organization and maintainability.
 
-This will:
-1. Create all necessary tables with proper relationships
-2. Set up Row Level Security (RLS) policies for data protection
-3. Create triggers for automatic actions (like recording price changes)
-4. Insert some sample data for testing
+**Scripts:**
 
-## Important Notes
+1.  **`db_setup/01_next_auth_schema.sql`**: Sets up the `next_auth` schema required by NextAuth.js (tables, grants, helper function).
+2.  **`db_setup/02_public_tables.sql`**: Creates all application-specific tables (`user_profiles`, `products`, `competitors`, `scrapers`, `scraped_products`, `price_changes`, `scraper_runs`, etc.) in the `public` schema, along with necessary indexes and comments.
+3.  **`db_setup/03_public_rls.sql`**: Applies Row Level Security (RLS) policies to the tables in the `public` schema to ensure users can only access their own data.
+4.  **`db_setup/04_public_functions_triggers.sql`**: Creates database functions and triggers used by the application (e.g., `create_profile_for_user`, `record_price_change`, `get_products_filtered`, `cleanup_scraped_products`).
+5.  **`db_setup/05_public_jobs.sql`**: Schedules a daily job using `pg_cron` to run the `cleanup_scraped_products` function. **Requires the `pg_cron` extension to be enabled in your Supabase project.**
 
-- The sample data uses a placeholder user ID (`00000000-0000-0000-0000-000000000000`). After you create your first user through the application, you should update this to use your actual user ID.
+**Execution Order:**
 
-- You can find your user ID by:
-  1. Logging into the application
-  2. Going to the Supabase dashboard
-  3. Navigating to Authentication > Users
-  4. Finding your user and copying the UUID
+It is crucial to run these scripts **in numerical order** (01 through 05) to ensure dependencies are met (e.g., tables exist before RLS is applied, functions exist before jobs are scheduled).
 
-- If you want to reset the database, you can run the following SQL in the SQL Editor:
+**How to Run:**
+
+1.  Log in to your Supabase dashboard.
+2.  Select your project.
+3.  Navigate to the SQL Editor.
+4.  For each script from `01` to `05`:
+    *   Create a new query.
+    *   Copy the contents of the corresponding `.sql` file from the `db_setup/` directory.
+    *   Paste the content into the SQL Editor.
+    *   Run the query.
+    *   Wait for it to complete successfully before proceeding to the next script.
+
+## Original Setup Script (Legacy)
+
+The original monolithic setup script is still available as `database-setup.sql` but is no longer recommended for initial setup. It may be useful for reference but will not be actively maintained.
+
+## Resetting the Database
+
+If you need to completely reset the application's database structure (e.g., for a fresh start), you can run the following SQL in the Supabase SQL Editor. **Warning: This will delete all data in these schemas.**
 
 ```sql
-DROP TABLE IF EXISTS price_changes CASCADE;
-DROP TABLE IF EXISTS scraped_products CASCADE;
-DROP TABLE IF EXISTS scrapers CASCADE;
-DROP TABLE IF EXISTS products CASCADE;
-DROP TABLE IF EXISTS competitors CASCADE;
-DROP TABLE IF EXISTS user_subscriptions CASCADE;
-DROP TABLE IF EXISTS user_profiles CASCADE;
+-- Unscheduling the cron job if it exists
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    PERFORM cron.unschedule('cleanup_scraped_products_job');
+  END IF;
+END $$;
 
-DROP FUNCTION IF EXISTS create_profile_for_user CASCADE;
-DROP FUNCTION IF EXISTS record_price_change CASCADE;
+-- Drop public schema objects (tables, functions, triggers will be dropped via CASCADE)
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+GRANT USAGE ON SCHEMA public TO postgres;
+GRANT USAGE ON SCHEMA public TO anon;
+GRANT USAGE ON SCHEMA public TO authenticated;
+GRANT USAGE ON SCHEMA public TO service_role;
+GRANT ALL ON SCHEMA public TO postgres;
+GRANT ALL ON SCHEMA public TO service_role;
+
+-- Drop next_auth schema objects
+DROP SCHEMA next_auth CASCADE;
+
+-- Recreate the schemas if needed (or run the setup scripts again)
+-- CREATE SCHEMA next_auth;
+-- GRANT USAGE ON SCHEMA next_auth TO service_role;
+-- GRANT ALL ON SCHEMA next_auth TO postgres;
 ```
 
-Then run the setup script again.
+After running the reset script, you will need to run the setup scripts (`db_setup/01` through `05`) again in order.
