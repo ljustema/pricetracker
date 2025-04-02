@@ -34,7 +34,7 @@ export default async function ProductsPage({ searchParams }: ProductsPageProps) 
   // 1. Fetch Competitors
   const { data: competitorsData, error: competitorError } = await supabase
     .from('competitors')
-    .select('id, name')
+    .select('*') // Select all fields to match Competitor type
     .eq('user_id', session.user.id)
     .order('name');
   if (competitorError) console.error("Error fetching competitors:", competitorError.message);

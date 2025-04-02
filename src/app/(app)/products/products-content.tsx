@@ -3,8 +3,9 @@
 import type { ComplexFiltersState } from './products-client-wrapper'; // Import filter state type
 // Removed import { headers } from 'next/headers'; as it's passed via props now
 
-import { useState, useEffect } from 'react'; // Import hooks
-// Removed unused Session import
+import { useState, useEffect } from 'react';
+// Removed useSession import
+import type { Competitor } from "@/lib/services/competitor-service"; // Import Competitor type
 import type { Product } from "@/lib/services/product-service";
 import ProductCard from "@/components/products/product-card";
 import ProductsTable from "@/components/products/products-table";
@@ -17,7 +18,7 @@ interface ProductsContentProps {
   // Renamed prop: Combined object of URL params and complex filter state
   currentParams: { [key: string]: string | string[] | undefined | boolean };
   cookieHeader: string | null;
-  initialCompetitors: { id: string; name: string }[];
+  initialCompetitors: Competitor[]; // Use the imported Competitor type
   initialBrands: string[];
   // Callback to update complex filters in the parent wrapper
   onComplexFilterChange: (newFilters: Partial<ComplexFiltersState>) => void;
@@ -31,6 +32,7 @@ export default function ProductsContent({
   initialBrands,
   onComplexFilterChange // Receive callback
 }: ProductsContentProps) {
+  // Removed useSession hook call
 
   // Use state for dynamic data
   const [products, setProducts] = useState<Product[]>([]);
@@ -56,6 +58,9 @@ export default function ProductsContent({
   const inactiveParam = currentParams?.inactive === true;
   const competitorParam = currentParams?.competitor as string | undefined;
   const hasPriceParam = currentParams?.has_price === true;
+
+  // No need for useSession here, API route handles authentication
+
   useEffect(() => {
     // Function to fetch products based on current searchParams
     const fetchProducts = async () => {
@@ -64,7 +69,7 @@ export default function ProductsContent({
       try {
         // Use the extracted dependency variables
         const page = parseInt(pageParam, 10);
-        const itemsPerPage = 12; // Keep consistent page size
+        // itemsPerPage is defined outside useEffect
         const sortBy = sortParam;
         const sortOrder = sortOrderParam;
         const brandFilter = brandParam;
@@ -84,18 +89,17 @@ export default function ProductsContent({
           sortBy: sortBy,
           sortOrder: sortOrder,
           brand: brandFilter,
-          category: categoryFilter,
+          category: categoryFilter, // Keep sending category
           search: searchQuery,
-          // Send isActive based on showInactive flag. API expects 'true' or undefined.
-          isActive: !showInactive ? 'true' : undefined,
+          // Send isActive based on showInactive flag. API expects 'true' or undefined/null.
+          // The API route should handle the conversion if needed. Let's send the boolean.
+          isActive: !showInactive ? true : false, // Send boolean based on filter state
           competitor: competitorFilter,
-          // Send has_price as boolean if true, otherwise undefined
-          has_price: hasPriceFilter ? true : undefined,
+          // Send has_price as boolean
+          has_price: hasPriceFilter ? true : false, // Send boolean based on filter state
         };
-        // Use the cookieHeader passed down from the parent Server Component
-        // const requestHeaders = await headers(); // Removed
-        // const cookieHeader = requestHeaders.get('cookie'); // Removed
 
+        // Use the cookieHeader passed down from the parent Server Component
         // Function to parse cookie string and get a specific cookie
         const getCookieValue = (cookieString: string | null, cookieName: string): string | null => {
           if (!cookieString) return null;
@@ -110,15 +114,17 @@ export default function ProductsContent({
         };
 
         // Extract only the session token cookie (adjust name if needed)
-        // Use the correct custom cookie name found in logs
-        const sessionTokenCookieName = 'PriceTracker.session-token';
+        const sessionTokenCookieName = 'PriceTracker.session-token'; // Use the correct name
         const sessionTokenValue = getCookieValue(cookieHeader, sessionTokenCookieName);
-        // Explicitly construct HeadersInit, adding Content-Type
         const fetchHeaders: HeadersInit = {
             'Content-Type': 'application/json',
         };
+        // Only include Cookie header if the token exists
         if (sessionTokenValue) {
           fetchHeaders['Cookie'] = `${sessionTokenCookieName}=${sessionTokenValue}`;
+        } else {
+           console.warn("Session token cookie not found. API request might fail if auth is required.");
+           // Optionally handle missing auth token case here (e.g., redirect, show error)
         }
 
         const response = await fetch(apiUrl, { // Use base URL
@@ -134,6 +140,10 @@ export default function ProductsContent({
         }
 
         const { data: apiProducts, totalCount: apiTotalCount } = await response.json();
+        // IMPORTANT: Transform competitor_prices from API response if needed
+        // Assuming API returns the object format { competitor_id: price }
+        // If ProductCard/ProductsTable expect a different format, transform here.
+        // For now, assume the API returns the format expected by the service Product type.
         setProducts(apiProducts || []);
         setTotalProductCount(apiTotalCount || 0);
 
@@ -160,9 +170,8 @@ export default function ProductsContent({
       inactiveParam,
       competitorParam,
       hasPriceParam,
-      cookieHeader
+      cookieHeader // Keep cookieHeader dependency
     ]);
-  // --- End: Data Fetching Logic ---
 
   // --- Start: Rendering Logic (Moved from ProductsPage) ---
   const totalProducts = totalProductCount; // Use state variable
@@ -208,7 +217,7 @@ export default function ProductsContent({
           {/* Pass filter state and callback down to ProductsFilter */}
           <ProductsFilter
             brands={brands}
-            competitors={competitors}
+            competitors={competitors as Competitor[]} // Assert type here if needed, already typed in props
             currentFilters={{ // Pass current complex filter values
               brand: currentParams?.brand as string || "",
               competitor: currentParams?.competitor as string || "",
@@ -237,13 +246,13 @@ export default function ProductsContent({
           {/* Derive view directly from currentParams for rendering */}
           {((currentParams?.view as "table" | "cards") || "cards") === 'table' ? (
             <ProductsTable
-              products={products as Product[]}
+              products={products} // No need for assertion if state type is correct
               competitors={competitors} // Use prop directly
             />
           ) : (
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
               {products.map((product: Product) => (
-                <ProductCard key={product.id} product={product} />
+                <ProductCard key={product.id} product={product} competitors={competitors as Competitor[]} />
               ))}
             </div>
           )}

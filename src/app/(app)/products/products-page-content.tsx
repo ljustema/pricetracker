@@ -4,7 +4,8 @@ import { Suspense } from 'react';
 import { ReadonlyURLSearchParams } from 'next/navigation'; // Use the correct type
 import ProductsHeader from "@/components/products/products-header";
 import ProductsContent from "./products-content"; // The child component that fetches products
-import type { ComplexFiltersState } from './products-client-wrapper'; // Import the interface from the client wrapper
+import type { ComplexFiltersState } from './products-client-wrapper';
+import type { Competitor } from "@/lib/services/competitor-service"; // Import Competitor type
 
 // Remove server-side imports:
 // import { Metadata } from "next";
@@ -23,7 +24,7 @@ interface ProductsPageContentProps {
   complexFilters: ComplexFiltersState;
   onComplexFilterChange: (newFilters: Partial<ComplexFiltersState>) => void; // Callback for filter changes
   // Assume these are fetched by a server parent and passed down
-  initialCompetitors: { id: string; name: string }[];
+  initialCompetitors: Competitor[]; // Use the imported Competitor type
   initialBrands: string[];
   cookieHeader: string | null; // Still needed for the API call in ProductsContent
 }

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useMemo, Suspense } from "react"; // Merged imports
+import { useState, useCallback, useMemo, Suspense } from "react";
+import type { Competitor } from "@/lib/services/competitor-service"; // Import Competitor type
 import { useSearchParams } from "next/navigation"; // Removed unused ReadonlyURLSearchParams
 // Removed Metadata import as it belongs in the server page.tsx
 import ProductsPageContent from "./products-page-content";
@@ -19,7 +20,7 @@ export interface ComplexFiltersState {
 // Define props for this client wrapper
 interface ProductsClientWrapperProps {
   // Data fetched from the server parent
-  initialCompetitors: { id: string; name: string }[];
+  initialCompetitors: Competitor[]; // Use the imported Competitor type
   initialBrands: string[];
   cookieHeader: string | null;
   // Accept the plain searchParams object from the server parent

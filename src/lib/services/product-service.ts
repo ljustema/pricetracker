@@ -29,6 +29,7 @@ export interface Product {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  competitor_prices?: { [key: string]: number }; // Added field for competitor prices { competitor_id: price }
 }
 
 export interface ScrapedProduct {
@@ -69,159 +70,27 @@ export interface PriceChange {
   };
 }
 
-export interface ProductWithPrices extends Product {
-  competitor_prices?: {
-    competitor_id: string;
-    competitor_name: string;
-    price: number;
-    changed_at: string;
-  }[];
-}
+// Removed ProductWithPrices interface and getProductsWithPrices function as they are now redundant.
+// The competitor_prices field is now directly part of the Product interface.
 
 export async function getProducts(userId: string): Promise<Product[]> {
   const supabase = createSupabaseAdminClient();
   const uuid = ensureUUID(userId);
-  
+
   const { data, error } = await supabase
     .from("products")
     .select("*")
     .eq("user_id", uuid)
     .order("created_at", { ascending: false });
-  
+
   if (error) {
     console.error("Error fetching products:", error);
     throw new Error(`Failed to fetch products: ${error.message}`);
   }
-  
+
   return data || [];
 }
 
-/**
- * Get products with their latest competitor prices
- */
-export async function getProductsWithPrices(userId: string): Promise<ProductWithPrices[]> {
-  const supabase = createSupabaseAdminClient();
-  const uuid = ensureUUID(userId);
-  
-  // First get all products - set a very high limit to ensure we get everything
-  const { data: products, error: productsError } = await supabase
-    .from("products")
-    .select("*")
-    .eq("user_id", uuid)
-    .order("created_at", { ascending: false })
-    .limit(10000); // Set a very high limit to ensure we get all products
-  
-  if (productsError) {
-    console.error("Error fetching products:", productsError);
-    throw new Error(`Failed to fetch products: ${productsError.message}`);
-  }
-  
-  if (!products || products.length === 0) {
-    return [];
-  }
-  
-  // Get the latest price changes for all products
-  const productIds = products.map(product => product.id);
-  
-  // Split product IDs into smaller batches to avoid URL length limits
-  const batchSize = 10; // Adjust this number based on your needs
-  const batches = [];
-  
-  for (let i = 0; i < productIds.length; i += batchSize) {
-    batches.push(productIds.slice(i, i + batchSize));
-  }
-  
-  // Fetch price changes in batches
-  let allPriceChanges: PriceChangeWithCompetitor[] = [];
-  
-  for (const batch of batches) {
-    const { data: batchPriceChanges, error: batchError } = await supabase
-      .from("price_changes")
-      .select(`
-        id,
-        product_id,
-        competitor_id,
-        new_price,
-        changed_at,
-        competitors(id, name)
-      `)
-      .eq("user_id", uuid)
-      .in("product_id", batch)
-      .order("changed_at", { ascending: false })
-      .returns<PriceChangeWithCompetitor[]>(); // Explicitly type the return
-    
-    if (batchError) {
-      console.error("Error fetching price changes batch:", batchError);
-      throw new Error(`Failed to fetch price changes: ${batchError.message}`);
-    }
-    
-    if (batchPriceChanges) {
-      allPriceChanges = [...allPriceChanges, ...batchPriceChanges];
-    }
-  }
-  
-  const priceChanges = allPriceChanges;
-  
-  // Define types for the query results
-  interface CompetitorPriceInfo {
-    competitor_id: string;
-    competitor_name: string;
-    price: number;
-    changed_at: string;
-  }
-  
-  interface CompetitorData {
-    id: string;
-    name: string;
-  }
-  
-  interface PriceChangeWithCompetitor {
-    id: string;
-    product_id: string;
-    competitor_id: string;
-    new_price: number;
-    changed_at: string;
-    competitors: CompetitorData;
-  }
-  
-  // Group price changes by product and competitor
-  const latestPricesByProduct = new Map<string, Map<string, CompetitorPriceInfo>>();
-  
-  // Cast the price changes to the correct type
-  const typedPriceChanges = priceChanges as unknown as PriceChangeWithCompetitor[];
-  
-  typedPriceChanges?.forEach(priceChange => {
-    const productId = priceChange.product_id;
-    const competitorId = priceChange.competitor_id;
-    
-    if (!latestPricesByProduct.has(productId)) {
-      latestPricesByProduct.set(productId, new Map());
-    }
-    
-    const productPrices = latestPricesByProduct.get(productId)!;
-    
-    if (!productPrices.has(competitorId)) {
-      productPrices.set(competitorId, {
-        competitor_id: competitorId,
-        competitor_name: priceChange.competitors?.name || 'Unknown',
-        price: priceChange.new_price,
-        changed_at: priceChange.changed_at
-      });
-    }
-  });
-  
-  // Combine products with their latest competitor prices
-  const productsWithPrices = products.map(product => {
-    const competitorPrices = latestPricesByProduct.get(product.id);
-    
-    return {
-      ...product,
-      competitor_prices: competitorPrices ? Array.from(competitorPrices.values()) : []
-    };
-  });
-  
-  return productsWithPrices;
-}
 
 export async function getProduct(userId: string, productId: string): Promise<Product> {
   const supabase = createSupabaseAdminClient();
@@ -475,4 +344,64 @@ export async function getProductPriceHistory(
   }
   
   return data || [];
+}
+
+
+export interface FilteredProductsResponse {
+  data: Product[];
+  totalCount: number;
+}
+
+export interface ProductFilters {
+  page?: number;
+  pageSize?: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  brand?: string;
+  category?: string;
+  search?: string;
+  isActive?: boolean;
+  competitorId?: string;
+  hasPrice?: boolean;
+}
+
+/**
+ * Get products with filtering, sorting, and pagination using the DB function
+ */
+export async function getFilteredProducts(
+  userId: string,
+  filters: ProductFilters = {}
+): Promise<FilteredProductsResponse> {
+  const supabase = createSupabaseAdminClient();
+  const uuid = ensureUUID(userId);
+
+  const { data, error } = await supabase.rpc('get_products_filtered', {
+    p_user_id: uuid,
+    p_page: filters.page || 1,
+    p_page_size: filters.pageSize || 12,
+    p_sort_by: filters.sortBy || 'created_at',
+    p_sort_order: filters.sortOrder || 'desc',
+    p_brand: filters.brand || null,
+    p_category: filters.category || null,
+    p_search: filters.search || null,
+    p_is_active: filters.isActive !== undefined ? filters.isActive : null,
+    p_competitor_id: filters.competitorId || null,
+    p_has_price: filters.hasPrice !== undefined ? filters.hasPrice : null,
+  });
+
+  if (error) {
+    console.error("Error fetching filtered products:", error);
+    // Attempt to provide a more specific error message if possible
+    const dbErrorMessage = error.details ? `${error.message} - ${error.details}` : error.message;
+    throw new Error(`Failed to fetch filtered products: ${dbErrorMessage}`);
+  }
+
+  // The RPC function returns a JSON object { "data": [], "totalCount": 0 }
+  // Ensure the structure matches FilteredProductsResponse
+  if (data && typeof data === 'object' && 'data' in data && 'totalCount' in data) {
+    return data as FilteredProductsResponse;
+  } else {
+    console.error("Unexpected response structure from get_products_filtered RPC:", data);
+    throw new Error("Received unexpected data structure from the database function.");
+  }
 }

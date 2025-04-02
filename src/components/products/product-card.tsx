@@ -3,35 +3,18 @@
 import Link from "next/link";
 import Image from "next/image";
 import DeleteButton from "@/components/ui/delete-button";
+import type { Product } from "@/lib/services/product-service"; // Import the shared type
+import type { Competitor } from "@/lib/services/competitor-service"; // Import Competitor type
 
-interface CompetitorPrice {
-  competitor_id: string;
-  competitor_name: string;
-  price: number;
-  changed_at: string;
-}
-
-interface Product {
-  id: string;
-  name: string;
-  sku?: string;
-  ean?: string;
-  brand?: string;
-  category?: string;
-  description?: string;
-  image_url?: string;
-  our_price?: number;
-  cost_price?: number;
-  is_active: boolean;
-  competitor_prices?: CompetitorPrice[];
-}
+// Removed local CompetitorPrice and Product interfaces
 
 interface ProductCardProps {
   product: Product;
+  competitors: Competitor[]; // Add competitors prop
   onDelete?: () => void;
 }
 
-export default function ProductCard({ product, onDelete }: ProductCardProps) {
+export default function ProductCard({ product, competitors, onDelete }: ProductCardProps) {
   // No need for router or isDeleting state as they're not used
 
   // The DeleteButton component already handles refreshing the router
@@ -136,30 +119,36 @@ export default function ProductCard({ product, onDelete }: ProductCardProps) {
           </Link>
         </div>
         
-        {/* Display competitor prices if available */}
-        {product.competitor_prices && product.competitor_prices.length > 0 && (
+        {/* Display competitor prices using the new object structure */}
+        {product.competitor_prices && Object.keys(product.competitor_prices).length > 0 && (
           <div className="mt-2 border-t border-gray-100 pt-2">
             <p className="text-xs font-medium text-gray-500">Competitor Prices:</p>
             <ul className="mt-1 space-y-1">
-              {product.competitor_prices.slice(0, 3).map((price) => (
-                <li key={price.competitor_id} className="text-xs flex justify-between">
-                  <span className="font-medium">{price.competitor_name}:</span>
-                  <span className={`${
-                    product.our_price && price.price < product.our_price
-                      ? "text-red-600 font-medium"
-                      : product.our_price && price.price > product.our_price
-                        ? "text-green-600 font-medium"
-                        : "text-gray-600"
-                  }`}>
-                    ${price.price.toFixed(2)}
-                  </span>
-                </li>
-              ))}
+              {competitors.slice(0, 3).map((competitor) => { // Iterate through passed competitors
+                const price = product.competitor_prices?.[competitor.id]; // Lookup price by ID
+                if (price === undefined) return null; // Skip if no price for this competitor
+
+                return (
+                  <li key={competitor.id} className="text-xs flex justify-between">
+                    <span className="font-medium">{competitor.name}:</span>
+                    <span className={`${
+                      product.our_price && price < product.our_price
+                        ? "text-red-600 font-medium"
+                        : product.our_price && price > product.our_price
+                          ? "text-green-600 font-medium"
+                          : "text-gray-600"
+                    }`}>
+                      ${price.toFixed(2)}
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
-            {product.competitor_prices.length > 3 && (
-              <p className="mt-1 text-xs text-gray-500">
-                +{product.competitor_prices.length - 3} more competitors
-              </p>
+            {/* Adjust 'more competitors' logic if needed, based on available prices vs total competitors */}
+            {Object.keys(product.competitor_prices).length > 3 && (
+               <p className="mt-1 text-xs text-gray-500">
+                 +{Object.keys(product.competitor_prices).length - 3} more competitors with prices
+               </p>
             )}
           </div>
         )}

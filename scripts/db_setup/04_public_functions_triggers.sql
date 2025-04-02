@@ -246,7 +246,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 4. Function to fetch filtered products efficiently
+-- 4. Function to fetch filtered products efficiently with latest competitor prices
 CREATE OR REPLACE FUNCTION get_products_filtered(
     p_user_id uuid,
     p_page integer DEFAULT 1,
@@ -293,50 +293,96 @@ BEGIN
         _sort_direction := 'DESC';     -- Default sort direction
     END IF;
 
-    -- Base query construction
-    _query := format('SELECT p.* FROM products p WHERE p.user_id = %L', p_user_id);
-    _count_query := format('SELECT count(*) FROM products p WHERE p.user_id = %L', p_user_id);
+    -- Base query construction for counting
+    _count_query := format('
+        SELECT count(DISTINCT p.id)
+        FROM products p
+        LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
+        WHERE p.user_id = %L', p_user_id);
 
-    -- Apply filters dynamically
+    -- Apply filters dynamically to count query
     IF p_brand IS NOT NULL AND p_brand <> '' THEN
-        _query := _query || format(' AND p.brand = %L', p_brand);
         _count_query := _count_query || format(' AND p.brand = %L', p_brand);
     END IF;
-
     IF p_category IS NOT NULL AND p_category <> '' THEN
-        _query := _query || format(' AND p.category = %L', p_category);
         _count_query := _count_query || format(' AND p.category = %L', p_category);
     END IF;
-
     IF p_search IS NOT NULL AND p_search <> '' THEN
-        _query := _query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                                   '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
         _count_query := _count_query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
                                                '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
     END IF;
-
     IF p_is_active IS NOT NULL THEN
-        _query := _query || format(' AND p.is_active = %L', p_is_active);
         _count_query := _count_query || format(' AND p.is_active = %L', p_is_active);
     END IF;
-
     IF p_has_price IS NOT NULL AND p_has_price = true THEN
-        _query := _query || ' AND p.our_price IS NOT NULL';
         _count_query := _count_query || ' AND p.our_price IS NOT NULL';
     END IF;
-
-    -- Competitor filter using EXISTS (more efficient than subquery + IN)
     IF p_competitor_id IS NOT NULL THEN
-        _query := _query || format(' AND EXISTS (SELECT 1 FROM price_changes pc WHERE pc.product_id = p.id AND pc.competitor_id = %L)', p_competitor_id);
-        _count_query := _count_query || format(' AND EXISTS (SELECT 1 FROM price_changes pc WHERE pc.product_id = p.id AND pc.competitor_id = %L)', p_competitor_id);
+        -- Ensure the product has *at least one* price change record for the specified competitor
+         _count_query := _count_query || format(' AND pc_filter.competitor_id = %L', p_competitor_id);
     END IF;
 
     -- Execute count query first
     EXECUTE _count_query INTO _total_count;
 
-    -- Add sorting and pagination to the main query
-    _query := _query || format(' ORDER BY %I %s', _safe_sort_by, _sort_direction);
-    _query := _query || format(' LIMIT %L OFFSET %L', _limit, _offset);
+    -- Base query construction for data fetching, including competitor prices
+    _query := format('
+        WITH LatestPrices AS (
+            SELECT
+                pc.product_id,
+                pc.competitor_id,
+                pc.new_price,
+                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
+            FROM price_changes pc
+            WHERE pc.user_id = %L -- Filter by user_id early if possible
+        ),
+        FilteredProducts AS (
+            SELECT p.id
+            FROM products p
+            LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
+            WHERE p.user_id = %L', p_user_id, p_user_id); -- user_id used twice
+
+    -- Apply filters dynamically to data query (similar to count query)
+    IF p_brand IS NOT NULL AND p_brand <> '' THEN
+        _query := _query || format(' AND p.brand = %L', p_brand);
+    END IF;
+    IF p_category IS NOT NULL AND p_category <> '' THEN
+        _query := _query || format(' AND p.category = %L', p_category);
+    END IF;
+    IF p_search IS NOT NULL AND p_search <> '' THEN
+        _query := _query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
+                                   '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
+    END IF;
+    IF p_is_active IS NOT NULL THEN
+        _query := _query || format(' AND p.is_active = %L', p_is_active);
+    END IF;
+    IF p_has_price IS NOT NULL AND p_has_price = true THEN
+        _query := _query || ' AND p.our_price IS NOT NULL';
+    END IF;
+    IF p_competitor_id IS NOT NULL THEN
+         _query := _query || format(' AND pc_filter.competitor_id = %L', p_competitor_id);
+    END IF;
+
+    -- Add grouping, sorting and pagination to the subquery selecting product IDs
+    _query := _query || format('
+            GROUP BY p.id -- Ensure unique product IDs before sorting/limiting
+            ORDER BY p.%I %s
+            LIMIT %L OFFSET %L
+        )
+        SELECT
+            p.*,
+            COALESCE(
+                (SELECT jsonb_object_agg(lp.competitor_id, lp.new_price)
+                 FROM LatestPrices lp
+                 WHERE lp.product_id = p.id AND lp.rn = 1),
+                ''{}''::jsonb
+            ) AS competitor_prices
+        FROM products p
+        JOIN FilteredProducts fp ON p.id = fp.id
+        ORDER BY p.%I %s', -- Apply final sorting based on the main product table fields
+        _safe_sort_by, _sort_direction, _limit, _offset, _safe_sort_by, _sort_direction
+    );
+
 
     -- Execute the main query and construct the JSON result
     EXECUTE format('SELECT json_build_object(%L, COALESCE(json_agg(q), %L::json), %L, %L) FROM (%s) q',

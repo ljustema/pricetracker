@@ -4,12 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import DeleteButton from "@/components/ui/delete-button";
 
-interface CompetitorPrice {
-  competitor_id: string;
-  competitor_name: string;
-  price: number;
-  changed_at: string;
-}
+// Removed unused CompetitorPrice interface
 
 interface Product {
   id: string;
@@ -25,7 +20,7 @@ interface Product {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-  competitor_prices?: CompetitorPrice[];
+  competitor_prices?: { [key: string]: number }; // Updated to match service type { competitor_id: price }
 }
 
 interface ProductsTableProps {
@@ -57,7 +52,7 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
               Our Price
             </th>
             {/* Competitor price columns */}
-            {competitors.slice(0, 3).map((competitor) => (
+            {competitors.map((competitor) => ( // Removed slice to show all competitors
               <th 
                 key={competitor.id} 
                 scope="col" 
@@ -118,22 +113,21 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                 )}
               </td>
               {/* Competitor price cells */}
-              {competitors.slice(0, 3).map((competitor) => {
-                const competitorPrice = product.competitor_prices?.find(
-                  (cp) => cp.competitor_id === competitor.id
-                );
+              {competitors.map((competitor) => { // Removed slice to show all competitors
+                // Access price directly from the object using competitor.id as the key
+                const price = product.competitor_prices?.[competitor.id];
                 
                 return (
                   <td key={competitor.id} className="whitespace-nowrap px-6 py-4">
-                    {competitorPrice ? (
+                    {price !== undefined ? ( // Check if price exists (is not undefined)
                       <div className={`text-sm font-medium ${
-                        product.our_price && competitorPrice.price < product.our_price 
-                          ? "text-red-600" 
-                          : product.our_price && competitorPrice.price > product.our_price
+                        product.our_price && price < product.our_price
+                          ? "text-red-600"
+                          : product.our_price && price > product.our_price
                             ? "text-green-600"
                             : "text-gray-900"
                       }`}>
-                        ${competitorPrice.price.toFixed(2)}
+                        ${price.toFixed(2)}
                       </div>
                     ) : (
                       <div className="text-sm text-gray-500">-</div>
