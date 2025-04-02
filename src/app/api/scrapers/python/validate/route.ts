@@ -233,8 +233,8 @@ async function validateScriptExecution(
     products: Product[];
     totalProductsFound: number;
     executionError: string | null;
-    rawStdout: string;
-    rawStderr: string;
+    stdout: string;
+    stderr: string;
     batchesProcessed: number;
     progressMessages: string[];
     metadata: ScraperMetadata;
@@ -265,8 +265,8 @@ async function validateScriptExecution(
         products: [],
         totalProductsFound: 0,
         executionError: "No Python interpreter found. Please ensure Python is installed and available in PATH.",
-        rawStdout: '',
-        rawStderr: '',
+        stdout: '',
+        stderr: '',
         batchesProcessed: 0,
         progressMessages: [],
         metadata: initialMetadata
@@ -342,8 +342,8 @@ async function validateScriptExecution(
          products: [],
          totalProductsFound: 0,
          executionError: metadataExecutionError,
-         rawStdout: '', // No scrape stdout
-         rawStderr: metadataRawStderr.trim(), // Only metadata stderr
+         stdout: '', // No scrape stdout
+         stderr: metadataRawStderr.trim(), // Only metadata stderr
          batchesProcessed: 0,
          progressMessages: [],
          metadata: initialMetadata // Return the initial metadata before failure
@@ -383,7 +383,7 @@ async function validateScriptExecution(
             resolve({
                 products: [], totalProductsFound: 0,
                 executionError: `Failed to install required libraries directly: ${installError}`,
-                rawStdout: '', rawStderr: metadataRawStderr + (installError ? `\n--- Install Stderr ---\n${installError}` : ''), // Combine stdouts/stderrs
+                stdout: '', stderr: metadataRawStderr + (installError ? `\n--- Install Stderr ---\n${installError}` : ''), // Combine stdouts/stderrs
                 batchesProcessed: 0, progressMessages: [], metadata
             });
             return;
@@ -538,8 +538,8 @@ async function validateScriptExecution(
             products: limitedProducts,
             totalProductsFound: allProducts.length,
             executionError: combinedExecutionError, // Use the combined error message
-            rawStdout: scrapeStdoutBuffer, // Only stdout from scrape process is relevant here
-            rawStderr: combinedRawStderr.trim(), // Combined stderr from both
+            stdout: scrapeStdoutBuffer, // Only stdout from scrape process is relevant here
+            stderr: combinedRawStderr.trim(), // Combined stderr from both
             batchesProcessed,
             progressMessages,
             metadata // Include the potentially updated metadata
@@ -563,8 +563,8 @@ async function validateScriptExecution(
             products: [],
             totalProductsFound: 0,
             executionError: finalError,
-            rawStdout: scrapeStdoutBuffer,
-            rawStderr: combinedRawStderr.trim(),
+            stdout: scrapeStdoutBuffer,
+            stderr: combinedRawStderr.trim(),
             batchesProcessed: 0,
             progressMessages,
             metadata
