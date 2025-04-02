@@ -2,16 +2,20 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import ScraperManager from "@/components/scrapers/scraper-manager";
 import { redirect } from "next/navigation";
 
+// Updated interface to match standard Next.js server component props
 interface CompetitorScrapersPageProps {
-  params: Promise<{
+  params: {
     competitorId: string;
-  }>;
+  };
+  // Optional: Add searchParams if needed
+  // searchParams?: { [key: string]: string | string[] | undefined };
 }
 
 export default async function CompetitorScrapersPage({
   params,
 }: CompetitorScrapersPageProps) {
-  const { competitorId } = await params;
+  // Removed await as params are directly available
+  const { competitorId } = params;
   
   // Get the competitor details
   const supabase = await createSupabaseServerClient();

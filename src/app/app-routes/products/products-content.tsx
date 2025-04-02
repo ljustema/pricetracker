@@ -9,8 +9,8 @@ import type { Competitor } from "@/lib/services/competitor-service"; // Import C
 import type { Product } from "@/lib/services/product-service";
 import ProductCard from "@/components/products/product-card";
 import ProductsTable from "@/components/products/products-table";
-import ProductsFilter from "@/app/(app)/products/products-filter";
-import ViewToggle from "@/app/(app)/products/view-toggle";
+import ProductsFilter from "@/app/app-routes/products/products-filter";
+import ViewToggle from "@/app/app-routes/products/view-toggle";
 import Pagination from "@/components/ui/pagination";
 
 // Define the props for the component

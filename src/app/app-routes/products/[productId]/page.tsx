@@ -75,8 +75,8 @@ export default async function ProductPage({ params }: ProductPageProps) {
   // Convert the NextAuth user ID to a UUID (same as in API route)
   const userId = ensureUUID(session.user.id);
   
-  // In Next.js 15, params must be awaited before accessing properties
-  const { productId } = await params;
+  // Params are directly available in server components, no await needed
+  const { productId } = params;
   
   // Check if productId is a valid UUID format
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

@@ -5,10 +5,13 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 
+// Updated interface to match standard Next.js page component props
 interface ProductEditPageProps {
-  params: Promise<{
+  params: {
     productId: string;
-  }>;
+  };
+  // Optional: Add searchParams if needed
+  // searchParams?: { [key: string]: string | string[] | undefined };
 }
 
 export default function ProductEditPage({ params }: ProductEditPageProps) {
@@ -30,8 +33,8 @@ export default function ProductEditPage({ params }: ProductEditPageProps) {
     is_active: true,
   });
   
-  // Extract productId using React.use
-  const { productId } = use(params);
+  // Extract productId directly from params
+  const { productId } = params;
 
   useEffect(() => {
     const fetchProduct = async () => {
