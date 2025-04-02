@@ -1,69 +1,105 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useState, useEffect, useMemo } from "react"; // Removed unused useCallback
+import { useRouter } from "next/navigation"; // Removed useSearchParams
+import type { ComplexFiltersState } from './products-client-wrapper'; // Import filter state type
 
 interface ProductsFilterProps {
   brands: string[];
   competitors: { id: string; name: string }[];
+  // Receive current filter state from parent
+  currentFilters: ComplexFiltersState & { sort: string }; // Include sort string
+  // Callback to notify parent of complex filter changes
+  onComplexFilterChange: (newFilters: Partial<ComplexFiltersState>) => void;
+  // Receive simple params that *should* go in the URL
+  simpleSearchParams: { page?: string; view?: string };
 }
 
-export default function ProductsFilter({ brands, competitors }: ProductsFilterProps) {
+export default function ProductsFilter({
+  brands,
+  competitors,
+  currentFilters, // Use prop for current state
+  onComplexFilterChange, // Use callback for changes
+  simpleSearchParams // Use prop for simple URL params
+}: ProductsFilterProps) {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  
-  const [selectedBrand, setSelectedBrand] = useState<string>(
-    searchParams.get("brand") || ""
-  );
-  const [selectedCompetitor, setSelectedCompetitor] = useState<string>(
-    searchParams.get("competitor") || ""
-  );
-  const [sortBy, setSortBy] = useState<string>(
-    searchParams.get("sort") || "name"
-  );
-  const [showInactive, setShowInactive] = useState<boolean>(
-    searchParams.get("inactive") === "true"
-  );
-  const [searchQuery, setSearchQuery] = useState<string>(
-    searchParams.get("search") || ""
-  );
-  const [onlyWithPrice, setOnlyWithPrice] = useState<boolean>(
-    searchParams.get("has_price") === "true"
+
+  // Local state ONLY for sort dropdown, as it directly controls URL params
+  const [sortBy, setSortBy] = useState<string>(currentFilters.sort);
+
+  // Update local sortBy state if the prop changes (e.g., initial load or external navigation)
+  useEffect(() => {
+    setSortBy(currentFilters.sort);
+  }, [currentFilters.sort]);
+
+  // Debounced search handler (optional but good practice)
+  // Make debounce generic to correctly type the passed function and its arguments
+  // Revert constraint to any[] for flexibility, but keep Parameters<T> for the returned function
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const debounce = <T extends (...args: any[]) => void>(func: T, delay: number) => {
+    let timeoutId: NodeJS.Timeout | null = null;
+    // The returned function signature uses Parameters<T> to match the input function `func`
+    return (...args: Parameters<T>) => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      timeoutId = setTimeout(() => {
+        func(...args); // Call the original function with the correct arguments
+      }, delay);
+    };
+  };
+
+  // Use useMemo to memoize the debounced function itself
+  const debouncedSearchHandler = useMemo(
+    () => debounce((value: string) => {
+        onComplexFilterChange({ search: value });
+      }, 300),
+    [onComplexFilterChange] // Depend on the stable callback prop
   );
 
-  // Update URL when filters change
+  // Handler for immediate search input change (updates UI instantly)
+  const handleSearchInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Call the memoized debounced function
+    debouncedSearchHandler(e.target.value);
+  };
+
+  // Update URL ONLY when simple params (sort, page, view) change
   useEffect(() => {
     const params = new URLSearchParams();
-    
-    if (selectedBrand) {
-      params.set("brand", selectedBrand);
+
+    // 1. Add sort parameters derived from local state `sortBy`
+    if (sortBy) {
+      const [sortField, sortDirection] = sortBy.split('-');
+      if (sortField && sortDirection) {
+        params.set("sort", sortField);
+        params.set("sortOrder", sortDirection);
+      } else if (sortField) { // Fallback if somehow only field exists
+         params.set("sort", sortField);
+         params.set("sortOrder", "desc"); // Default order
+      }
     }
-    
-    if (selectedCompetitor) {
-      params.set("competitor", selectedCompetitor);
+
+    // 2. Add simple parameters from props
+    if (simpleSearchParams.page && simpleSearchParams.page !== '1') { // Only add page if not 1
+      params.set("page", simpleSearchParams.page);
     }
-    
-    if (sortBy && sortBy !== "name") {
-      params.set("sort", sortBy);
+    if (simpleSearchParams.view && simpleSearchParams.view !== 'cards') { // Only add view if not default 'cards'
+       params.set("view", simpleSearchParams.view);
     }
-    
-    if (showInactive) {
-      params.set("inactive", "true");
-    }
-    
-    if (searchQuery) {
-      params.set("search", searchQuery);
-    }
-    
-    if (onlyWithPrice) {
-      params.set("has_price", "true");
-    }
-    
+
+    // 3. Construct URL and push
     const queryString = params.toString();
-    const url = queryString ? `?${queryString}` : "";
-    
-    router.push(`/products${url}`);
-  }, [selectedBrand, selectedCompetitor, sortBy, showInactive, searchQuery, onlyWithPrice, router]);
+    // IMPORTANT: Keep existing complex filters in the URL if they were there initially?
+    // Or remove them entirely? For this fix, we remove them to prevent 414.
+    // If deep linking with complex filters is needed, another strategy is required.
+    const url = `/products${queryString ? `?${queryString}` : ""}`;
+
+    // Use replace instead of push to avoid polluting browser history excessively on filter changes?
+    // Push is fine if history is desired.
+    router.push(url);
+
+    // Depend only on sortBy (local state) and simpleSearchParams (props)
+  }, [sortBy, simpleSearchParams.page, simpleSearchParams.view, router]);
 
   return (
     <div className="mb-6 space-y-4">
@@ -73,8 +109,9 @@ export default function ProductsFilter({ brands, competitors }: ProductsFilterPr
           type="text"
           placeholder="Search products..."
           className="w-full rounded-md border-gray-300 pl-10 focus:border-indigo-500 focus:ring-indigo-500"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          // Use defaultValue for uncontrolled input with debounce, or value={localSearchState} if using local state
+          defaultValue={currentFilters.search}
+          onChange={handleSearchInputChange} // Use debounced handler
         />
         <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
           <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -91,8 +128,8 @@ export default function ProductsFilter({ brands, competitors }: ProductsFilterPr
           <select
             id="brand"
             className="mt-1 block w-full rounded-md border-gray-300 py-2 pl-3 pr-10 text-base focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
-            value={selectedBrand}
-            onChange={(e) => setSelectedBrand(e.target.value)}
+            value={currentFilters.brand} // Controlled by prop
+            onChange={(e) => onComplexFilterChange({ brand: e.target.value })} // Call callback
           >
             <option value="">All Brands</option>
             {brands.map((brand) => (
@@ -110,8 +147,8 @@ export default function ProductsFilter({ brands, competitors }: ProductsFilterPr
           <select
             id="competitor"
             className="mt-1 block w-full rounded-md border-gray-300 py-2 pl-3 pr-10 text-base focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
-            value={selectedCompetitor}
-            onChange={(e) => setSelectedCompetitor(e.target.value)}
+            value={currentFilters.competitor} // Controlled by prop
+            onChange={(e) => onComplexFilterChange({ competitor: e.target.value })} // Call callback
           >
             <option value="">All Competitors</option>
             {competitors.map((competitor) => (
@@ -129,12 +166,15 @@ export default function ProductsFilter({ brands, competitors }: ProductsFilterPr
           <select
             id="sort"
             className="mt-1 block w-full rounded-md border-gray-300 py-2 pl-3 pr-10 text-base focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
+            value={sortBy} // Controlled by local state
+            onChange={(e) => setSortBy(e.target.value)} // Update local state (triggers useEffect for URL)
           >
-            <option value="name">Name (A-Z)</option>
-            <option value="name_desc">Name (Z-A)</option>
-            <option value="newest">Newest First</option>
+            {/* Use combined values like field-order */}
+            <option value="name-asc">Name (A-Z)</option>
+            <option value="name-desc">Name (Z-A)</option>
+            <option value="created_at-desc">Newest First</option>
+            <option value="created_at-asc">Oldest First</option>
+            {/* Add other sort options as needed */}
           </select>
         </div>
         
@@ -143,8 +183,8 @@ export default function ProductsFilter({ brands, competitors }: ProductsFilterPr
             <input
               type="checkbox"
               className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-              checked={showInactive}
-              onChange={(e) => setShowInactive(e.target.checked)}
+              checked={currentFilters.inactive} // Controlled by prop
+              onChange={(e) => onComplexFilterChange({ inactive: e.target.checked })} // Call callback
             />
             <span className="ml-2 text-sm text-gray-700">Show Inactive Products</span>
           </label>
@@ -152,10 +192,10 @@ export default function ProductsFilter({ brands, competitors }: ProductsFilterPr
             <input
               type="checkbox"
               className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-              checked={onlyWithPrice}
-              onChange={(e) => setOnlyWithPrice(e.target.checked)}
+              checked={currentFilters.has_price} // Controlled by prop
+              onChange={(e) => onComplexFilterChange({ has_price: e.target.checked })} // Call callback
             />
-            <span className="ml-2 text-sm text-gray-700">Only Products with Price</span>
+            <span className="ml-2 text-sm text-gray-700">Only show products with our price</span>
           </label>
         </div>
       </div>

@@ -18,7 +18,7 @@ function ensureUUID(id: string): string {
 }
 
 // GET handler to fetch all products for the current user
-export async function GET(_request: NextRequest) {
+export async function POST(request: NextRequest) { // Changed from GET to POST
   try {
     // Get the current user from the session
     const session = await getServerSession(authOptions);
@@ -74,22 +74,51 @@ export async function GET(_request: NextRequest) {
       }
     }
     
-    // Fetch all products for the user
-    const { data, error } = await supabase
-      .from("products")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false });
+    // --- Start: Product Fetching Logic using RPC ---
     
+    const body = await request.json(); // Read parameters from request body
+    
+    // Prepare parameters for the RPC call, converting types as needed
+    const rpcParams = {
+      p_user_id: userId,
+      p_page: parseInt(body.page || "1", 10),
+      p_page_size: parseInt(body.pageSize || "12", 10),
+      p_sort_by: body.sortBy || "created_at",
+      p_sort_order: body.sortOrder || "desc",
+      p_brand: body.brand || null, // Pass null if empty/undefined
+      p_category: body.category || null, // Pass null if empty/undefined
+      p_search: body.search || null, // Pass null if empty/undefined
+      // Convert isActive: Frontend sends 'true' or undefined (for active) or false (for inactive)
+      // Function expects true (active), false (inactive), or null (don't filter)
+      p_is_active: body.isActive === 'true' ? true : (body.isActive === false ? false : null),
+      p_competitor_id: body.competitor || null, // Pass null if empty/undefined
+      // Convert has_price: Frontend sends true or undefined
+      // Function expects true or null
+      p_has_price: body.has_price === true ? true : null
+    };
+
+    // Execute the RPC call
+    const { data: rpcResult, error } = await supabase.rpc('get_products_filtered', rpcParams);
+
     if (error) {
-      console.error("Error fetching products:", error);
+      console.error("Error calling get_products_filtered RPC:", error);
       return NextResponse.json(
-        { error: error.message },
+        { error: "Database error: " + error.message },
         { status: 500 }
       );
     }
-    
-    return NextResponse.json(data);
+
+    // The RPC function returns a JSON object like { "data": [], "totalCount": 0 }
+    // Extract data and count from the result
+    const data = rpcResult?.data || [];
+    const count = rpcResult?.totalCount || 0;
+
+    // Return paginated data and total count
+    return NextResponse.json({
+      data: data || [], // Ensure data is always an array
+      totalCount: count || 0, // Total count matching filters
+    });
+    // --- End: Modified Product Fetching Logic ---
   } catch (error) {
     console.error("Error in products API route:", error);
     return NextResponse.json(
@@ -100,7 +129,8 @@ export async function GET(_request: NextRequest) {
 }
 
 // POST handler to create a new product
-export async function POST(request: NextRequest) {
+// TODO: Move this create logic to a separate route like /api/products/create
+export async function CREATE_PRODUCT(request: NextRequest) { // Renamed from POST to avoid conflict
   try {
     // Get the current user from the session
     const session = await getServerSession(authOptions);

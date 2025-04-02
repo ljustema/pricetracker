@@ -169,7 +169,9 @@ export default function ScrapersPage() {
                   Actions
                 </th>
               </tr>
-            </thead><tbody className="divide-y divide-gray-200 bg-white">{scraperData.map((scraper) => ( /* NOTE: tbody must directly follow thead to prevent React hydration errors caused by whitespace */
+            </thead>
+            {/* NOTE: tbody must directly follow thead to prevent React hydration errors caused by whitespace */}
+            <tbody className="divide-y divide-gray-200 bg-white">{scraperData.map((scraper) => (
                   <tr key={scraper.id}>
                     <td className="whitespace-nowrap px-6 py-4">
                       <div className="text-sm font-medium text-gray-900">
