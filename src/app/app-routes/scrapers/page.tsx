@@ -170,9 +170,9 @@ export default function ScrapersPage() {
                 </th>
               </tr>
             </thead>
-            {/* NOTE: tbody must directly follow thead to prevent React hydration errors caused by whitespace */}
-            <tbody className="divide-y divide-gray-200 bg-white">{scraperData.map((scraper) => (
-                  <tr key={scraper.id}>
+            <tbody className="divide-y divide-gray-200 bg-white">
+              {scraperData.map((scraper) => (
+                <tr key={scraper.id}>
                     <td className="whitespace-nowrap px-6 py-4">
                       <div className="text-sm font-medium text-gray-900">
                         {scraper.name}

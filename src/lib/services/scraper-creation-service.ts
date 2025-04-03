@@ -1,5 +1,13 @@
-import { ScraperConfig } from "@/lib/services/scraper-types";
+import { ScraperConfig, ScraperMetadata } from "@/lib/services/scraper-types"; // Added ScraperMetadata
 import { ScraperCrudService } from "@/lib/services/scraper-crud-service";
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { randomUUID } from 'crypto';
+import { exec } from 'child_process'; // Use exec for simpler output capture
+import util from 'util';
+
+const execPromise = util.promisify(exec);
 
 /**
  * Service for creating and validating scrapers (non-AI)
@@ -97,45 +105,96 @@ export class ScraperCreationService {
   }
   
   /**
-   * Validate a Python scraper script structure
-   * Note: The actual execution and metadata extraction happens in the validation endpoint
+   * Validate a Python scraper script by executing its get_metadata function.
    */
-  static async validatePythonScraper(script: string) {
-    // Check if the script contains the required functions
-    const hasGetMetadata = script.includes('def get_metadata');
-    const hasScrape = script.includes('def scrape');
+  static async validatePythonScraper(script: string): Promise<{ valid: boolean; metadata?: ScraperMetadata; error?: string }> {
+    // --- Basic Static Checks ---
+    const hasGetMetadataFunc = script.includes('def get_metadata');
+    const hasScrapeFunc = script.includes('def scrape');
     const hasYieldKeyword = script.includes('yield');
-    const hasGeneratorType = script.includes('Generator[List[Dict[str, Any]]');
-    
-    if (!hasGetMetadata || !hasScrape) {
+    const hasGeneratorType = script.includes('Generator[List[Dict[str, Any]]'); // Basic check
+
+    if (!hasGetMetadataFunc || !hasScrapeFunc) {
       return {
         valid: false,
-        error: 'Script must contain get_metadata and scrape functions',
+        error: 'Script must contain both `def get_metadata()` and `def scrape()` functions.',
       };
     }
-    
-    // Check if the scrape function appears to be a generator (batch-based)
     if (!hasYieldKeyword || !hasGeneratorType) {
+        return {
+          valid: false,
+          error: 'The scrape function must be a generator yielding batches (use `yield` and `Generator` type hint).',
+        };
+    }
+
+    // --- Dynamic Metadata Extraction ---
+    const tempDir = path.join(os.tmpdir(), `pricetracker-validation-${randomUUID()}`);
+    const scriptPath = path.join(tempDir, "script.py");
+    let pythonCommand = '';
+    let metadata: ScraperMetadata | undefined;
+
+    try {
+      // Create temp dir and write script
+      fs.mkdirSync(tempDir, { recursive: true });
+      fs.writeFileSync(scriptPath, script, { encoding: 'utf-8' });
+
+      // Find Python command
+      const pythonCommands = ['python3', 'python', 'py']; // Prioritize python3
+      for (const cmd of pythonCommands) {
+        try {
+          await execPromise(`${cmd} -c "import sys; print(sys.version)"`);
+          pythonCommand = cmd;
+          break;
+        } catch { /* Command not found, try next */ }
+      }
+
+      if (!pythonCommand) {
+        throw new Error('Python interpreter not found. Please ensure Python 3 is installed and in PATH.');
+      }
+
+      // Escape paths for the command string
+      const escapedTempDir = tempDir.replace(/\\/g, '\\\\');
+      const command = `${pythonCommand} -c "import sys; sys.path.insert(0, '${escapedTempDir}'); import script; import json; sys.stdout.reconfigure(encoding='utf-8'); print(json.dumps(script.get_metadata()))"`;
+
+      // Execute get_metadata
+      const { stdout, stderr } = await execPromise(command, { encoding: 'utf-8', timeout: 10000 }); // 10 second timeout
+
+      if (stderr) {
+          console.warn("Stderr during metadata extraction:", stderr);
+          // Allow stderr for warnings, but fail on actual errors later if JSON parsing fails
+      }
+
+      // Parse the JSON output
+      try {
+        metadata = JSON.parse(stdout) as ScraperMetadata;
+      } catch (parseError) {
+        throw new Error(`Failed to parse JSON output from get_metadata: ${parseError instanceof Error ? parseError.message : parseError}\nOutput: ${stdout}`);
+      }
+
+      // Validate metadata structure (basic check)
+      if (!metadata || typeof metadata !== 'object' || !metadata.name || !Array.isArray(metadata.required_libraries)) {
+          throw new Error('Invalid metadata structure returned by get_metadata. Expected keys like "name", "required_libraries" (array), etc.');
+      }
+
+      // Validation successful
+      return {
+        valid: true,
+        metadata: metadata,
+      };
+
+    } catch (error) {
+      console.error("Error validating Python script:", error);
       return {
         valid: false,
-        error: 'The scrape function must be a generator that yields batches of products. It should use the yield keyword and have a Generator return type annotation.',
+        error: error instanceof Error ? error.message : String(error),
       };
+    } finally {
+      // Clean up temporary directory
+      if (fs.existsSync(tempDir)) {
+        fs.rm(tempDir, { recursive: true, force: true }, (err) => {
+          if (err) console.error(`Error cleaning up temp validation directory ${tempDir}:`, err);
+        });
+      }
     }
-    
-    // For structure validation only, we'll use a default metadata object
-    // The actual metadata will be extracted in the validation endpoint
-    const metadata = {
-      name: 'Python Batch Scraper',
-      description: 'A Python scraper that processes products in batches',
-      version: '1.1.0',
-      author: 'User',
-      target_url: '',
-      required_libraries: [],
-    };
-    
-    return {
-      valid: true,
-      metadata,
-    };
   }
 }

@@ -79,7 +79,7 @@ export default function NewProductPage() {
       }
 
       // Redirect to the products page
-      router.push("/products");
+      router.push("/app-routes/products");
     } catch (err) {
       console.error("Error adding product:", err);
       setError(err instanceof Error ? err.message : "An unknown error occurred");
@@ -274,7 +274,7 @@ export default function NewProductPage() {
 
           <div className="flex justify-end space-x-3">
             <Link
-              href="/products"
+              href="/app-routes/products"
               className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
             >
               Cancel

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
+import { useState, useEffect} from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
@@ -33,7 +33,10 @@ export default function ProductEditPage({ params }: ProductEditPageProps) {
     is_active: true,
   });
   
-  // Extract productId directly from params
+  // TODO: Update param access when Next.js requires React.use() for params.
+  // See console warning: "A param property was accessed directly... should be unwrapped with React.use()... direct access is still supported... but in a future version you will be required to unwrap params..."
+  // Currently, using React.use(params) causes TypeScript errors here.
+  // Extract productId directly from params (still supported for now)
   const { productId } = params;
 
   useEffect(() => {
@@ -128,7 +131,7 @@ export default function ProductEditPage({ params }: ProductEditPageProps) {
       }
 
       // Redirect to the products page
-      router.push("/products");
+      router.push("/app-routes/products");
     } catch (err) {
       console.error("Error updating product:", err);
       setError(err instanceof Error ? err.message : "An unknown error occurred");
@@ -334,7 +337,7 @@ export default function ProductEditPage({ params }: ProductEditPageProps) {
 
           <div className="flex justify-end space-x-3">
             <Link
-              href="/products"
+              href="/app-routes/products"
               className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
             >
               Cancel

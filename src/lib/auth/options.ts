@@ -143,21 +143,18 @@ export const authOptions: NextAuthOptions = {
     },
     
     // Potentially redirect after sign-in
-    // async redirect({ url, baseUrl }) {
-    //   // Allows relative callback URLs
-    //   if (url.startsWith("/")) return `${baseUrl}${url}`
-    //   // Allows callback URLs on the same origin
-    //   else if (new URL(url).origin === baseUrl) return url
-    //   return baseUrl // Default redirect to base URL (e.g., dashboard)
-    // }
+    async redirect({ baseUrl }) {
+      // Always redirect to the app dashboard after successful sign-in
+      return `${baseUrl}/app-routes/dashboard`;
+    }
   },
   secret: nextAuthSecret,
   // Optional: Add custom pages if needed
-  // pages: {
-  //   signIn: '/login',
-  //   // signOut: '/auth/signout',
-  //   // error: '/auth/error', // Error code passed in query string as ?error=
-  //   // verifyRequest: '/auth/verify-request', // (used for check email message)
-  //   // newUser: '/auth/new-user' // New users will be directed here on first sign in (leave the property out to disable)
-  // }
+  pages: {
+    signIn: '/auth-routes/login', // Corrected path after folder restructure
+    // signOut: '/auth/signout', // Default is usually fine
+    // error: '/auth/error', // Error code passed in query string as ?error=
+    // verifyRequest: '/auth/verify-request', // (used for check email message)
+    // newUser: null // Disable new user redirection for now
+  }
 };

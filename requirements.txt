@@ -1,0 +1,6 @@
+aiohttp
+aiohttp-retry
+beautifulsoup4
+selectolax
+requests
+# Add any other frequently used Python libraries for scrapers here

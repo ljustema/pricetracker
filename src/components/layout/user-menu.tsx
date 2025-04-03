@@ -32,7 +32,7 @@ export default function UserMenu({ user }: UserMenuProps) {
   }, []);
 
   const handleSignOut = async () => {
-    await signOut({ callbackUrl: "/login" });
+    await signOut({ callbackUrl: "/auth-routes/login" });
   };
 
   return (
@@ -78,7 +78,7 @@ export default function UserMenu({ user }: UserMenuProps) {
             <p className="text-gray-500 truncate">{user.email}</p>
           </div>
           <Link
-            href="/settings"
+            href="/app-routes/settings"
             className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
             role="menuitem"
             tabIndex={-1}

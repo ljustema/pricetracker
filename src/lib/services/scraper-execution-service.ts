@@ -1,4 +1,4 @@
-import { ScrapedProductData, ScraperConfig } from "@/lib/services/scraper-types";
+import { ScrapedProductData, ScraperConfig, ScraperMetadata } from "@/lib/services/scraper-types"; // Added ScraperMetadata
 import { SupabaseClient } from '@supabase/supabase-js';
 import fs from 'fs';
 import path from 'path';
@@ -241,12 +241,54 @@ export class ScraperExecutionService {
       if (!pythonCommand) {
         throw new Error('No Python interpreter found. Please ensure Python is installed and available in PATH.');
       }
-      
+
+      // ---> Install Dependencies before running scrape <---
+      const requiredLibraries = (scraper.script_metadata as ScraperMetadata | undefined)?.required_libraries; // Type assertion
+      if (requiredLibraries && requiredLibraries.length > 0) {
+        const installCommand = `${pythonCommand} -m pip install --disable-pip-version-check --no-cache-dir ${requiredLibraries.join(' ')}`;
+        console.log(`Run ${runId} (Test): Installing dependencies: ${installCommand}`);
+        try {
+          // Update progress
+          const installProgress = this.progressCache.get(runId);
+          if (installProgress) {
+              this.progressCache.set(runId, { ...installProgress, progressMessages: [...installProgress.progressMessages, `Installing: ${requiredLibraries.join(', ')}...`] });
+          }
+
+          const { stdout: pipStdout, stderr: pipStderr } = await execPromise(installCommand, { timeout: 300000 }); // 5 min timeout
+          console.log(`Run ${runId} (Test): Pip install stdout: ${pipStdout}`);
+          if (pipStderr) {
+            console.warn(`Run ${runId} (Test): Pip install stderr: ${pipStderr}`); // Use warn for stderr as pip often outputs warnings here
+          }
+          console.log(`Run ${runId} (Test): Dependencies installed successfully.`);
+           // Update progress
+          const finalInstallProgress = this.progressCache.get(runId);
+          if (finalInstallProgress) {
+              // Remove "Installing..." message and add "Installed."
+              const updatedMessages = finalInstallProgress.progressMessages.filter(msg => !msg.startsWith('Installing:'));
+              this.progressCache.set(runId, { ...finalInstallProgress, progressMessages: [...updatedMessages, `Installed dependencies: ${requiredLibraries.join(', ')}.`] });
+          }
+
+        } catch (installError) {
+          console.error(`Run ${runId} (Test): Failed to install Python dependencies:`, installError);
+          const errorMessage = `Failed to install libraries: ${requiredLibraries.join(', ')}. Error: ${installError instanceof Error ? installError.message : installError}`;
+          // Update progress cache with specific error
+          const errorProgress = this.progressCache.get(runId);
+           if (errorProgress) {
+               this.progressCache.set(runId, { ...errorProgress, status: 'failed', errorMessage: errorMessage, endTime: Date.now(), executionTime: Date.now() - errorProgress.startTime });
+           }
+          throw new Error(errorMessage); // Throw to be caught by the main try/catch
+        }
+      } else {
+          console.log(`Run ${runId} (Test): No specific dependencies listed in metadata.`);
+      }
+      // ---> End Install Dependencies <---
+
       // Execute the scrape function with streaming output
+      console.log(`Run ${runId} (Test): Spawning Python process to execute scrape...`);
       const process = spawn(pythonCommand, [
         '-c',
-        `import sys; sys.stdout.reconfigure(encoding='utf-8'); sys.stderr.reconfigure(encoding='utf-8'); exec(open('${scriptPath.replace(/\\/g, '\\\\')}', encoding='utf-8').read())`,
-        'scrape'
+        `import sys; sys.path.insert(0, '${tempDir.replace(/\\/g, '\\\\')}'); sys.stdout.reconfigure(encoding='utf-8'); sys.stderr.reconfigure(encoding='utf-8'); exec(open('${scriptPath.replace(/\\/g, '\\\\')}', encoding='utf-8').read())`, // Added sys.path modification
+        'scrape' // Assuming 'scrape' is the function to call
       ]);
       
       let stdoutBuffer = '';
@@ -705,12 +747,54 @@ export class ScraperExecutionService {
       if (!pythonCommand) {
         throw new Error('No Python interpreter found. Please ensure Python is installed and available in PATH.');
       }
-      
+
+      // ---> Install Dependencies before running scrape <---
+      const requiredLibraries = (scraper.script_metadata as ScraperMetadata | undefined)?.required_libraries; // Type assertion
+      if (requiredLibraries && requiredLibraries.length > 0) {
+        const installCommand = `${pythonCommand} -m pip install --disable-pip-version-check --no-cache-dir ${requiredLibraries.join(' ')}`;
+        console.log(`Run ${runId}: Installing dependencies: ${installCommand}`);
+        try {
+           // Update progress
+          const installProgress = this.progressCache.get(runId);
+          if (installProgress) {
+              this.progressCache.set(runId, { ...installProgress, progressMessages: [...installProgress.progressMessages, `Installing: ${requiredLibraries.join(', ')}...`] });
+          }
+
+          const { stdout: pipStdout, stderr: pipStderr } = await execPromise(installCommand, { timeout: 300000 }); // 5 min timeout
+          console.log(`Run ${runId}: Pip install stdout: ${pipStdout}`);
+           if (pipStderr) {
+            console.warn(`Run ${runId}: Pip install stderr: ${pipStderr}`); // Use warn for stderr as pip often outputs warnings here
+          }
+          console.log(`Run ${runId}: Dependencies installed successfully.`);
+           // Update progress
+          const finalInstallProgress = this.progressCache.get(runId);
+          if (finalInstallProgress) {
+              // Remove "Installing..." message and add "Installed."
+              const updatedMessages = finalInstallProgress.progressMessages.filter(msg => !msg.startsWith('Installing:'));
+              this.progressCache.set(runId, { ...finalInstallProgress, progressMessages: [...updatedMessages, `Installed dependencies: ${requiredLibraries.join(', ')}.`] });
+          }
+
+        } catch (installError) {
+          console.error(`Run ${runId}: Failed to install Python dependencies:`, installError);
+          const errorMessage = `Failed to install libraries: ${requiredLibraries.join(', ')}. Error: ${installError instanceof Error ? installError.message : installError}`;
+           // Update progress cache with specific error
+          const errorProgress = this.progressCache.get(runId);
+           if (errorProgress) {
+               this.progressCache.set(runId, { ...errorProgress, status: 'failed', errorMessage: errorMessage, endTime: Date.now(), executionTime: Date.now() - errorProgress.startTime });
+           }
+          throw new Error(errorMessage); // Throw to be caught by the main try/catch
+        }
+      } else {
+          console.log(`Run ${runId}: No specific dependencies listed in metadata.`);
+      }
+      // ---> End Install Dependencies <---
+
       // Execute the scrape function with streaming output
+      console.log(`Run ${runId}: Spawning Python process to execute scrape...`);
       const process = spawn(pythonCommand, [
-        '-c', 
-        `import sys; sys.stdout.reconfigure(encoding='utf-8'); sys.stderr.reconfigure(encoding='utf-8'); exec(open('${scriptPath.replace(/\\/g, '\\\\')}', encoding='utf-8').read())`,
-        'scrape'
+        '-c',
+        `import sys; sys.path.insert(0, '${tempDir.replace(/\\/g, '\\\\')}'); sys.stdout.reconfigure(encoding='utf-8'); sys.stderr.reconfigure(encoding='utf-8'); exec(open('${scriptPath.replace(/\\/g, '\\\\')}', encoding='utf-8').read())`, // Added sys.path modification
+        'scrape' // Assuming 'scrape' is the function to call
       ]);
       
       let stdoutBuffer = '';
@@ -1014,16 +1098,24 @@ export class ScraperExecutionService {
         })
         .eq('id', runId);
       
-      // Update progress cache with final status
-      if (finalProgress) {
-        this.progressCache.set(runId, {
-          ...finalProgress,
-          status: hasErrors ? 'failed' : 'success',
-          endTime: Date.now(),
-          executionTime,
-          errorMessage: hasErrors ? 'Errors occurred during batch processing. Check logs for details.' : null
-        });
-      }
+      // Update progress cache with final status (unconditionally)
+      // Get the latest known progress messages, even if the cache entry expired mid-run
+      const latestProgressMessages = finalProgress?.progressMessages || [];
+      const finalErrorMessage = hasErrors ? (finalProgress?.errorMessage || 'Errors occurred during batch processing. Check logs for details.') : null;
+
+      this.progressCache.set(runId, {
+        // Use data primarily from calculated values, fallback to finalProgress if needed for start time
+        status: hasErrors ? 'failed' : 'success',
+        productCount: totalProducts,
+        currentBatch: batchCount,
+        totalBatches: finalProgress?.totalBatches || null, // Keep total batches if known
+        startTime: finalProgress?.startTime || (endTime - executionTime), // Recalculate startTime if cache expired
+        endTime: endTime, // Use calculated endTime
+        executionTime: executionTime, // Use calculated executionTime
+        errorMessage: finalErrorMessage,
+        progressMessages: latestProgressMessages // Keep messages
+      });
+      console.log(`Run ${runId}: Final status set to '${hasErrors ? 'failed' : 'success'}' in cache.`);
     } catch (error) {
       // Update scraper status to failed
       await supabaseAdmin

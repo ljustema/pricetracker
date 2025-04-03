@@ -1,4 +1,14 @@
 // Types for scraper configuration
+
+// Extracted interface for script metadata
+export interface ScraperMetadata {
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  target_url: string;
+  required_libraries: string[];
+}
 export interface ScraperConfig {
   id?: string;
   user_id: string;
@@ -23,14 +33,7 @@ export interface ScraperConfig {
   is_active: boolean;
   is_approved: boolean;
   python_script?: string;
-  script_metadata?: {
-    name: string;
-    description: string;
-    version: string;
-    author: string;
-    target_url: string;
-    required_libraries: string[];
-  };
+  script_metadata?: ScraperMetadata; // Use the extracted interface
   test_results?: Record<string, unknown>;
   approved_at?: string;
   created_at?: string;
