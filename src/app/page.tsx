@@ -9,7 +9,7 @@ export default async function Home() {
   
   // If authenticated, redirect to dashboard
   if (session?.user) {
-    redirect("/dashboard");
+    redirect("/app-routes/dashboard");
   }
   
   // Otherwise, render the marketing landing page

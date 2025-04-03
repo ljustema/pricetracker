@@ -92,7 +92,7 @@ export default function ProductsFilter({
     // IMPORTANT: Keep existing complex filters in the URL if they were there initially?
     // Or remove them entirely? For this fix, we remove them to prevent 414.
     // If deep linking with complex filters is needed, another strategy is required.
-    const url = `/products${queryString ? `?${queryString}` : ""}`;
+    const url = `/app-routes/products${queryString ? `?${queryString}` : ""}`;
 
     // Use replace instead of push to avoid polluting browser history excessively on filter changes?
     // Push is fine if history is desired.

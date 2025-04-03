@@ -226,8 +226,9 @@ SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key # For backend operation
 NEXTAUTH_SECRET=generate_a_strong_secret # openssl rand -base64 32
 NEXTAUTH_URL=http://localhost:3000 # Or your deployment URL
 
-# NextAuth Google Provider (configured via Supabase dashboard usually)
-# Ensure Google Provider is enabled in Supabase Auth settings
+# Google OAuth (for NextAuth)
+GOOGLE_CLIENT_ID=your_client_id
+GOOGLE_CLIENT_SECRET=your_secret_url
 
 # Stripe
 STRIPE_SECRET_KEY=your_stripe_secret_key

@@ -32,7 +32,7 @@ export default function ViewToggle({ defaultView = "cards" }: ViewToggleProps) {
       const queryString = params.toString();
       const url = queryString ? `?${queryString}` : "";
       
-      router.push(`/products${url}`);
+      router.push(`/app-routes/products${url}`);
     }
   }, [view, defaultView, searchParams, router]);
 

@@ -65,7 +65,7 @@ export default function ScrapersPage() {
       };
       fetchData();
     } else if (status === "unauthenticated") {
-      redirect("/login");
+      redirect("/auth-routes/login");
     }
   }, [session, status]);
 
@@ -98,7 +98,7 @@ export default function ScrapersPage() {
       <div className="mb-8 flex items-center justify-between">
         <h1 className="text-3xl font-bold">Web Scrapers</h1>
         <Link
-          href="/competitors"
+          href="/app-routes/competitors"
           className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
         >
           Manage Competitors
@@ -245,15 +245,15 @@ export default function ScrapersPage() {
                               History
                             </Button>
                             <Button variant="outline" className="px-1.5 py-0.5 text-xs h-auto" asChild>
-                              <Link href={`/scrapers/${scraper.id}/edit`}>Edit</Link>
+                              <Link href={`/app-routes/scrapers/${scraper.id}/edit`}>Edit</Link>
                             </Button>
                             {/* Consider making Run/Test Run buttons that trigger API calls */}
                             <Button variant="outline" className="text-green-700 border-green-200 hover:bg-green-50 px-1.5 py-0.5 text-xs h-auto" asChild>
-                               <Link href={`/scrapers/${scraper.id}/run`}>Run</Link>
+                               <Link href={`/app-routes/scrapers/${scraper.id}/run`}>Run</Link>
                             </Button>
                             {(scraper.scraper_type === 'python' || scraper.scraper_type === 'ai') && (
                                <Button variant="outline" className="text-blue-700 border-blue-200 hover:bg-blue-50 leading-tight text-center px-1.5 py-0.5 text-xs h-auto" asChild>
-                                <Link href={`/scrapers/${scraper.id}/test-run`}><div>Run</div><div>Test</div></Link>
+                                <Link href={`/app-routes/scrapers/${scraper.id}/test-run`}><div>Run</div><div>Test</div></Link>
                                </Button>
                             )}
                             {/* DeleteButton likely already uses Shadcn Button internally */}
@@ -297,7 +297,7 @@ export default function ScrapersPage() {
           </p>
           <div className="mt-6">
             <Link
-              href="/competitors"
+              href="/app-routes/competitors"
               className="inline-flex items-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
             >
               <svg

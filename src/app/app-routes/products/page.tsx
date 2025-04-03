@@ -25,7 +25,7 @@ export default async function ProductsPage({ searchParams }: ProductsPageProps) 
 
   // Redirect to login if not authenticated
   if (!session?.user) {
-    redirect("/login");
+    redirect("/auth-routes/login");
   }
 
   // --- Server-Side Data Fetching ---

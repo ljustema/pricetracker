@@ -22,28 +22,28 @@ export default async function MarketingLayout({
             </Link>
           </div>
           <div className="hidden lg:flex lg:gap-x-12">
-            <Link href="/features" className="text-sm font-semibold leading-6 text-gray-900">
+            <Link href="/marketing-routes/features" className="text-sm font-semibold leading-6 text-gray-900">
               Features
             </Link>
-            <Link href="/pricing" className="text-sm font-semibold leading-6 text-gray-900">
+            <Link href="/marketing-routes/pricing" className="text-sm font-semibold leading-6 text-gray-900">
               Pricing
             </Link>
-            <Link href="/about" className="text-sm font-semibold leading-6 text-gray-900">
+            <Link href="/marketing-routes/about" className="text-sm font-semibold leading-6 text-gray-900">
               About
             </Link>
           </div>
           <div className="hidden lg:flex lg:flex-1 lg:justify-end">
             {session?.user ? (
-              <Link href="/dashboard" className="text-sm font-semibold leading-6 text-gray-900">
+              <Link href="/app-routes/dashboard" className="text-sm font-semibold leading-6 text-gray-900">
                 Dashboard <span aria-hidden="true">&rarr;</span>
               </Link>
             ) : (
               <div className="flex items-center gap-x-4">
-                <Link href="/login" className="text-sm font-semibold leading-6 text-gray-900">
+                <Link href="/auth-routes/login" className="text-sm font-semibold leading-6 text-gray-900">
                   Log in
                 </Link>
                 <Link
-                  href="/register"
+                  href="/auth-routes/register"
                   className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
                 >
                   Sign up

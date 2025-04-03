@@ -31,7 +31,7 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
         <h2 className="text-xl font-semibold">{product.name}</h2>
         <div className="flex space-x-2">
           <Link
-            href={`/products/${product.id}/edit`}
+            href={`/app-routes/products/${product.id}/edit`}
             className="rounded-md bg-gray-100 p-2 text-gray-600 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
             aria-label="Edit"
           >
@@ -112,7 +112,7 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
           </div>
           
           <Link
-            href={`/products/${product.id}`}
+            href={`/app-routes/products/${product.id}`}
             className="rounded-md border border-indigo-300 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
           >
             View Details

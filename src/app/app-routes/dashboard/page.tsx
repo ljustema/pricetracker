@@ -148,7 +148,7 @@ export default async function DashboardPage() {
           </div>
           <div className="mt-4">
             <Link
-              href="/competitors"
+              href="/app-routes/competitors"
               className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
             >
               View all competitors →
@@ -180,7 +180,7 @@ export default async function DashboardPage() {
           </div>
           <div className="mt-4">
             <Link
-              href="/products"
+              href="/app-routes/products"
               className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
             >
               View all products →
@@ -213,7 +213,7 @@ export default async function DashboardPage() {
           </div>
           <div className="mt-4">
             <Link
-              href="/insights/price-changes"
+              href="/app-routes/insights/price-changes"
               className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
             >
               View insights →
@@ -259,7 +259,7 @@ export default async function DashboardPage() {
                       )}
                     </div>
                     <div className="ml-4 flex-1">
-                      <Link href={`/products/${priceChange.product_id}`}>
+                      <Link href={`/app-routes/products/${priceChange.product_id}`}>
                         <h3 className="text-lg font-medium text-gray-900 hover:text-indigo-600">
                           {priceChange.products.name}
                         </h3>
@@ -292,7 +292,7 @@ export default async function DashboardPage() {
         <h2 className="mb-4 text-xl font-semibold">Quick Actions</h2>
         <div className="grid gap-6 md:grid-cols-4">
           <Link
-            href="/competitors/new"
+            href="/app-routes/competitors/new"
             className="flex flex-col items-center rounded-lg bg-white p-6 shadow-sm transition-all hover:shadow-md"
           >
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 text-indigo-600">
@@ -315,7 +315,7 @@ export default async function DashboardPage() {
           </Link>
           
           <Link
-            href="/products/import"
+            href="/app-routes/products/import"
             className="flex flex-col items-center rounded-lg bg-white p-6 shadow-sm transition-all hover:shadow-md"
           >
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 text-indigo-600">
@@ -338,7 +338,7 @@ export default async function DashboardPage() {
           </Link>
           
           <Link
-            href="/reports/generate"
+            href="/app-routes/reports/generate"
             className="flex flex-col items-center rounded-lg bg-white p-6 shadow-sm transition-all hover:shadow-md"
           >
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 text-indigo-600">
@@ -361,7 +361,7 @@ export default async function DashboardPage() {
           </Link>
           
           <Link
-            href="/settings"
+            href="/app-routes/settings"
             className="flex flex-col items-center rounded-lg bg-white p-6 shadow-sm transition-all hover:shadow-md"
           >
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 text-indigo-600">

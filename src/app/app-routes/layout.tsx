@@ -22,14 +22,14 @@ export default async function AppLayout({
       {/* Sidebar */}
       <aside className="fixed inset-y-0 left-0 z-10 hidden w-64 flex-shrink-0 bg-indigo-700 shadow-lg md:flex md:flex-col">
         <div className="flex h-16 flex-shrink-0 items-center px-4">
-          <Link href="/dashboard" className="flex items-center">
+          <Link href="/app-routes/dashboard" className="flex items-center">
             <span className="text-xl font-bold text-white">PriceTracker</span>
           </Link>
         </div>
         <div className="flex flex-1 flex-col overflow-y-auto">
           <nav className="flex-1 space-y-1 px-2 py-4">
             <Link
-              href="/dashboard"
+              href="/app-routes/dashboard"
               className="group flex items-center rounded-md px-2 py-2 text-sm font-medium text-indigo-100 hover:bg-indigo-600 hover:text-white"
             >
               <svg
@@ -48,7 +48,7 @@ export default async function AppLayout({
               Dashboard
             </Link>
             <Link
-              href="/competitors"
+              href="/app-routes/competitors"
               className="group flex items-center rounded-md px-2 py-2 text-sm font-medium text-indigo-100 hover:bg-indigo-600 hover:text-white"
             >
               <svg
@@ -67,7 +67,7 @@ export default async function AppLayout({
               Competitors
             </Link>
             <Link
-              href="/products"
+              href="/app-routes/products"
               className="group flex items-center rounded-md px-2 py-2 text-sm font-medium text-indigo-100 hover:bg-indigo-600 hover:text-white"
             >
               <svg
@@ -86,7 +86,7 @@ export default async function AppLayout({
               Products
             </Link>
             <Link
-              href="/brands"
+              href="/app-routes/brands"
               className="group flex items-center rounded-md px-2 py-2 text-sm font-medium text-indigo-100 hover:bg-indigo-600 hover:text-white"
             >
               <svg
@@ -105,7 +105,7 @@ export default async function AppLayout({
               Brands
             </Link>
             <Link
-              href="/scrapers"
+              href="/app-routes/scrapers"
               className="group flex items-center rounded-md px-2 py-2 text-sm font-medium text-indigo-100 hover:bg-indigo-600 hover:text-white"
             >
               <svg
@@ -124,7 +124,7 @@ export default async function AppLayout({
               Scrapers
             </Link>
             <Link
-              href="/insights"
+              href="/app-routes/insights"
               className="group flex items-center rounded-md px-2 py-2 text-sm font-medium text-indigo-100 hover:bg-indigo-600 hover:text-white"
             >
               <svg
@@ -143,7 +143,7 @@ export default async function AppLayout({
               Insights
             </Link>
             <Link
-              href="/settings"
+              href="/app-routes/settings"
               className="group flex items-center rounded-md px-2 py-2 text-sm font-medium text-indigo-100 hover:bg-indigo-600 hover:text-white"
             >
               <svg

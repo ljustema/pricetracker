@@ -56,7 +56,7 @@ export default function NewCompetitorPage() {
       }
 
       // Redirect to the competitors page
-      router.push("/competitors");
+      router.push("/app-routes/competitors");
     } catch (err) {
       console.error("Error adding competitor:", err);
       setError(err instanceof Error ? err.message : "An unknown error occurred");
@@ -132,7 +132,7 @@ export default function NewCompetitorPage() {
 
           <div className="flex justify-end space-x-3">
             <Link
-              href="/competitors"
+              href="/app-routes/competitors"
               className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
             >
               Cancel

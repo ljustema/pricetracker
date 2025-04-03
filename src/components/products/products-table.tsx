@@ -87,7 +87,7 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                   )}
                   <div className="ml-4">
                     <div className="text-sm font-medium text-gray-900">
-                      <Link href={`/products/${product.id}`} className="hover:text-indigo-600">
+                      <Link href={`/app-routes/products/${product.id}`} className="hover:text-indigo-600">
                         {product.name}
                       </Link>
                     </div>
@@ -138,7 +138,7 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
               <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium">
                 <div className="flex justify-end space-x-2">
                   <Link
-                    href={`/products/${product.id}/edit`}
+                    href={`/app-routes/products/${product.id}/edit`}
                     className="rounded-md bg-gray-100 p-2 text-gray-600 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
                     aria-label="Edit"
                   >

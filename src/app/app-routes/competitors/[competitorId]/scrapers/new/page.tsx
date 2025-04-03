@@ -71,7 +71,7 @@ export default function NewScraperPage() {
       }
       
       // Redirect to the scrapers page
-      router.push(`/competitors/${competitorId}/scrapers`);
+      router.push(`/app-routes/competitors/${competitorId}/scrapers`);
     } catch (err) {
       console.error("Error creating scraper:", err);
       setError(err instanceof Error ? err.message : "An unknown error occurred");
@@ -161,7 +161,7 @@ export default function NewScraperPage() {
       }
       
       // Redirect to the scrapers page
-      router.push(`/competitors/${competitorId}/scrapers`);
+      router.push(`/app-routes/competitors/${competitorId}/scrapers`);
     } catch (err) {
       console.error("Error generating scraper with AI:", err);
       setError(err instanceof Error ? err.message : "An unknown error occurred");
@@ -171,7 +171,7 @@ export default function NewScraperPage() {
   };
 
   const handlePythonScraperCreated = async (_scraperId: string) => {
-    router.push(`/competitors/${competitorId}/scrapers`);
+    router.push(`/app-routes/competitors/${competitorId}/scrapers`);
   };
   
   // Render the appropriate component based on the current step

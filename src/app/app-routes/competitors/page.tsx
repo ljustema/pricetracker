@@ -49,7 +49,7 @@ export default async function CompetitorsPage() {
   
   // Redirect to login if not authenticated
   if (!session?.user) {
-    redirect("/login");
+    redirect("/auth-routes/login");
   }
   
   // Convert the NextAuth user ID to a UUID (same as in API route)
@@ -63,7 +63,7 @@ export default async function CompetitorsPage() {
       <div className="mb-8 flex items-center justify-between">
         <h1 className="text-3xl font-bold">Competitors</h1>
         <Link
-          href="/competitors/new"
+          href="/app-routes/competitors/new"
           className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
         >
           Add Competitor
@@ -81,7 +81,7 @@ export default async function CompetitorsPage() {
                 <h2 className="text-xl font-semibold">{competitor.name}</h2>
                 <div className="flex space-x-2">
                   <Link
-                    href={`/competitors/${competitor.id}/edit`}
+                    href={`/app-routes/competitors/${competitor.id}/edit`}
                     className="rounded-md bg-gray-100 p-2 text-gray-600 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
                     aria-label="Edit"
                   >
@@ -116,14 +116,14 @@ export default async function CompetitorsPage() {
               
               <div className="mt-4 flex justify-between">
                 <Link
-                  href="/scrapers"
+                  href="/app-routes/scrapers"
                   className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 hover:bg-green-200"
                 >
                   View Scrapers
                 </Link>
                 
                 <Link
-                  href={`/competitors/${competitor.id}/scrapers/new`}
+                  href={`/app-routes/competitors/${competitor.id}/scrapers/new`}
                   className="rounded-md border border-indigo-300 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
                 >
                   Add Scraper
@@ -156,7 +156,7 @@ export default async function CompetitorsPage() {
           </p>
           <div className="mt-6">
             <Link
-              href="/competitors/new"
+              href="/app-routes/competitors/new"
               className="inline-flex items-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
             >
               <svg

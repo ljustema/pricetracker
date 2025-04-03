@@ -97,7 +97,7 @@ export default function EditScraperPage() {
       }
       
       // Redirect to the scrapers page
-      router.push("/scrapers");
+      router.push("/app-routes/scrapers");
     } catch (err) {
       console.error("Error updating scraper:", err);
       setError(err instanceof Error ? err.message : "An unknown error occurred");
@@ -111,7 +111,7 @@ export default function EditScraperPage() {
   };
   
   const handlePythonScraperSuccess = (_scraperId: string) => {
-    router.push("/scrapers");
+    router.push("/app-routes/scrapers");
   };
   
   // Render the appropriate form based on the scraper type

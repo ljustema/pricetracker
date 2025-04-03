@@ -31,7 +31,7 @@ export default function LoginPage() {
       }
 
       // Redirect to dashboard on successful login
-      router.push("/dashboard");
+      router.push("/app-routes/dashboard");
       router.refresh();
     } catch (error) {
       console.error("Login error:", error);
@@ -45,7 +45,7 @@ export default function LoginPage() {
     setError("");
 
     try {
-      await signIn("google", { callbackUrl: "/dashboard" });
+      await signIn("google", { callbackUrl: "/app-routes/dashboard" });
     } catch (error) {
       console.error("Google sign-in error:", error);
       setError("An error occurred during Google sign-in. Please try again.");
@@ -196,7 +196,7 @@ export default function LoginPage() {
 
                 <div className="text-sm">
                   <Link
-                    href="/reset-password"
+                    href="/auth-routes/reset-password"
                     className="font-medium text-indigo-600 hover:text-indigo-500"
                   >
                     Forgot your password?
@@ -219,7 +219,7 @@ export default function LoginPage() {
               <p className="text-gray-600">
                 Don&apos;t have an account?{" "}
                 <Link
-                  href="/register"
+                  href="/auth-routes/register"
                   className="font-medium text-indigo-600 hover:text-indigo-500"
                 >
                   Sign up
