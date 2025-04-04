@@ -5,7 +5,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 export async function GET(
   req: NextRequest,
-  context: { params: { competitorId: string } } // Change signature to receive context object
+  { params }: { params: { competitorId: string } }
 ) {
   try {
     // Check authentication
@@ -14,7 +14,7 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { competitorId } = context.params; // Access params from context
+    const { competitorId } = params; // Access params directly
     if (!competitorId) {
       return NextResponse.json(
         { error: "Missing competitor ID" },
