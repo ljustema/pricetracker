@@ -11,7 +11,7 @@ PriceTracker is a SaaS application designed to help businesses monitor competito
 -   **Authentication**: Secure sign-in using Google OAuth or traditional email/password via NextAuth.js and Supabase Auth.
 -   **Dashboard**: Centralized overview of tracked products, competitors, and recent price fluctuations.
 -   **Competitors**: Manage and organize information about competitors.
--   **Products**: Track your own products, link them to competitor equivalents, and compare prices.
+-   **Products**: See all your own and your competitors products and historical prices.
 -   **CSV Management**: Download CSV templates for bulk product uploads and upload product data via CSV files.
 -   **Scrapers**:
     -   AI-powered generation of web scrapers.
@@ -20,8 +20,7 @@ PriceTracker is a SaaS application designed to help businesses monitor competito
     -   Detailed run history, logs, and performance tracking (Products/sec).
     -   Testing and validation capabilities for scrapers.
     -   Activation and approval workflows for scrapers.
--   **Product Linking**: Associate your products with specific scrapers and competitor entries.
--   **Price History**: View historical price data for tracked products.
+-   **Integrations** Integrate you own ecommerce to get your products and prices.
 -   **Insights**: Analyze price trends and derive actionable market insights (future capability).
 -   **Settings**: Configure account settings and potential third-party integrations.
 -   **Admin**: User management and system-level configuration.

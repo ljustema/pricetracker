@@ -1,7 +1,12 @@
 {
   "version": 2,
-  "buildCommand": "npm run build",
-  "installCommand": "npm install",
   "framework": "nextjs",
-  "outputDirectory": ".next"
+  "buildCommand": "npm run build",
+  "installCommand": "npm install; pip install -r requirements.txt",
+  "outputDirectory": ".next",
+  "functions": {
+    "api/execute_scraper.py": {
+      "runtime": "python3.9"
+    }
+  }
 }
