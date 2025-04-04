@@ -52,8 +52,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       {
-        source: '/',
-        destination: '/marketing-routes',
+        // Map requests for the folder path...
+        source: '/marketing-routes',
+        // ...to be served as the root path.
+        destination: '/',
       },
       // Add other rewrites if needed
     ];
