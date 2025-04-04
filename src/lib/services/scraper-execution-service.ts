@@ -1,13 +1,8 @@
 import { ScrapedProductData, ScraperConfig, ScraperMetadata } from "@/lib/services/scraper-types"; // Added ScraperMetadata
 import { SupabaseClient } from '@supabase/supabase-js';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
+// Removed unused imports: fs, path, os
 import { randomUUID } from 'crypto';
-import { spawn, exec } from 'child_process';
-import util from 'util';
-
-const execPromise = util.promisify(exec);
+// Removed child_process imports as execution is delegated
 
 // Progress cache to store run status information
 interface ProgressData {
@@ -180,16 +175,17 @@ export class ScraperExecutionService {
     // Import here to avoid circular dependencies
     const { createSupabaseAdminClient } = await import('@/lib/supabase/server');
     const supabaseAdmin = createSupabaseAdminClient();
-    
+
     // Update progress status to running
-    const progress = this.progressCache.get(runId);
-    if (progress) {
+    const initialProgress = this.progressCache.get(runId);
+    if (initialProgress) {
       this.progressCache.set(runId, {
-        ...progress,
-        status: 'running'
+        ...initialProgress,
+        status: 'running',
+        progressMessages: [...initialProgress.progressMessages, 'Starting test run...']
       });
     }
-    
+
     // Update scraper status to running
     await supabaseAdmin
       .from('scrapers')
@@ -198,7 +194,12 @@ export class ScraperExecutionService {
         last_run: new Date().toISOString(),
       })
       .eq('id', scraperId);
-    
+
+    let hasErrors = false;
+    let finalErrorMessage: string | null = null;
+    let totalProducts = 0;
+    const startTime = Date.now();
+
     try {
       // Get the scraper configuration using admin client to bypass RLS
       const { data: scraper } = await supabaseAdmin
@@ -206,384 +207,116 @@ export class ScraperExecutionService {
         .select('*')
         .eq('id', scraperId)
         .single();
-      
+
       if (!scraper) {
         throw new Error('Scraper not found');
       }
-      
+
       // Only support Python and AI scrapers
       if (scraper.scraper_type !== 'python' && scraper.scraper_type !== 'ai') {
         throw new Error(`Unsupported scraper type: ${scraper.scraper_type}`);
       }
-      
-      // Create a temporary directory for the script
-      const tempDir = path.join(os.tmpdir(), "pricetracker-" + randomUUID());
-      fs.mkdirSync(tempDir, { recursive: true });
-      
-      // Write the script to a temporary file
-      const scriptPath = path.join(tempDir, "script.py");
-      fs.writeFileSync(scriptPath, scraper.python_script || '');
-      
-      // Find a working Python command
-      const pythonCommands = ['python', 'python3', 'py'];
-      let pythonCommand = '';
-      
-      for (const cmd of pythonCommands) {
-        try {
-          await execPromise(`${cmd} -c "print('test')"`, { encoding: 'utf-8' });
-          pythonCommand = cmd;
-          break;
-        } catch (error) {
-          console.warn(`Python command ${cmd} not available:`, error);
-        }
-      }
-      
-      if (!pythonCommand) {
-        throw new Error('No Python interpreter found. Please ensure Python is installed and available in PATH.');
+
+      if (!scraper.python_script) {
+        throw new Error('Scraper script content is missing.');
       }
 
-      // ---> Install Dependencies before running scrape <---
-      const requiredLibraries = (scraper.script_metadata as ScraperMetadata | undefined)?.required_libraries; // Type assertion
-      if (requiredLibraries && requiredLibraries.length > 0) {
-        const installCommand = `${pythonCommand} -m pip install --disable-pip-version-check --no-cache-dir ${requiredLibraries.join(' ')}`;
-        console.log(`Run ${runId} (Test): Installing dependencies: ${installCommand}`);
-        try {
-          // Update progress
-          const installProgress = this.progressCache.get(runId);
-          if (installProgress) {
-              this.progressCache.set(runId, { ...installProgress, progressMessages: [...installProgress.progressMessages, `Installing: ${requiredLibraries.join(', ')}...`] });
-          }
+      // Get required libraries from metadata
+      const requiredLibraries = (scraper.script_metadata as ScraperMetadata | undefined)?.required_libraries || [];
 
-          const { stdout: pipStdout, stderr: pipStderr } = await execPromise(installCommand, { timeout: 300000 }); // 5 min timeout
-          console.log(`Run ${runId} (Test): Pip install stdout: ${pipStdout}`);
-          if (pipStderr) {
-            console.warn(`Run ${runId} (Test): Pip install stderr: ${pipStderr}`); // Use warn for stderr as pip often outputs warnings here
-          }
-          console.log(`Run ${runId} (Test): Dependencies installed successfully.`);
-           // Update progress
-          const finalInstallProgress = this.progressCache.get(runId);
-          if (finalInstallProgress) {
-              // Remove "Installing..." message and add "Installed."
-              const updatedMessages = finalInstallProgress.progressMessages.filter(msg => !msg.startsWith('Installing:'));
-              this.progressCache.set(runId, { ...finalInstallProgress, progressMessages: [...updatedMessages, `Installed dependencies: ${requiredLibraries.join(', ')}.`] });
-          }
+      // Determine the absolute URL for the Python execution endpoint
+      // Use VERCEL_URL in production/preview, fallback to localhost for development
+      const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      const executionUrl = `${baseUrl}/api/execute_scraper`;
 
-        } catch (installError) {
-          console.error(`Run ${runId} (Test): Failed to install Python dependencies:`, installError);
-          const errorMessage = `Failed to install libraries: ${requiredLibraries.join(', ')}. Error: ${installError instanceof Error ? installError.message : installError}`;
-          // Update progress cache with specific error
-          const errorProgress = this.progressCache.get(runId);
-           if (errorProgress) {
-               this.progressCache.set(runId, { ...errorProgress, status: 'failed', errorMessage: errorMessage, endTime: Date.now(), executionTime: Date.now() - errorProgress.startTime });
-           }
-          throw new Error(errorMessage); // Throw to be caught by the main try/catch
-        }
+      console.log(`Run ${runId} (Test): Calling Python execution endpoint: ${executionUrl}`);
+
+      // Update progress
+      const progress = this.progressCache.get(runId);
+      if (progress) {
+        this.progressCache.set(runId, { ...progress, progressMessages: [...progress.progressMessages, `Calling Python execution endpoint...`] });
+      }
+
+      // Call the Python execution endpoint
+      const response = await fetch(executionUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          run_id: runId,
+          script_content: scraper.python_script,
+          requirements: requiredLibraries,
+          // Add is_test_run: true if the Python endpoint needs it
+        }),
+        // Set a reasonable timeout for the API call itself (e.g., 10 minutes)
+        // The Python function has its own internal timeout for the script execution
+        signal: AbortSignal.timeout(10 * 60 * 1000)
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        hasErrors = true;
+        finalErrorMessage = result.error || `Python execution endpoint failed with status ${response.status}`;
+        console.error(`Run ${runId} (Test): Python execution failed: ${finalErrorMessage}`);
       } else {
-          console.log(`Run ${runId} (Test): No specific dependencies listed in metadata.`);
+        console.log(`Run ${runId} (Test): Python execution successful.`);
+        totalProducts = result.product_count || 0; // Get product count from response
+        // Note: Test runs in the Python script might be designed to return 0 products
+        // We only care about successful execution here.
       }
-      // ---> End Install Dependencies <---
 
-      // Execute the scrape function with streaming output
-      console.log(`Run ${runId} (Test): Spawning Python process to execute scrape...`);
-      const process = spawn(pythonCommand, [
-        '-c',
-        `import sys; sys.path.insert(0, '${tempDir.replace(/\\/g, '\\\\')}'); sys.stdout.reconfigure(encoding='utf-8'); sys.stderr.reconfigure(encoding='utf-8'); exec(open('${scriptPath.replace(/\\/g, '\\\\')}', encoding='utf-8').read())`, // Added sys.path modification
-        'scrape' // Assuming 'scrape' is the function to call
-      ]);
-      
-      let stdoutBuffer = '';
-      let stderrBuffer = '';
-      let totalProducts = 0;
-      let batchCount = 0;
-      let hasErrors = false;
-      let firstBatchProcessed = false;
-      
-      // Process stdout (JSON batches)
-      process.stdout.on('data', (data) => {
-        const chunk = data.toString();
-        stdoutBuffer += chunk;
-        
-        // Process complete lines
-        const lines = stdoutBuffer.split('\n');
-        // Keep the last line in the buffer if it's incomplete
-        stdoutBuffer = lines.pop() || '';
-        
-        for (const line of lines) {
-          if (!line.trim() || firstBatchProcessed) continue;
-          
-          try {
-            const batch = JSON.parse(line);
-            if (Array.isArray(batch)) {
-              batchCount++;
-              
-              // Process only the first batch
-              this.processBatch(batch, scraper, scraperId, supabaseAdmin).then(insertedCount => {
-                totalProducts += insertedCount;
-                firstBatchProcessed = true;
-                
-                // Update progress cache
-                const progress = this.progressCache.get(runId);
-                if (progress) {
-                  this.progressCache.set(runId, {
-                    ...progress,
-                    productCount: totalProducts,
-                    currentBatch: batchCount,
-                    progressMessages: [...progress.progressMessages, `Processed first batch with ${insertedCount} products`]
-                  });
-                }
-                
-                // Kill the process after processing the first batch
-                process.kill();
-              }).catch(error => {
-                console.error(`Error processing batch ${batchCount}:`, error);
-                hasErrors = true;
-                
-                // Update progress cache with error
-                const progress = this.progressCache.get(runId);
-                if (progress) {
-                  this.progressCache.set(runId, {
-                    ...progress,
-                    errorMessage: `Error processing batch ${batchCount}: ${error instanceof Error ? error.message : String(error)}`
-                  });
-                }
-                
-                // Kill the process on error
-                process.kill();
-              });
-              
-              break; // Only process the first batch
-            } else {
-              console.warn("Received non-array batch:", line);
-            }
-          } catch (error) {
-            console.error("Error parsing batch JSON:", error, "Line:", line);
-          }
-        }
-      });
-      
-      // Process stderr (progress messages)
-      process.stderr.on('data', (data) => {
-        const chunk = data.toString();
-        stderrBuffer += chunk;
-        
-        // Process complete lines
-        const lines = stderrBuffer.split('\n');
-        // Keep the last line in the buffer if it's incomplete
-        stderrBuffer = lines.pop() || '';
-        
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          
-          // Check for progress messages
-          if (line.includes('PROGRESS:')) {
-            // Update progress cache with the message
-            const progress = this.progressCache.get(runId);
-            if (progress) {
-              const progressMessages = [...progress.progressMessages, line];
-              
-              // Try to extract total batches if available
-              let totalBatches = progress.totalBatches;
-              const batchMatch = line.match(/Batch (\d+)\/(\d+)/);
-              if (batchMatch && batchMatch[2]) {
-                totalBatches = parseInt(batchMatch[2], 10);
-              }
-              
-              this.progressCache.set(runId, {
-                ...progress,
-                progressMessages,
-                totalBatches
-              });
-            }
-          } else {
-            // Non-progress messages might indicate errors
-            console.warn("Non-progress stderr message:", line);
-          }
-        }
-      });
-      
-      // Handle process completion
-      await new Promise<void>((resolve, reject) => {
-        process.on('close', (_code) => {
-          // Process any remaining data in buffers
-          if (stdoutBuffer.trim() && !firstBatchProcessed) {
-            try {
-              const batch = JSON.parse(stdoutBuffer.trim());
-              if (Array.isArray(batch)) {
-                batchCount++;
-                
-                // Process the final batch if it's the first one
-                this.processBatch(batch, scraper, scraperId, supabaseAdmin).then(insertedCount => {
-                  totalProducts += insertedCount;
-                  firstBatchProcessed = true;
-                  
-                  // Update progress cache
-                  const progress = this.progressCache.get(runId);
-                  if (progress) {
-                    this.progressCache.set(runId, {
-                      ...progress,
-                      productCount: totalProducts,
-                      currentBatch: batchCount,
-                      progressMessages: [...progress.progressMessages, `Processed first batch with ${insertedCount} products`]
-                    });
-                  }
-                  
-                  resolve();
-                }).catch(error => {
-                  console.error(`Error processing final batch:`, error);
-                  hasErrors = true;
-                  reject(error);
-                });
-              } else {
-                resolve();
-              }
-            } catch (error) {
-              console.error("Error parsing final batch JSON:", error);
-              hasErrors = true;
-              reject(error);
-            }
-          } else {
-            // No data in buffer, just resolve
-            resolve();
-          }
-        });
-        
-        // Set a maximum execution time for the entire scraper (4 hours)
-        const maxExecutionTimeout = setTimeout(() => {
-          console.log(`Scraper ${scraperId} run ${runId} exceeded maximum execution time, terminating...`);
-          process.kill();
-          resolve(); // Resolve to allow completion handling
-        }, 4 * 60 * 60 * 1000); // 4 hours
-        
-        // Check if all batches are processed based on progress messages
-        const completionCheckInterval = setInterval(() => {
-          const currentProgress = this.progressCache.get(runId);
-          if (currentProgress && 
-              currentProgress.totalBatches !== null && 
-              currentProgress.currentBatch >= currentProgress.totalBatches) {
-            
-            // All batches processed according to progress messages
-            console.log(`All ${currentProgress.totalBatches} batches processed for run ${runId}, completing...`);
-            clearInterval(completionCheckInterval);
-            clearTimeout(maxExecutionTimeout);
-            
-            // Give it a moment to finish any pending processing
-            setTimeout(() => {
-              process.kill();
-              resolve();
-            }, 10000); // 10 seconds grace period
-          }
-        }, 30000); // Check every 30 seconds
-        
-        process.on('error', (error) => {
-          console.error("Process error:", error);
-          hasErrors = true;
-          clearTimeout(maxExecutionTimeout);
-          clearInterval(completionCheckInterval);
-          reject(error);
-        });
-      });
-      
-      // Clean up the temporary files
-      try {
-        fs.unlinkSync(scriptPath);
-        fs.rmdirSync(tempDir, { recursive: true });
-      } catch (cleanupError) {
-        console.error("Error cleaning up temporary files:", cleanupError);
-      }
-      
+    } catch (error) {
+      console.error(`Error in runScraperTestInternal calling Python endpoint for ${scraperId}:`, error);
+      hasErrors = true;
+      finalErrorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
       // Calculate execution time
-      const executionTime = Date.now() - (progress?.startTime || Date.now());
-      
+      const endTime = Date.now();
+      const executionTime = endTime - startTime;
+
       // Update scraper status based on results
-      const { error: scraperUpdateError } = await supabaseAdmin
+      const scraperStatus = hasErrors ? 'failed' : 'success'; // Test run succeeds if execution is ok
+      const scraperErrorMessage = hasErrors ? `Test run failed: ${finalErrorMessage}` : null;
+
+      await supabaseAdmin
         .from('scrapers')
         .update({
-          status: hasErrors ? 'failed' : 'success',
-          error_message: hasErrors ? 'Errors occurred during batch processing. Check logs for details.' : null,
-          execution_time: executionTime
+          status: scraperStatus, // Update main scraper status based on test success/fail
+          error_message: scraperErrorMessage,
+          execution_time: executionTime // Store execution time for the test
         })
         .eq('id', scraperId);
-        
-      if (scraperUpdateError) {
-        console.error(`Error updating scraper status: ${scraperUpdateError.message}`);
-      }
-      
+
       // Update run record with final status
-      const { error: runUpdateError } = await supabaseAdmin
+      await supabaseAdmin
         .from('scraper_runs')
         .update({
-          status: hasErrors ? 'failed' : 'success',
-          completed_at: new Date().toISOString(),
-          product_count: totalProducts,
-          current_batch: batchCount,
-          error_message: hasErrors ? 'Errors occurred during batch processing. Check logs for details.' : null
+          status: scraperStatus,
+          completed_at: new Date(endTime).toISOString(),
+          product_count: totalProducts, // Store products found during test
+          error_message: scraperErrorMessage,
+          execution_time_ms: executionTime
         })
         .eq('id', runId);
-        
-      if (runUpdateError) {
-        console.error(`Error updating run record: ${runUpdateError.message}`);
-      } else {
-        console.log(`Updated database record for completed test run ${runId}`);
-      }
-      
+
       // Update progress cache with final status
       const finalProgress = this.progressCache.get(runId);
       if (finalProgress) {
         this.progressCache.set(runId, {
           ...finalProgress,
-          status: hasErrors ? 'failed' : 'success',
-          endTime: Date.now(),
-          executionTime,
+          status: scraperStatus,
+          endTime: endTime,
+          executionTime: executionTime,
           productCount: totalProducts,
-          currentBatch: batchCount,
-          errorMessage: hasErrors ? 'Errors occurred during batch processing. Check logs for details.' : null
+          errorMessage: scraperErrorMessage,
+          progressMessages: [...(finalProgress.progressMessages || []), `Test run finished with status: ${scraperStatus}`]
         });
-      }
-    } catch (error) {
-      console.error(`Error in runScraperTestInternal for ${scraperId}:`, error);
-      
-      // Update scraper status to failed
-      const { error: scraperUpdateError } = await supabaseAdmin
-        .from('scrapers')
-        .update({
-          status: 'failed',
-          error_message: error instanceof Error ? error.message : 'Unknown error',
-        })
-        .eq('id', scraperId);
-        
-      if (scraperUpdateError) {
-        console.error(`Error updating scraper status: ${scraperUpdateError.message}`);
-      }
-      
-      // Update run record with error
-      const { error: runUpdateError } = await supabaseAdmin
-        .from('scraper_runs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: error instanceof Error ? error.message : String(error)
-        })
-        .eq('id', runId);
-        
-      if (runUpdateError) {
-        console.error(`Error updating run record: ${runUpdateError.message}`);
       } else {
-        console.log(`Updated database record for failed test run ${runId}`);
+         // If cache expired, log final status
+         console.warn(`Run ${runId} (Test): Progress cache entry expired before final update. Final status: ${scraperStatus}`);
       }
-      
-      // Update progress cache with error
-      const progress = this.progressCache.get(runId);
-      if (progress) {
-        this.progressCache.set(runId, {
-          ...progress,
-          status: 'failed',
-          endTime: Date.now(),
-          executionTime: Date.now() - progress.startTime,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
-      }
-      
-      throw error;
     }
   }
 
@@ -686,16 +419,17 @@ export class ScraperExecutionService {
     // Import here to avoid circular dependencies
     const { createSupabaseAdminClient } = await import('@/lib/supabase/server');
     const supabaseAdmin = createSupabaseAdminClient();
-    
+
     // Update progress status to running
-    const progress = this.progressCache.get(runId);
-    if (progress) {
+    const initialProgress = this.progressCache.get(runId);
+    if (initialProgress) {
       this.progressCache.set(runId, {
-        ...progress,
-        status: 'running'
+        ...initialProgress,
+        status: 'running',
+        progressMessages: [...initialProgress.progressMessages, 'Starting scraper run...']
       });
     }
-    
+
     // Update scraper status to running
     await supabaseAdmin
       .from('scrapers')
@@ -704,7 +438,12 @@ export class ScraperExecutionService {
         last_run: new Date().toISOString(),
       })
       .eq('id', scraperId);
-    
+
+    let hasErrors = false;
+    let finalErrorMessage: string | null = null;
+    let totalProducts = 0;
+    const startTime = Date.now();
+
     try {
       // Get the scraper configuration using admin client to bypass RLS
       const { data: scraper } = await supabaseAdmin
@@ -712,443 +451,155 @@ export class ScraperExecutionService {
         .select('*')
         .eq('id', scraperId)
         .single();
-      
+
       if (!scraper) {
         throw new Error('Scraper not found');
       }
-      
+
       // Only support Python and AI scrapers
       if (scraper.scraper_type !== 'python' && scraper.scraper_type !== 'ai') {
         throw new Error(`Unsupported scraper type: ${scraper.scraper_type}`);
       }
-      
-      // Create a temporary directory for the script
-      const tempDir = path.join(os.tmpdir(), "pricetracker-" + randomUUID());
-      fs.mkdirSync(tempDir, { recursive: true });
-      
-      // Write the script to a temporary file
-      const scriptPath = path.join(tempDir, "script.py");
-      fs.writeFileSync(scriptPath, scraper.python_script || '');
-      
-      // Find a working Python command
-      const pythonCommands = ['python', 'python3', 'py'];
-      let pythonCommand = '';
-      
-      for (const cmd of pythonCommands) {
-        try {
-          await execPromise(`${cmd} -c "print('test')"`, { encoding: 'utf-8' });
-          pythonCommand = cmd;
-          break;
-        } catch (error) {
-          console.warn(`Python command ${cmd} not available:`, error);
-        }
-      }
-      
-      if (!pythonCommand) {
-        throw new Error('No Python interpreter found. Please ensure Python is installed and available in PATH.');
+
+      if (!scraper.python_script) {
+        throw new Error('Scraper script content is missing.');
       }
 
-      // ---> Install Dependencies before running scrape <---
-      const requiredLibraries = (scraper.script_metadata as ScraperMetadata | undefined)?.required_libraries; // Type assertion
-      if (requiredLibraries && requiredLibraries.length > 0) {
-        const installCommand = `${pythonCommand} -m pip install --disable-pip-version-check --no-cache-dir ${requiredLibraries.join(' ')}`;
-        console.log(`Run ${runId}: Installing dependencies: ${installCommand}`);
-        try {
-           // Update progress
-          const installProgress = this.progressCache.get(runId);
-          if (installProgress) {
-              this.progressCache.set(runId, { ...installProgress, progressMessages: [...installProgress.progressMessages, `Installing: ${requiredLibraries.join(', ')}...`] });
-          }
+      // Get required libraries from metadata
+      const requiredLibraries = (scraper.script_metadata as ScraperMetadata | undefined)?.required_libraries || [];
 
-          const { stdout: pipStdout, stderr: pipStderr } = await execPromise(installCommand, { timeout: 300000 }); // 5 min timeout
-          console.log(`Run ${runId}: Pip install stdout: ${pipStdout}`);
-           if (pipStderr) {
-            console.warn(`Run ${runId}: Pip install stderr: ${pipStderr}`); // Use warn for stderr as pip often outputs warnings here
-          }
-          console.log(`Run ${runId}: Dependencies installed successfully.`);
-           // Update progress
-          const finalInstallProgress = this.progressCache.get(runId);
-          if (finalInstallProgress) {
-              // Remove "Installing..." message and add "Installed."
-              const updatedMessages = finalInstallProgress.progressMessages.filter(msg => !msg.startsWith('Installing:'));
-              this.progressCache.set(runId, { ...finalInstallProgress, progressMessages: [...updatedMessages, `Installed dependencies: ${requiredLibraries.join(', ')}.`] });
-          }
+      // Determine the absolute URL for the Python execution endpoint
+      const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      const executionUrl = `${baseUrl}/api/execute_scraper`;
 
-        } catch (installError) {
-          console.error(`Run ${runId}: Failed to install Python dependencies:`, installError);
-          const errorMessage = `Failed to install libraries: ${requiredLibraries.join(', ')}. Error: ${installError instanceof Error ? installError.message : installError}`;
-           // Update progress cache with specific error
-          const errorProgress = this.progressCache.get(runId);
-           if (errorProgress) {
-               this.progressCache.set(runId, { ...errorProgress, status: 'failed', errorMessage: errorMessage, endTime: Date.now(), executionTime: Date.now() - errorProgress.startTime });
-           }
-          throw new Error(errorMessage); // Throw to be caught by the main try/catch
-        }
+      console.log(`Run ${runId}: Calling Python execution endpoint: ${executionUrl}`);
+
+      // Update progress
+      const progress = this.progressCache.get(runId);
+      if (progress) {
+        this.progressCache.set(runId, { ...progress, progressMessages: [...progress.progressMessages, `Calling Python execution endpoint...`] });
+      }
+
+      // Call the Python execution endpoint
+      const response = await fetch(executionUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          run_id: runId,
+          script_content: scraper.python_script,
+          requirements: requiredLibraries,
+        }),
+         // Set a reasonable timeout for the API call itself (e.g., 10 minutes)
+        // The Python function has its own internal timeout for the script execution
+        signal: AbortSignal.timeout(10 * 60 * 1000)
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        hasErrors = true;
+        finalErrorMessage = result.error || `Python execution endpoint failed with status ${response.status}`;
+        console.error(`Run ${runId}: Python execution failed: ${finalErrorMessage}`);
       } else {
-          console.log(`Run ${runId}: No specific dependencies listed in metadata.`);
-      }
-      // ---> End Install Dependencies <---
-
-      // Execute the scrape function with streaming output
-      console.log(`Run ${runId}: Spawning Python process to execute scrape...`);
-      const process = spawn(pythonCommand, [
-        '-c',
-        `import sys; sys.path.insert(0, '${tempDir.replace(/\\/g, '\\\\')}'); sys.stdout.reconfigure(encoding='utf-8'); sys.stderr.reconfigure(encoding='utf-8'); exec(open('${scriptPath.replace(/\\/g, '\\\\')}', encoding='utf-8').read())`, // Added sys.path modification
-        'scrape' // Assuming 'scrape' is the function to call
-      ]);
-      
-      let stdoutBuffer = '';
-      let stderrBuffer = '';
-      let totalProducts = 0;
-      let batchCount = 0;
-      let hasErrors = false;
-      
-      // Process stdout (JSON batches)
-      process.stdout.on('data', (data) => {
-        const chunk = data.toString();
-        stdoutBuffer += chunk;
-        
-        // Process complete lines
-        const lines = stdoutBuffer.split('\n');
-        // Keep the last line in the buffer if it's incomplete
-        stdoutBuffer = lines.pop() || '';
-        
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          
-          try {
-            const batch = JSON.parse(line);
-            if (Array.isArray(batch)) {
-              batchCount++;
-              
-              // Process the batch of products
-              this.processBatch(batch, scraper, scraperId, supabaseAdmin).then(insertedCount => {
-                totalProducts += insertedCount;
-                
-                // Update progress cache
-                const progress = this.progressCache.get(runId);
-                if (progress) {
-                  this.progressCache.set(runId, {
-                    ...progress,
-                    productCount: totalProducts,
-                    currentBatch: batchCount
-                  });
-
-                  // Also update the database record
-                  supabaseAdmin
-                    .from('scraper_runs')
-                    .update({
-                      product_count: totalProducts,
-                      current_batch: batchCount,
-                      status: 'running' // Ensure status stays running
-                    })
-                    .eq('id', runId)
-                    .then(({ error: dbUpdateError }) => {
-                      if (dbUpdateError) {
-                        console.error(`Error updating run record in DB after batch ${batchCount}: ${dbUpdateError.message}`);
-                      }
-                    });
-
-                }
-              }).catch(error => {
-                console.error(`Error processing batch ${batchCount}:`, error);
-                hasErrors = true;
-                
-                // Update progress cache with error
-                const progress = this.progressCache.get(runId);
-                if (progress) {
-                  this.progressCache.set(runId, {
-                    ...progress,
-                    errorMessage: `Error processing batch ${batchCount}: ${error instanceof Error ? error.message : String(error)}`
-                  });
-                  // Also update the database record with error info
-                  supabaseAdmin
-                    .from('scraper_runs')
-                    .update({
-                      error_message: `Error processing batch ${batchCount}: ${error instanceof Error ? error.message : String(error)}`
-                    })
-                    .eq('id', runId)
-                    .then(({ error: dbUpdateError }) => {
-                      if (dbUpdateError) {
-                        console.error(`Error updating run record in DB with batch error: ${dbUpdateError.message}`);
-                      }
-                    });
-                }
-              });
-            } else {
-              console.warn("Received non-array batch:", line);
-            }
-          } catch (error) {
-            console.error("Error parsing batch JSON:", error, "Line:", line);
-          }
+        console.log(`Run ${runId}: Python execution successful.`);
+        totalProducts = result.product_count || 0; // Get product count from response
+        // Process the products returned/counted by the Python function
+        // NOTE: The current Python script only *counts* products.
+        // If we need to process the actual product data here, the Python script
+        // would need to return the data, and this Node.js code would need
+        // to call `this.processBatch` with that data.
+        // For now, we just record the count reported by the Python function.
+        if (totalProducts > 0) {
+           const progress = this.progressCache.get(runId);
+           if (progress) {
+             this.progressCache.set(runId, {
+               ...progress,
+               productCount: totalProducts,
+               // Assuming Python script processes all in one go for now
+               currentBatch: 1,
+               totalBatches: 1,
+               progressMessages: [...progress.progressMessages, `Python function reported ${totalProducts} products.`]
+             });
+           }
+           // Update DB record for product count immediately
+           await supabaseAdmin
+             .from('scraper_runs')
+             .update({ product_count: totalProducts, current_batch: 1, total_batches: 1 })
+             .eq('id', runId);
         }
-      });
-      
-      // Process stderr (progress messages)
-      process.stderr.on('data', (data) => {
-        const chunk = data.toString();
-        stderrBuffer += chunk;
-        
-        // Process complete lines
-        const lines = stderrBuffer.split('\n');
-        // Keep the last line in the buffer if it's incomplete
-        stderrBuffer = lines.pop() || '';
-        
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          
-          // Check for progress messages
-          if (line.includes('PROGRESS:')) {
-            // Update progress cache with the message
-            const progress = this.progressCache.get(runId);
-            if (progress) {
-              const progressMessages = [...progress.progressMessages, line];
-              
-              // Try to extract total batches if available
-              let totalBatches = progress.totalBatches;
-              const batchMatch = line.match(/Batch (\d+)\/(\d+)/);
-              if (batchMatch && batchMatch[2]) {
-                totalBatches = parseInt(batchMatch[2], 10);
-              }
-              
-              this.progressCache.set(runId, {
-                ...progress,
-                progressMessages,
-                totalBatches
-              });
-
-              // Also update the database record with progress message info
-              supabaseAdmin
-                .from('scraper_runs')
-                .update({
-                  progress_messages: progressMessages.slice(-10), // Store last 10 messages
-                  total_batches: totalBatches // Update total batches if found
-                })
-                .eq('id', runId)
-                .then(({ error: dbUpdateError }) => {
-                  if (dbUpdateError) {
-                    console.error(`Error updating run record in DB with progress message: ${dbUpdateError.message}`);
-                  }
-                });
-            }
-          } else {
-            // Non-progress messages might indicate errors
-            console.warn("Non-progress stderr message:", line);
-          }
-        }
-      });
-      
-      // Handle process completion
-      await new Promise<void>((resolve, reject) => {
-        process.on('close', (_code) => {
-          // Process any remaining data in buffers
-          if (stdoutBuffer.trim()) {
-            try {
-              const batch = JSON.parse(stdoutBuffer.trim());
-              if (Array.isArray(batch)) {
-                batchCount++;
-                
-                // Process the final batch
-                this.processBatch(batch, scraper, scraperId, supabaseAdmin).then(insertedCount => {
-                  totalProducts += insertedCount;
-                  
-                  // Update progress cache
-                  const progress = this.progressCache.get(runId);
-                  if (progress) {
-                    this.progressCache.set(runId, {
-                      ...progress,
-                      productCount: totalProducts,
-                      currentBatch: batchCount
-                    });
-                  }
-                  
-                  // Update database record
-                  supabaseAdmin
-                    .from('scraper_runs')
-                    .update({
-                      product_count: totalProducts,
-                      current_batch: batchCount
-                    })
-                    .eq('id', runId)
-                    .then(() => resolve());
-                }).catch(error => {
-                  console.error(`Error processing final batch:`, error);
-                  hasErrors = true;
-                  // Update database record with error
-                  supabaseAdmin
-                    .from('scraper_runs')
-                    .update({
-                      error_message: `Final batch error: ${error instanceof Error ? error.message : String(error)}`
-                    })
-                    .eq('id', runId)
-                    .then((res) => {
-                      if (res.error) {
-                        console.error("Error updating run record:", res.error);
-                      }
-                      reject(error);
-                    });
-                });
-              } else {
-                resolve();
-              }
-            } catch (error) {
-              console.error("Error parsing final batch JSON:", error);
-              hasErrors = true;
-              reject(error);
-            }
-          } else {
-            // No data in buffer, just resolve
-            resolve();
-          }
-        });
-        
-        // Set a maximum execution time for the entire scraper (4 hours)
-        const maxExecutionTimeout = setTimeout(() => {
-          console.log(`Scraper ${scraperId} run ${runId} exceeded maximum execution time, terminating...`);
-          process.kill();
-          resolve(); // Resolve to allow completion handling
-        }, 4 * 60 * 60 * 1000); // 4 hours
-        
-        // Check if all batches are processed based on progress messages
-        const completionCheckInterval = setInterval(() => {
-          const currentProgress = this.progressCache.get(runId);
-          if (currentProgress && 
-              currentProgress.totalBatches !== null && 
-              currentProgress.currentBatch >= currentProgress.totalBatches) {
-            
-            // All batches processed according to progress messages
-            console.log(`All ${currentProgress.totalBatches} batches processed for run ${runId}, completing...`);
-            clearInterval(completionCheckInterval);
-            clearTimeout(maxExecutionTimeout);
-            
-            // Give it a moment to finish any pending processing
-            setTimeout(() => {
-              process.kill();
-              resolve();
-            }, 10000); // 10 seconds grace period
-          }
-        }, 30000); // Check every 30 seconds
-        
-        process.on('error', (error) => {
-          console.error("Process error:", error);
-          hasErrors = true;
-          clearTimeout(maxExecutionTimeout);
-          clearInterval(completionCheckInterval);
-          reject(error);
-        });
-      });
-      
-      // Clean up the temporary files
-      try {
-        fs.unlinkSync(scriptPath);
-        fs.rmdirSync(tempDir, { recursive: true });
-      } catch (cleanupError) {
-        console.error("Error cleaning up temporary files:", cleanupError);
       }
-      
+
+    } catch (error) {
+      console.error(`Error in runScraperInternal calling Python endpoint for ${scraperId}:`, error);
+      hasErrors = true;
+      finalErrorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
       // Calculate execution time
       const endTime = Date.now();
-      const executionTime = endTime - (progress?.startTime || endTime); // Use endTime if startTime is missing
-      const finalProgress = this.progressCache.get(runId);
+      const executionTime = endTime - startTime;
+      const finalProgress = this.progressCache.get(runId); // Get latest cache state
 
       // Calculate products per second
       let products_per_second: number | null = null;
       const executionTimeSeconds = executionTime / 1000.0;
       if (executionTimeSeconds > 0 && totalProducts > 0) {
-        // Calculate and round to 2 decimal places
         products_per_second = parseFloat((totalProducts / executionTimeSeconds).toFixed(2));
       }
 
       // Prepare scraper update data
+      const scraperStatus = hasErrors ? 'failed' : 'success';
+      const scraperErrorMessage = hasErrors ? finalErrorMessage : null;
       const scraperUpdateData: {
         status: string;
         error_message: string | null;
         execution_time: number;
-        last_products_per_second?: number | null; // Optional field
+        last_products_per_second?: number | null;
       } = {
-        status: hasErrors ? 'failed' : 'success',
-        error_message: hasErrors ? 'Errors occurred during batch processing. Check logs for details.' : null,
+        status: scraperStatus,
+        error_message: scraperErrorMessage,
         execution_time: executionTime,
       };
-
-      // Only update last_products_per_second on success
       if (!hasErrors) {
         scraperUpdateData.last_products_per_second = products_per_second;
       }
-      
+
       // Update scraper status based on results
       await supabaseAdmin
         .from('scrapers')
         .update(scraperUpdateData)
         .eq('id', scraperId);
-      
+
       // Update run record in the database
       await supabaseAdmin
         .from('scraper_runs')
         .update({
-          status: hasErrors ? 'failed' : 'success',
-          completed_at: new Date(endTime).toISOString(), // Use calculated endTime
+          status: scraperStatus,
+          completed_at: new Date(endTime).toISOString(),
           product_count: totalProducts,
-          current_batch: batchCount,
-          total_batches: finalProgress?.totalBatches || null,
-          error_message: hasErrors ? 'Errors occurred during batch processing. Check logs for details.' : null,
-          // execution_time: executionTime, // This column might not exist, using execution_time_ms instead
-          execution_time_ms: executionTime, // Add execution time in ms
-          products_per_second: products_per_second // Add calculated products/sec
+          current_batch: finalProgress?.currentBatch || 1, // Use cache value or assume 1
+          total_batches: finalProgress?.totalBatches || 1, // Use cache value or assume 1
+          error_message: scraperErrorMessage,
+          execution_time_ms: executionTime,
+          products_per_second: products_per_second
         })
         .eq('id', runId);
-      
-      // Update progress cache with final status (unconditionally)
-      // Get the latest known progress messages, even if the cache entry expired mid-run
-      const latestProgressMessages = finalProgress?.progressMessages || [];
-      const finalErrorMessage = hasErrors ? (finalProgress?.errorMessage || 'Errors occurred during batch processing. Check logs for details.') : null;
 
-      this.progressCache.set(runId, {
-        // Use data primarily from calculated values, fallback to finalProgress if needed for start time
-        status: hasErrors ? 'failed' : 'success',
-        productCount: totalProducts,
-        currentBatch: batchCount,
-        totalBatches: finalProgress?.totalBatches || null, // Keep total batches if known
-        startTime: finalProgress?.startTime || (endTime - executionTime), // Recalculate startTime if cache expired
-        endTime: endTime, // Use calculated endTime
-        executionTime: executionTime, // Use calculated executionTime
-        errorMessage: finalErrorMessage,
-        progressMessages: latestProgressMessages // Keep messages
-      });
-      console.log(`Run ${runId}: Final status set to '${hasErrors ? 'failed' : 'success'}' in cache.`);
-    } catch (error) {
-      // Update scraper status to failed
-      await supabaseAdmin
-        .from('scrapers')
-        .update({
-          status: 'failed',
-          error_message: error instanceof Error ? error.message : 'Unknown error',
-        })
-        .eq('id', scraperId);
-      
-      // Update run record in the database with error
-      await supabaseAdmin
-        .from('scraper_runs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: error instanceof Error ? error.message : String(error)
-        })
-        .eq('id', runId);
-      
-      // Update progress cache with error
-      const progress = this.progressCache.get(runId);
-      if (progress) {
+      // Update progress cache with final status
+      if (finalProgress) {
         this.progressCache.set(runId, {
-          ...progress,
-          status: 'failed',
-          endTime: Date.now(),
-          executionTime: Date.now() - progress.startTime,
-          errorMessage: error instanceof Error ? error.message : String(error)
+          ...finalProgress,
+          status: scraperStatus,
+          endTime: endTime,
+          executionTime: executionTime,
+          productCount: totalProducts, // Ensure final count is set
+          errorMessage: scraperErrorMessage,
+          progressMessages: [...(finalProgress.progressMessages || []), `Run finished with status: ${scraperStatus}`]
         });
+      } else {
+         console.warn(`Run ${runId}: Progress cache entry expired before final update. Final status: ${scraperStatus}`);
       }
-      
-      throw error;
     }
   }
   

@@ -3,11 +3,5 @@
   "buildCommand": "npm run build",
   "installCommand": "npm install",
   "framework": "nextjs",
-  "outputDirectory": ".next",
-  "functions": {
-    "api/scrapers/*/run": {
-      "runtime": "@vercel/python",
-      "memory": 1024
-    }
-  }
+  "outputDirectory": ".next"
 }
