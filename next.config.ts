@@ -47,19 +47,6 @@ const nextConfig: NextConfig = {
     // Reinstated temporarily due to persistent API route type error in build (Next.js 15.2.4).
     ignoreBuildErrors: true,
   },
-
-  // Add rewrites configuration
-  async rewrites() {
-    return [
-      {
-        // Map requests for the folder path...
-        source: '/marketing-routes',
-        // ...to be served as the root path.
-        destination: '/',
-      },
-      // Add other rewrites if needed
-    ];
-  },
 };
 
 export default nextConfig;
