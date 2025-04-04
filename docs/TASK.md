@@ -53,7 +53,7 @@
 
 *This section documents past challenges and their solutions for reference.*
 
--   **Vercel Deployment:** Addressed TypeScript compatibility issues (`ignoreBuildErrors`) and potential issues with parenthesis in folder names (see `docs/vercel-deployment-fixes.md`).
+-   **Vercel Deployment:** Addressed TypeScript compatibility issues (`ignoreBuildErrors`) and issues with parenthesis in folder names (renamed `(auth)` to `auth-routes` and updated `/login` paths accordingly, see `docs/vercel-deployment-fixes.md`).
 -   **Row Level Security (RLS):** Resolved issues by using service role key in specific API routes.
 -   **Client vs. Server Components:** Refactored to properly separate concerns, often using API routes.
 -   **NextAuth.js & Supabase Auth Integration:** Implemented SQL function (`create_user_for_nextauth`) to bridge user tables.

@@ -27,7 +27,7 @@ export default async function CompetitorScrapersPage({
 
   if (error || !competitor) {
     // Redirect to competitors list if competitor not found
-    redirect("/competitors");
+    redirect("/app-routes/competitors");
   }
 
   // Get the scrapers for this competitor

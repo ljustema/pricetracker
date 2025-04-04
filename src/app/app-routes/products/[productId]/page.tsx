@@ -66,7 +66,7 @@ export default async function ProductPage({ params }: ProductPageProps) {
   
   // Redirect to login if not authenticated
   if (!session?.user) {
-    redirect("/login");
+    redirect("/auth-routes/login");
   }
   
   // Get the product details from Supabase using the admin client to bypass RLS

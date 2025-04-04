@@ -63,16 +63,16 @@ export default function RegisterPage() {
 
         if (result?.error) {
           // If sign-in fails, redirect to login page
-          router.push("/login");
+          router.push("/auth-routes/login");
           return;
         }
 
         // Redirect to dashboard on successful login
-        router.push("/dashboard");
+        router.push("/app-routes/dashboard");
         router.refresh();
       } else {
         // Email confirmation might be required
-        router.push("/register/confirmation");
+        router.push("/auth-routes/register/confirmation");
       }
     } catch (error) {
       console.error("Registration error:", error);
@@ -90,7 +90,7 @@ export default function RegisterPage() {
     setError("");
 
     try {
-      await signIn("google", { callbackUrl: "/dashboard" });
+      await signIn("google", { callbackUrl: "/app-routes/dashboard" });
     } catch (error) {
       console.error("Google sign-in error:", error);
       setError("An error occurred during Google sign-in. Please try again.");
@@ -283,7 +283,7 @@ export default function RegisterPage() {
               <p className="text-gray-600">
                 Already have an account?{" "}
                 <Link
-                  href="/login"
+                  href="/auth-routes/login"
                   className="font-medium text-indigo-600 hover:text-indigo-500"
                 >
                   Sign in

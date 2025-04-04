@@ -32,7 +32,7 @@ export default async function DashboardPage() {
   
   // Redirect to login if not authenticated
   if (!session?.user) {
-    redirect("/login");
+    redirect("/auth-routes/login");
   }
   
   // Get data from Supabase for the dashboard

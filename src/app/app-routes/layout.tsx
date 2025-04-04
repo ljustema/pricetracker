@@ -14,7 +14,7 @@ export default async function AppLayout({
   
   // Redirect to login if not authenticated
   if (!session?.user) {
-    redirect("/login");
+    redirect("/auth-routes/login");
   }
   
   return (

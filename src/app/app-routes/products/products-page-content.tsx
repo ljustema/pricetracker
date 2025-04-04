@@ -50,7 +50,7 @@ export default function ProductsPageContent({
 
   // Remove server-side logic:
   // const session = await getServerSession(authOptions);
-  // if (!session?.user) { redirect("/login"); }
+  // if (!session?.user) { redirect("/auth-routes/login"); }
   // const supabase = createSupabaseAdminClient();
   // Fetch Competitors logic...
   // Fetch Brands logic...
