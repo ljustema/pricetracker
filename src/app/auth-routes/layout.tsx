@@ -22,13 +22,13 @@ export default async function AuthLayout({
       <header className="bg-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between p-6 lg:px-8">
           <div className="flex">
-            <Link href="/marketing-routes" className="-m-1.5 p-1.5">
+            <Link href="/" className="-m-1.5 p-1.5">
               <span className="sr-only">PriceTracker</span>
               <span className="text-xl font-bold text-indigo-600">PriceTracker</span>
             </Link>
           </div>
           <div className="flex items-center gap-x-4">
-            <Link href="/marketing-routes" className="text-sm font-semibold leading-6 text-gray-900">
+            <Link href="/" className="text-sm font-semibold leading-6 text-gray-900">
               Back to home
             </Link>
           </div>
