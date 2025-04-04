@@ -2,12 +2,11 @@
   "version": 2,
   "framework": "nextjs",
   "buildCommand": "npm run build",
-  "installCommand": "npm install",
+  "installCommand": "npm install && python3 -m pip install -r requirements.txt || npm install",
   "outputDirectory": ".next",
   "functions": {
     "api/execute_scraper.py": {
-      "runtime": "@vercel/python@3.1.0",
-      "installCommand": "pip3 install -r requirements.txt"
+      "runtime": "@vercel/python@3.1.0"
     }
   }
 }
