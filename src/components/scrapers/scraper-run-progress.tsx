@@ -7,7 +7,7 @@ import { CheckIcon, XIcon, LoaderIcon, ClockIcon } from "lucide-react";
 interface ScraperRunProgressProps {
   scraperId: string;
   runId: string;
-  onComplete?: (success: boolean, productCount: number) => void;
+  onComplete?: (success: boolean, productCount: number, errorMessage: string | null) => void;
 }
 
 export default function ScraperRunProgress({
@@ -69,7 +69,7 @@ export default function ScraperRunProgress({
       // If the run is complete, call the onComplete callback
       if (status.isComplete) {
         if (onComplete) {
-          onComplete(status.status === 'success', status.productCount);
+          onComplete(status.status === 'success', status.productCount, status.errorMessage);
         }
       }
     } catch (err) {
@@ -88,7 +88,8 @@ export default function ScraperRunProgress({
         
         // If we have an onComplete callback, call it with failure
         if (onComplete) {
-          onComplete(false, 0);
+          // Pass the error message captured during polling, or a generic one if none exists
+          onComplete(false, 0, error || "Polling failed due to consecutive errors.");
         }
         return;
       }

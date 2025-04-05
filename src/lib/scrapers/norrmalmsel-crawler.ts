@@ -165,42 +165,55 @@ export async function runNorrmalmselScraper(options: NorrmalmselScraperOptions =
 
         // Define handlers directly in the constructor options
         async requestHandler(context: CheerioCrawlingContext) {
-            const { request, $, enqueueLinks, log } = context;
-            log.info(`Processing [${request.label || 'START'}]: ${request.url}`);
+            // Defensive check for log object
+            if (!context.log) {
+                console.error(`Run ${context.request?.id || 'unknown'}: Crawlee context.log is undefined! URL: ${context.request?.url}`);
+                // Attempt to continue without logging if possible, or throw if logging is critical
+                // For now, let's try to proceed cautiously.
+                // throw new Error("Crawlee context.log is undefined!");
+            }
+            const { request, $, enqueueLinks, log } = context; // log might be undefined here if check above fails
+            // Use log safely
+            if (log) log.info(`Processing [${request.label || 'START'}]: ${request.url}`); else console.log(`Processing [${request.label || 'START'}]: ${request.url}`);
 
             if (request.label === LABELS.BRAND_LIST) {
                 const brandLinks = $('li.s1e1rog7 a[href]')
                     .map((_, el) => { const href = $(el).attr('href'); return href ? new URL(href, BASE_URL).toString() : null; })
                     .get().filter((link): link is string => link !== null);
-                log.info(`Found ${brandLinks.length} brand links.`);
+                if (log) log.info(`Found ${brandLinks.length} brand links.`); else console.log(`Found ${brandLinks.length} brand links.`);
                 for (const link of brandLinks) { await requestQueue.addRequest({ url: link, label: LABELS.BRAND_PAGE }); }
             } else if (request.label === LABELS.BRAND_PAGE) {
-                log.debug(`Extracting product links from brand page: ${request.url}`);
+                if (log) log.debug(`Extracting product links from brand page: ${request.url}`); else console.log(`Extracting product links from brand page: ${request.url}`);
                 const productLinks = await enqueueLinks({ selector: 'div.product-card a', label: LABELS.PRODUCT_DETAIL, baseUrl: BASE_URL });
-                log.info(`Enqueued ${productLinks.processedRequests.length} product links from ${request.url}`);
+                if (log) log.info(`Enqueued ${productLinks.processedRequests.length} product links from ${request.url}`); else console.log(`Enqueued ${productLinks.processedRequests.length} product links from ${request.url}`);
                 const paginationLinks = await enqueueLinks({ selector: 'a.s17fl53a.s5htbx1', label: LABELS.BRAND_PAGE, baseUrl: BASE_URL });
-                if (paginationLinks.processedRequests.length > 0) { log.info(`Enqueued next page link: ${paginationLinks.processedRequests[0].uniqueKey}`); }
-                else { log.info(`No next page link found on ${request.url}`); }
+                if (paginationLinks.processedRequests.length > 0) { if (log) log.info(`Enqueued next page link: ${paginationLinks.processedRequests[0].uniqueKey}`); else console.log(`Enqueued next page link: ${paginationLinks.processedRequests[0].uniqueKey}`); }
+                else { if (log) log.info(`No next page link found on ${request.url}`); else console.log(`No next page link found on ${request.url}`); }
             } else if (request.label === LABELS.PRODUCT_DETAIL) {
-                log.debug(`Parsing product details: ${request.url}`);
+                if (log) log.debug(`Parsing product details: ${request.url}`); else console.log(`Parsing product details: ${request.url}`);
                 const productData = parseProductDetails($, request.url);
                 if (productData) {
-                    log.info(`Successfully parsed product: ${productData.name}`);
+                    if (log) log.info(`Successfully parsed product: ${productData.name}`); else console.log(`Successfully parsed product: ${productData.name}`);
                     processedProductCount++;
                     await dataset.pushData(productData); // Use the dataset INSTANCE
                     if (onProgress && processedProductCount % PROGRESS_BATCH_SIZE === 0) {
                         batchNumber++;
-                        log.debug(`Reporting progress: Batch ${batchNumber}, Products ${processedProductCount}`);
+                        if (log) log.debug(`Reporting progress: Batch ${batchNumber}, Products ${processedProductCount}`); else console.log(`Reporting progress: Batch ${batchNumber}, Products ${processedProductCount}`);
                         try { await onProgress({ processedProductCount, batchNumber }); }
-                        catch (progressError) { log.error(`Error in onProgress callback: ${progressError}`); }
+                        catch (progressError) { if (log) log.error(`Error in onProgress callback: ${progressError}`); else console.error(`Error in onProgress callback: ${progressError}`); }
                     }
-                } else { log.warning(`Failed to parse sufficient details for: ${request.url}`); }
+                } else { if (log) log.warning(`Failed to parse sufficient details for: ${request.url}`); else console.warn(`Failed to parse sufficient details for: ${request.url}`); }
             } else {
-                 log.warning(`Default handler processing unexpected URL/Label: [${request.label || 'NO_LABEL'}] ${request.url}`);
+                 if (log) log.warning(`Default handler processing unexpected URL/Label: [${request.label || 'NO_LABEL'}] ${request.url}`); else console.warn(`Default handler processing unexpected URL/Label: [${request.label || 'NO_LABEL'}] ${request.url}`);
             }
         },
 
         failedRequestHandler({ request, log }: { request: Request; log: Log }) {
+             // Defensive check for log object
+            if (!log) {
+                console.error(`Run ${request?.id || 'unknown'}: Crawlee failedRequestHandler log is undefined! URL: ${request?.url}`);
+                return; // Cannot log the error if log is undefined
+            }
             log.error(`Request failed: ${request.url} (Retries: ${request.retryCount})`);
         },
     });
