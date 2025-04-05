@@ -4,12 +4,13 @@ import {
     CheerioCrawler,
     RequestQueue,
     Dataset,
-    // Configuration, // Not needed for this approach
+    Configuration, // Import Configuration
     log,
     LogLevel,
     CheerioCrawlingContext, // Import context type
     Request, // Import Request type for failed handler
     Log, // Import Log type for failed handler
+    CheerioCrawlerOptions, // Correct options type
 } from 'crawlee';
 import { MemoryStorage } from '@crawlee/memory-storage'; // Import MemoryStorage
 import * as cheerio from 'cheerio'; // Import cheerio namespace
@@ -125,53 +126,61 @@ interface NorrmalmselScraperOptions {
 
 export async function runNorrmalmselScraper(options: NorrmalmselScraperOptions = {}): Promise<ScrapedProductData[]> {
     log.setLevel(LogLevel.DEBUG);
-    const start = Date.now();
+    const start = Date.now(); // Define start time
 
-    // --- Explicitly configure and use MemoryStorage with persistence disabled ---
-    const storageClient = new MemoryStorage({ persistStorage: false }); // Disable disk persistence
-    log.info(`Using MemoryStorage explicitly with persistStorage=false.`);
+    // --- Configure Crawlee to use MemoryStorage explicitly via Configuration ---
+    // This sets the default storage for subsequent operations
+    const storageClient = new MemoryStorage({ persistStorage: false });
+    const configuration = new Configuration({
+        storageClient: storageClient,
+        // Other config options if needed, e.g., defaultDatasetId: 'norrmalmsel-results'
+    });
+    log.info(`Using MemoryStorage explicitly via Configuration object.`);
     // ---
 
     // Progress tracking variables
     let processedProductCount = 0;
     let batchNumber = 0;
-    const onProgress = options.onProgress;
+    const onProgress = options.onProgress; // Get callback from options
 
-    // Initialize Crawlee components with explicit storage client
-    const requestQueue = await RequestQueue.open(undefined, { storageClient }); // Pass storageClient
-    const dataset = await Dataset.open(undefined, { storageClient }); // Pass storageClient
+    // Initialize RequestQueue and Dataset. They should use the storage from the Configuration instance.
+    const requestQueue = await RequestQueue.open(); // No options needed here
+    const dataset = await Dataset.open(); // No options needed here
     await requestQueue.addRequest({ url: BRAND_URL, label: LABELS.BRAND_LIST });
 
     // Define crawler options
-    const crawlerOptions: ConstructorParameters<typeof CheerioCrawler>[0] = {
-        requestQueue, // Uses the memory-backed queue instance
+    const crawlerOpts: CheerioCrawlerOptions = {
+        requestQueue, // Pass the opened queue instance
+        // dataset is NOT a direct crawler option, it's used within handlers
         maxConcurrency: 50,
         maxRequestRetries: options.isValidationRun ? 1 : 3,
         requestHandlerTimeoutSecs: 60,
-        useSessionPool: true, // Sessions should implicitly use memory storage now
+        useSessionPool: true,
+        // No need to pass configuration object itself here
     };
 
     // Apply maxRequestsPerCrawl conditionally
     if (options.maxRequests !== undefined && options.maxRequests !== null) {
-        crawlerOptions.maxRequestsPerCrawl = options.maxRequests;
-        log.info(`Limiting crawl to ${crawlerOptions.maxRequestsPerCrawl} requests.`);
+        crawlerOpts.maxRequestsPerCrawl = options.maxRequests;
+        log.info(`Limiting crawl to ${crawlerOpts.maxRequestsPerCrawl} requests.`);
     } else if (options.isValidationRun) {
-        crawlerOptions.maxRequestsPerCrawl = 15;
-        log.info(`Running in validation mode (default limit). Max requests: ${crawlerOptions.maxRequestsPerCrawl}`);
+        crawlerOpts.maxRequestsPerCrawl = 15;
+        log.info(`Running in validation mode (default limit). Max requests: ${crawlerOpts.maxRequestsPerCrawl}`);
     }
 
     const crawler = new CheerioCrawler({
-        ...crawlerOptions,
+        ...crawlerOpts, // Spread the options
 
         // Define handlers directly in the constructor options
         async requestHandler(context: CheerioCrawlingContext) {
             // Defensive check for log object
             if (!context.log) {
                 console.error(`Run ${context.request?.id || 'unknown'}: Crawlee context.log is undefined! URL: ${context.request?.url}`);
-                // Attempt to continue without logging if possible, or throw if logging is critical
-                // For now, let's try to proceed cautiously.
-                // throw new Error("Crawlee context.log is undefined!");
             }
+            // Use the dataset instance scoped outside the handler
+            const currentDataset = dataset;
+            const currentRequestQueue = requestQueue;
+
             const { request, $, enqueueLinks, log } = context; // log might be undefined here if check above fails
             // Use log safely
             if (log) log.info(`Processing [${request.label || 'START'}]: ${request.url}`); else console.log(`Processing [${request.label || 'START'}]: ${request.url}`);
@@ -181,7 +190,8 @@ export async function runNorrmalmselScraper(options: NorrmalmselScraperOptions =
                     .map((_, el) => { const href = $(el).attr('href'); return href ? new URL(href, BASE_URL).toString() : null; })
                     .get().filter((link): link is string => link !== null);
                 if (log) log.info(`Found ${brandLinks.length} brand links.`); else console.log(`Found ${brandLinks.length} brand links.`);
-                for (const link of brandLinks) { await requestQueue.addRequest({ url: link, label: LABELS.BRAND_PAGE }); }
+                // Use the requestQueue instance defined outside
+                for (const link of brandLinks) { await currentRequestQueue.addRequest({ url: link, label: LABELS.BRAND_PAGE }); }
             } else if (request.label === LABELS.BRAND_PAGE) {
                 if (log) log.debug(`Extracting product links from brand page: ${request.url}`); else console.log(`Extracting product links from brand page: ${request.url}`);
                 const productLinks = await enqueueLinks({ selector: 'div.product-card a', label: LABELS.PRODUCT_DETAIL, baseUrl: BASE_URL });
@@ -194,8 +204,10 @@ export async function runNorrmalmselScraper(options: NorrmalmselScraperOptions =
                 const productData = parseProductDetails($, request.url);
                 if (productData) {
                     if (log) log.info(`Successfully parsed product: ${productData.name}`); else console.log(`Successfully parsed product: ${productData.name}`);
-                    processedProductCount++;
-                    await dataset.pushData(productData); // Use the dataset INSTANCE
+                    processedProductCount++; // Increment count defined outside
+                    // Use the dataset instance defined outside
+                    await currentDataset.pushData(productData);
+                    // Use onProgress and batchNumber defined outside
                     if (onProgress && processedProductCount % PROGRESS_BATCH_SIZE === 0) {
                         batchNumber++;
                         if (log) log.debug(`Reporting progress: Batch ${batchNumber}, Products ${processedProductCount}`); else console.log(`Reporting progress: Batch ${batchNumber}, Products ${processedProductCount}`);
@@ -223,6 +235,7 @@ export async function runNorrmalmselScraper(options: NorrmalmselScraperOptions =
     log.info('NorrmalmsEl scraper finished.');
 
     // --- Final Progress Report (if needed) ---
+    // Use onProgress, processedProductCount, batchNumber defined outside
     if (onProgress && processedProductCount % PROGRESS_BATCH_SIZE !== 0 && processedProductCount > 0) {
         batchNumber++;
         log.debug(`Reporting final progress: Batch ${batchNumber}, Products ${processedProductCount}`);
@@ -232,16 +245,18 @@ export async function runNorrmalmselScraper(options: NorrmalmselScraperOptions =
 
     // --- Data Processing & Filtering (Post-Crawl) ---
     log.info('Fetching scraped data...');
-    // Use the dataset INSTANCE
+    // Use the dataset instance defined outside
     const results = await dataset.getData();
     const items = results.items as ScrapedProductData[];
 
     log.info(`Retrieved ${items.length} raw items from dataset.`);
     const filteredItems = items.filter(item => item !== null) as ScrapedProductData[];
 
+    // Use start time defined outside
     const duration = (Date.now() - start) / 1000;
     log.info(`Scraping took ${duration.toFixed(2)} seconds. Found ${filteredItems.length} valid products.`);
 
+    // Use processedProductCount defined outside
     if (filteredItems.length !== processedProductCount) {
          log.warning(`Mismatch between final filtered count (${filteredItems.length}) and incrementally counted products (${processedProductCount}). Using filtered count.`);
     }

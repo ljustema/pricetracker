@@ -26,7 +26,8 @@ export default function TestRunScraperPage() {
   const scraperId = params.scraperId as string;
   
   // Handle completion of the test run
-  const handleRunComplete = useCallback((success: boolean, productCount: number) => {
+  // Update callback to accept errorMessage
+  const handleRunComplete = useCallback((success: boolean, productCount: number, errorMessage: string | null) => {
     setIsRunning(false);
     
     if (success) {
@@ -36,7 +37,8 @@ export default function TestRunScraperPage() {
         products: [] // We'll fetch the products from the database if needed
       });
     } else {
-      setError("Test run failed. Check the logs for details.");
+      // Use the specific error message from the backend
+      setError(`Test run failed: ${errorMessage || 'Unknown error'}`);
     }
   }, []);
   
