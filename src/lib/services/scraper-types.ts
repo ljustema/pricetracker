@@ -15,7 +15,7 @@ export interface ScraperConfig {
   competitor_id: string;
   name: string;
   url: string;
-  scraper_type: 'ai' | 'python';
+  scraper_type: 'ai' | 'python' | 'crawlee'; // Added 'crawlee' type
   selectors?: {
     product: string;
     name: string;

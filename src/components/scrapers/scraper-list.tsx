@@ -165,8 +165,11 @@ export default function ScraperList({
         </div>
       ) : (
         <ul className="divide-y divide-gray-200">
-          {scrapers.map((scraper) => (
-            <li key={scraper.id} className="px-4 py-4 sm:px-6">
+          {scrapers.map((scraper) => { // Changed to curly braces for explicit return
+            // Debug: Log scraper data before rendering the list item
+            console.log(`Rendering item for ${scraper.name} (ID: ${scraper.id}): Type=${scraper.scraper_type}, Approved=${scraper.is_approved}`);
+            return ( // Added explicit return
+              <li key={scraper.id} className="px-4 py-4 sm:px-6">
               <div className="flex items-center justify-between">
                 <div className="flex items-center">
                   <div className="flex-shrink-0">
@@ -198,7 +201,7 @@ export default function ScraperList({
                 </div>
                 <div className="flex space-x-2">
                   {/* Show test run button for approved scrapers */}
-                  {scraper.is_approved && testingId !== scraper.id && (
+                  {(scraper.scraper_type === 'python' || scraper.scraper_type === 'crawlee') && scraper.is_approved && testingId !== scraper.id && (
                     <button
                       type="button"
                       onClick={() => handleTestRun(scraper.id!)}
@@ -291,7 +294,7 @@ export default function ScraperList({
                 </div>
               </div>
             </li>
-          ))}
+          );})}
         </ul>
       )}
     </div>

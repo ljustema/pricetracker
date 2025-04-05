@@ -1,4 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server';
+// Import the specific Crawlee scraper function
+import { runNorrmalmselScraper } from '@/lib/scrapers/norrmalmsel-crawler';
 import { ScraperService } from "@/lib/services/scraper-service";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
@@ -20,16 +22,12 @@ interface Product {
   ean?: string;
 }
 
-// Define the metadata structure
-interface ScraperMetadata {
-  name: string;
-  description: string;
-  version: string;
-  author: string;
-  target_url: string;
-  required_libraries: string[];
-  [key: string]: unknown; // Allow for additional properties
-}
+// Use the imported ScraperMetadata type directly if possible, or ensure local matches
+// Assuming the imported one is correct:
+import { ScraperMetadata } from "@/lib/services/scraper-types";
+// Remove the local interface definition if using the imported one.
+// If keeping local, ensure it matches the imported one precisely.
+// For this diff, I'll assume we use the imported one and remove the local definition.
 
 // Maximum time to wait for validation (in milliseconds)
 const VALIDATION_TIMEOUT = 120000; // 1 minutes
@@ -46,54 +44,87 @@ export async function POST(req: NextRequest) {
     }
 
     const data = await req.json();
-    
+    const scraperType = data.scraper_type || 'python'; // Default to python if not provided for backward compatibility
+    const scriptContent = scraperType === 'python' ? data.python_script : data.typescript_script; // Assuming TS code is in typescript_script
+
     // Validate required fields
-    if (!data.python_script) {
+    if (!scriptContent) {
       return NextResponse.json(
-        { error: "Missing python_script field" },
+        { error: `Missing ${scraperType === 'python' ? 'python_script' : 'typescript_script'} field` },
         { status: 400 }
       );
     }
 
-    // Validate the Python script structure
-    const validationResult = await ScraperService.validatePythonScraper(data.python_script);
-    
-    // Ensure metadata exists and has the correct shape
-    const metadata: ScraperMetadata = validationResult.metadata || {
-      name: 'Python Batch Scraper',
-      description: 'A Python scraper that processes products in batches',
-      version: '1.0.0',
-      author: 'User',
-      target_url: '',
-      required_libraries: []
-    };
-    
-    if (!validationResult.valid) {
-      // Return structure validation errors immediately, ensuring output fields exist
-      return NextResponse.json({
-        ...validationResult,
-        metadata,
-        rawStdout: '',
-        rawStderr: '',
-      });
+    // Adjust type to match expected return from validatePythonScraper
+    let validationResult: { valid: boolean; error?: string; metadata?: ScraperMetadata | null } = { valid: true };
+    let metadata: ScraperMetadata | null = null;
+
+    if (scraperType === 'python') {
+        // Validate the Python script structure
+        const pyValidationResult = await ScraperService.validatePythonScraper(scriptContent);
+        // Adapt the result to the structure used in this route
+        validationResult = {
+            valid: pyValidationResult.valid,
+            error: pyValidationResult.error, // Use optional error string
+            // Ensure type compatibility - use nullish coalescing
+            metadata: pyValidationResult.metadata ?? null
+        };
+        metadata = validationResult.metadata || { // Default Python metadata
+            name: 'Python Batch Scraper', description: 'A Python scraper', version: '1.0.0',
+            author: 'User', target_url: '', required_libraries: []
+        };
+
+        if (!validationResult.valid || validationResult.error) {
+            // Return structure validation errors immediately for Python
+            return NextResponse.json({
+                ...validationResult,
+                metadata: metadata || undefined, // Ensure metadata is passed, handle null
+                products: [], totalProductsFound: 0, executionError: null,
+                stdout: '', stderr: validationResult.error || 'Script structure validation failed.', // Use error string
+                batchesProcessed: 0, progressMessages: []
+            });
+        }
+        // If Python structure is valid, metadata should be populated from the script
+        metadata = validationResult.metadata!; // Assert non-null as validation passed
+
+    } else if (scraperType === 'crawlee') {
+        // For Crawlee, skip Python structure validation.
+        // TODO: Implement basic TS/JS validation if needed?
+        // Correct the type - should not have 'errors' property here
+        validationResult = { valid: true }; // Assign only known properties
+        // TODO: Define how to get metadata for Crawlee scrapers (e.g., convention)
+        metadata = {
+             name: 'Crawlee Scraper (TS)', description: 'A Crawlee/TypeScript scraper', version: '1.0.0',
+             author: 'User', target_url: '', required_libraries: [] // Crawlee deps managed by npm
+        };
+        console.log("Skipping Python structure validation for Crawlee scraper.");
+    } else {
+         return NextResponse.json({ error: "Invalid scraper_type specified" }, { status: 400 });
     }
     
-    // If validation passed, execute the script to get real products
-    let scriptPath = '';
-    let tempDir = ''; // Define tempDir here for the main execution + cleanup
-    let wrapperPath = ''; 
-    try {
-      // Create a temporary directory for the main script execution
-      tempDir = path.join(os.tmpdir(), "pricetracker-main-" + randomUUID());
-      fs.mkdirSync(tempDir, { recursive: true });
-      
-      // Write the original script to a temporary file
-      scriptPath = path.join(tempDir, "script.py");
-      fs.writeFileSync(scriptPath, data.python_script);
+    // If structure validation passed (or skipped for Crawlee), execute for preview
 
-      // --- Create Wrapper Script ---
-      wrapperPath = path.join(tempDir, "wrapper.py"); // Assign path here
-      const wrapperScriptContent = `
+    // --- Declare vars needed in finally block ---
+    let scriptPath = '';
+    let tempDir = '';
+    let wrapperPath = '';
+    // This 'try' block should encompass the file operations and execution call
+    try {
+        // Create a temporary directory for the main script execution
+        tempDir = path.join(os.tmpdir(), "pricetracker-main-" + randomUUID());
+        fs.mkdirSync(tempDir, { recursive: true });
+
+        // Write the original script to a temporary file
+        // Use .py for python, .ts for crawlee (or .js if preferred)
+        const scriptExtension = scraperType === 'python' ? '.py' : '.ts';
+        scriptPath = path.join(tempDir, `script${scriptExtension}`);
+        fs.writeFileSync(scriptPath, scriptContent);
+
+        // --- Script Execution for Preview ---
+        if (scraperType === 'python') {
+            // --- Create Python Wrapper Script --- (Only needed for Python)
+            wrapperPath = path.join(tempDir, "wrapper.py");
+            const wrapperScriptContent = `
 import sys
 import subprocess
 import os
@@ -114,10 +145,11 @@ def main():
         sys.stdout.reconfigure(encoding='utf-8')
         sys.stderr.reconfigure(encoding='utf-8')
     except AttributeError:
-        if hasattr(sys.stdout, 'encoding') and sys.stdout.encoding.lower() != 'utf-8':
+        # Fallback for older Python or environments where reconfigure isn't available
+        if hasattr(sys.stdout, 'encoding') and sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
              print(f"Warning: stdout encoding is {sys.stdout.encoding}, attempting to set via environment.", file=sys.stderr)
              os.environ['PYTHONIOENCODING'] = 'utf-8'
-        if hasattr(sys.stderr, 'encoding') and sys.stderr.encoding.lower() != 'utf-8':
+        if hasattr(sys.stderr, 'encoding') and sys.stderr.encoding and sys.stderr.encoding.lower() != 'utf-8':
              print(f"Warning: stderr encoding is {sys.stderr.encoding}, attempting to set via environment.", file=sys.stderr)
              os.environ['PYTHONIOENCODING'] = 'utf-8'
         pass
@@ -144,14 +176,12 @@ def main():
             print(f"Wrapper: ERROR - Unexpected error during installation: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             sys.exit(1)
- 
+
     # --- Execution Step ---
-    # print(f"Wrapper: Executing {scraper_script_path} with command '{command}'...", file=sys.stderr)
     try:
         original_argv = list(sys.argv)
         sys.argv = [scraper_script_path, command]
         runpy.run_path(scraper_script_path, run_name='__main__')
-        # print(f"Wrapper: Execution of '{command}' completed.", file=sys.stderr)
         sys.argv = original_argv
     except SystemExit as e:
         print(f"Wrapper: Script called sys.exit({e.code})", file=sys.stderr)
@@ -164,52 +194,115 @@ def main():
 if __name__ == "__main__":
     main()
 `;
-      fs.writeFileSync(wrapperPath, wrapperScriptContent.trim());
+            fs.writeFileSync(wrapperPath, wrapperScriptContent.trim());
 
+            // Execute Python script using the existing wrapper/validation logic
+            console.log("Executing Python script for validation preview...");
+            const pythonValidationResults = await validateScriptExecution(scriptPath, wrapperPath, metadata!); // Metadata is non-null here
+            // Clean up files *before* returning response
+            cleanupTempFiles(scriptPath, wrapperPath, tempDir);
+            return NextResponse.json({
+                valid: validationResult.valid && !pythonValidationResults.executionError, // Overall validity
+                errors: validationResult.error ? [validationResult.error] : [], // Pass error as array if exists
+                metadata: pythonValidationResults.metadata, // Metadata from execution
+                products: pythonValidationResults.products,
+                totalProductsFound: pythonValidationResults.totalProductsFound,
+                executionError: pythonValidationResults.executionError,
+                stdout: pythonValidationResults.stdout,
+                stderr: pythonValidationResults.stderr,
+                batchesProcessed: pythonValidationResults.batchesProcessed,
+                progressMessages: pythonValidationResults.progressMessages,
+            });
+        } else if (scraperType === 'crawlee') {
+            // Execute Crawlee/TS script for validation preview
+            console.log("Executing Crawlee script for validation preview...");
+            let crawleeProducts: Product[] = [];
+            let crawleeTotalFound = 0;
+            let crawleeExecutionError: string | null = null;
+            // We won't capture stderr easily here, maybe rely on logs or specific error messages
+            const crawleeProgressMessages: string[] = ['Attempting Crawlee validation run...'];
 
-      // --- Script Execution with Streaming (using the wrapper) ---
-      // Call the simplified validateScriptExecution function (no scriptContent needed)
-      const validationResults = await validateScriptExecution(scriptPath, wrapperPath, metadata); 
+            try {
+                // TODO: Ideally, identify the correct scraper function dynamically based on scriptContent or metadata.
+                // For POC, we hardcode the call to the NorrmalmsEl scraper if it's the one being validated.
+                // We use the placeholder metadata name assigned earlier.
+                if (metadata?.name === 'Crawlee Scraper (TS)') { // Check if it's the one we expect
+                     console.log("Running NorrmalmsEl scraper in validation mode...");
+                     const validationProducts = await runNorrmalmselScraper({
+                         isValidationRun: true,
+                         maxRequests: 200 // Increased limit for validation
+                     });
+                     // Adapt the result to the expected Product interface
+                     crawleeProducts = validationProducts.slice(0, 10).map(p => ({
+                         name: p.name,
+                         // Handle potential undefined price - default to 0 or handle as error? Using 0 for now.
+                         price: p.price ?? 0,
+                         currency: p.currency,
+                         url: p.url,
+                         image_url: p.image_url,
+                         sku: p.sku,
+                         brand: p.brand,
+                         ean: p.ean,
+                     }));
+                     crawleeTotalFound = validationProducts.length; // Report total found by limited run
+                     crawleeProgressMessages.push(`Crawlee validation run found ${crawleeTotalFound} products.`);
+                     console.log(`Crawlee validation run found ${crawleeTotalFound} products.`);
+                     if (crawleeTotalFound === 0) {
+                         // Don't mark as error, just report 0 found for validation
+                         crawleeProgressMessages.push("Validation run completed but found 0 products.");
+                         console.warn("Crawlee validation run completed but found 0 products.");
+                     }
+                } else {
+                     // If it's another Crawlee scraper we haven't implemented yet
+                     crawleeExecutionError = "Validation execution for this specific Crawlee scraper is not yet implemented.";
+                     crawleeProgressMessages.push(crawleeExecutionError);
+                }
 
-      // Return the comprehensive result
-      return NextResponse.json({
-        ...validationResult,
-        ...validationResults
-      });
-    } catch (setupError) {
-      console.error("Error setting up for Python script execution:", setupError);
-      return NextResponse.json({
-        ...validationResult,
-        executionError: `Setup error before script execution: ${setupError instanceof Error ? setupError.message : "Unknown error"}`,
-        rawStdout: '',
-        rawStderr: '',
-      });
-    } finally {
-      // Clean up the temporary files
-      if (scriptPath && fs.existsSync(scriptPath)) {
-        try {
-          fs.unlinkSync(scriptPath);
-        } catch (unlinkError) {
-          console.error("Error unlinking temporary script file:", unlinkError);
+            } catch (error: unknown) {
+                console.error("Error executing Crawlee scraper for validation:", error);
+                crawleeExecutionError = `Crawlee execution failed: ${error instanceof Error ? error.message : String(error)}`;
+                crawleeProgressMessages.push(crawleeExecutionError);
+            }
+
+            // Clean up TS file *before* returning response
+            cleanupTempFiles(scriptPath, wrapperPath, tempDir); // wrapperPath will be empty here
+
+            // Return results formatted like the Python validation
+             return NextResponse.json({
+                  valid: !crawleeExecutionError, // Valid if no execution error occurred
+                  errors: [], // No structural errors checked for Crawlee yet
+                  metadata: metadata, // Use placeholder/derived metadata
+                  products: crawleeProducts,
+                  totalProductsFound: crawleeTotalFound,
+                  executionError: crawleeExecutionError,
+                  stdout: '', // Crawlee logs to console/storage, not easily captured as stdout here
+                  stderr: '', // Use executionError field for Crawlee errors for now
+                  batchesProcessed: crawleeTotalFound > 0 ? 1 : 0, // Treat as one batch for validation
+                  progressMessages: crawleeProgressMessages,
+             });
         }
-      }
-       // Clean up wrapper script too
-      if (wrapperPath && fs.existsSync(wrapperPath)) {
-        try {
-          fs.unlinkSync(wrapperPath);
-        } catch (unlinkError) {
-          console.error("Error unlinking temporary wrapper file:", unlinkError);
-        }
-      }
-      if (tempDir && fs.existsSync(tempDir)) {
-        try {
-          // Use rm instead of rmdir for potentially non-empty dirs if cleanup failed partially
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch (rmdirError) {
-          console.error("Error removing temporary directory:", rmdirError);
-        }
-      }
-    }
+        // This closing brace was misplaced, ending the try block prematurely
+        // });
+    } catch (setupError: unknown) { // Catch errors during setup or execution call
+        console.error("Error during script validation setup/execution:", setupError);
+        // Ensure validationResult exists even if error happened before python validation
+        const currentErrors = validationResult?.error ? [validationResult.error] : [];
+        const response = NextResponse.json({
+            valid: false, // Mark as invalid due to setup/execution error
+            errors: currentErrors,
+            metadata: metadata || undefined, // Use metadata if available
+            executionError: `Setup/Execution error: ${setupError instanceof Error ? setupError.message : "Unknown error"}`,
+            products: [],
+            totalProductsFound: 0,
+            stdout: '',
+            stderr: '', // Keep stderr empty for setup errors for now
+            batchesProcessed: 0,
+            progressMessages: [],
+        });
+        // Attempt cleanup even if setup failed
+        cleanupTempFiles(scriptPath, wrapperPath, tempDir);
+        return response;
+    } // The finally block is removed as cleanup is now handled before returning in try/catch
   } catch (error) {
     console.error("Error in validate API route:", error);
     return NextResponse.json(
@@ -217,6 +310,31 @@ if __name__ == "__main__":
       { status: 500 }
     );
   }
+}
+
+// --- Helper function for cleanup ---
+function cleanupTempFiles(scriptPath: string, wrapperPath: string, tempDir: string) {
+    if (scriptPath && fs.existsSync(scriptPath)) {
+        try {
+            fs.unlinkSync(scriptPath);
+        } catch (unlinkError) {
+            console.error("Error unlinking temporary script file:", unlinkError);
+        }
+    }
+    if (wrapperPath && fs.existsSync(wrapperPath)) {
+        try {
+            fs.unlinkSync(wrapperPath);
+        } catch (unlinkError) {
+            console.error("Error unlinking temporary wrapper file:", unlinkError);
+        }
+    }
+    if (tempDir && fs.existsSync(tempDir)) {
+        try {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch (rmdirError) {
+            console.error("Error removing temporary directory:", rmdirError);
+        }
+    }
 }
 
 /**

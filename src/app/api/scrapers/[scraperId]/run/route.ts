@@ -4,13 +4,12 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import { randomUUID } from "crypto";
 
-interface Params {
-  params: {
-    scraperId: string;
-  };
-}
+// Remove the separate Params interface
 
-export async function POST(req: NextRequest, { params }: Params) {
+export async function POST(
+  req: NextRequest,
+  { params }: { params: { scraperId: string } } // Use standard inline type
+) {
   try {
     // Check authentication
     const session = await getServerSession(authOptions);
@@ -18,16 +17,19 @@ export async function POST(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { scraperId } = await params;
-    
+    const { scraperId } = params; // This access should now be correct
+    const body = await req.json().catch(() => ({})); // Allow empty body
+    const isTestRun = body?.isTestRun === true; // Default to false if not provided or not true
+
     // Generate a unique runId
     const runId = randomUUID();
-    
-    // Start the scraper asynchronously (non-blocking)
-    const result = await ScraperExecutionService.runScraper(scraperId, runId);
+
+    // Start the scraper asynchronously (non-blocking), passing the test run flag
+    // No need to await here as runScraper starts the process in the background
+    ScraperExecutionService.runScraper(scraperId, runId, isTestRun);
 
     // Return 202 Accepted with the runId
-    return NextResponse.json(result, { status: 202 });
+    return NextResponse.json({ runId: runId }, { status: 202 }); // Return the runId in the response body
   } catch (error) {
     console.error("Error starting scraper:", error);
     return NextResponse.json(

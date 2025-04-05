@@ -192,7 +192,7 @@ export default function ScrapersPage() {
                           rel="noopener noreferrer"
                           className="text-indigo-600 hover:underline"
                         >
-                          {new URL(scraper.url).hostname}
+                          {scraper.url ? new URL(scraper.url).hostname : 'N/A'}
                         </a>
                       </div>
                     </td>
@@ -251,7 +251,7 @@ export default function ScrapersPage() {
                             <Button variant="outline" className="text-green-700 border-green-200 hover:bg-green-50 px-1.5 py-0.5 text-xs h-auto" asChild>
                                <Link href={`/app-routes/scrapers/${scraper.id}/run`}>Run</Link>
                             </Button>
-                            {(scraper.scraper_type === 'python' || scraper.scraper_type === 'ai') && (
+                            {(scraper.scraper_type === 'python' || scraper.scraper_type === 'ai' || scraper.scraper_type === 'crawlee') && (
                                <Button variant="outline" className="text-blue-700 border-blue-200 hover:bg-blue-50 leading-tight text-center px-1.5 py-0.5 text-xs h-auto" asChild>
                                 <Link href={`/app-routes/scrapers/${scraper.id}/test-run`}><div>Run</div><div>Test</div></Link>
                                </Button>
@@ -268,7 +268,7 @@ export default function ScrapersPage() {
                       </div>
                     </td>
                   </tr>
-              ))} {/* Correct closing for map */}
+              ))}
             </tbody>
             </table>
           </div> {/* Close the scrolling wrapper div */}

@@ -275,6 +275,7 @@ CREATE TABLE IF NOT EXISTS scrapers (
   scraper_type TEXT DEFAULT 'ai', -- Type of scraper: 'ai', 'python', or 'csv'
   selectors JSONB, -- Made nullable since Python and CSV scrapers don't use selectors
   python_script TEXT, -- For storing Python code for Python scrapers
+  typescript_script TEXT, -- For storing TypeScript code for Crawlee scrapers
   script_metadata JSONB, -- For storing metadata about the script
   schedule JSONB NOT NULL,
   is_active BOOLEAN DEFAULT FALSE,

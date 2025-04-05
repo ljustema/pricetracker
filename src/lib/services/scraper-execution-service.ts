@@ -1,20 +1,21 @@
-import { ScrapedProductData, ScraperConfig, ScraperMetadata } from "@/lib/services/scraper-types"; // Added ScraperMetadata
+import { ScrapedProductData, ScraperConfig, ScraperMetadata } from "@/lib/services/scraper-types";
 import { SupabaseClient } from '@supabase/supabase-js';
-// Removed unused imports: fs, path, os
 import { randomUUID } from 'crypto';
-// Removed child_process imports as execution is delegated
+// Import the new Crawlee scraper function and the callback type
+import { runNorrmalmselScraper, ProgressCallback } from '@/lib/scrapers/norrmalmsel-crawler';
 
 // Progress cache to store run status information
 interface ProgressData {
   status: 'initializing' | 'running' | 'success' | 'failed';
   productCount: number;
   currentBatch: number;
-  totalBatches: number | null; // null if unknown
+  totalBatches: number | null; // null if unknown (Can be estimated during run)
   startTime: number;
   endTime: number | null;
   executionTime: number | null;
   errorMessage: string | null;
   progressMessages: string[];
+  productsPerSecond?: number | null; // Add for progress reporting
 }
 
 /**
@@ -62,270 +63,12 @@ export class ScraperExecutionService {
   }
   
   /**
-   * Start a test run for a scraper that will only process the first batch
-   * Returns a runId that can be used to track progress
-   * @param scraperId The ID of the scraper to test
-   * @returns { runId: string } The ID for tracking the test run progress
-   */
-  static async startScraperTestRun(scraperId: string): Promise<{ runId: string }> {
-    // Generate a run ID
-    const runId = randomUUID();
-    console.log(`Generated runId ${runId} for test run of scraper ${scraperId}`);
-    
-    // Initialize progress data in memory cache
-    this.progressCache.set(runId, {
-      status: 'initializing',
-      productCount: 0,
-      currentBatch: 0,
-      totalBatches: null,
-      startTime: Date.now(),
-      endTime: null,
-      executionTime: null,
-      errorMessage: null,
-      progressMessages: []
-    });
-    
-    // Import here to avoid circular dependencies
-    const { createSupabaseAdminClient } = await import('@/lib/supabase/server');
-    const supabaseAdmin = createSupabaseAdminClient();
-    
-    // Create a record in the database for this run
-    try {
-      // Get the scraper to get the user_id
-      const { data: scraper } = await supabaseAdmin
-        .from('scrapers')
-        .select('user_id')
-        .eq('id', scraperId)
-        .single();
-      
-      if (!scraper) {
-        throw new Error('Scraper not found');
-      }
-      
-      // Create a record in the scraper_runs table
-      const { error: insertError } = await supabaseAdmin
-        .from('scraper_runs')
-        .insert({
-          id: runId,
-          scraper_id: scraperId,
-          user_id: scraper.user_id,
-          status: 'initializing',
-          started_at: new Date().toISOString(),
-          is_test_run: true
-        });
-        
-      if (insertError) {
-        console.error(`Error inserting run record in database: ${insertError.message}`);
-        throw new Error(`Failed to create run record: ${insertError.message}`);
-      }
-      
-      console.log(`Created database record for test run ${runId}`);
-    } catch (error) {
-      console.error(`Error creating run record in database: ${error}`);
-      // We'll continue anyway since we have the in-memory cache
-    }
-    
-    // Run the test asynchronously
-    this.runScraperTestInternal(scraperId, runId).catch(async (error) => {
-      console.error(`Unhandled error in runScraperTestInternal for ${scraperId}:`, error);
-      // Update progress cache with error
-      const progress = this.progressCache.get(runId);
-      if (progress) {
-        this.progressCache.set(runId, {
-          ...progress,
-          status: 'failed',
-          endTime: Date.now(),
-          executionTime: Date.now() - progress.startTime,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
-      }
-      
-      // Update the database record
-      try {
-        const supabaseAdmin = createSupabaseAdminClient();
-        const { error: updateError } = await supabaseAdmin
-          .from('scraper_runs')
-          .update({
-            status: 'failed',
-            completed_at: new Date().toISOString(),
-            error_message: error instanceof Error ? error.message : String(error)
-          })
-          .eq('id', runId);
-          
-        if (updateError) {
-          console.error(`Error updating run record in database: ${updateError.message}`);
-        } else {
-          console.log(`Updated database record for failed test run ${runId}`);
-        }
-      } catch (dbError) {
-        console.error(`Error updating run record in database: ${dbError}`);
-      }
-    });
-    
-    // Return the run ID immediately
-    return { runId };
-  }
-  
-  /**
-   * Internal implementation of test run that handles the actual execution
-   * This runs asynchronously and updates the progress cache
-   * Only processes the first batch of products
-   */
-  private static async runScraperTestInternal(scraperId: string, runId: string): Promise<void> {
-    // Import here to avoid circular dependencies
-    const { createSupabaseAdminClient } = await import('@/lib/supabase/server');
-    const supabaseAdmin = createSupabaseAdminClient();
-
-    // Update progress status to running
-    const initialProgress = this.progressCache.get(runId);
-    if (initialProgress) {
-      this.progressCache.set(runId, {
-        ...initialProgress,
-        status: 'running',
-        progressMessages: [...initialProgress.progressMessages, 'Starting test run...']
-      });
-    }
-
-    // Update scraper status to running
-    await supabaseAdmin
-      .from('scrapers')
-      .update({
-        status: 'running',
-        last_run: new Date().toISOString(),
-      })
-      .eq('id', scraperId);
-
-    let hasErrors = false;
-    let finalErrorMessage: string | null = null;
-    let totalProducts = 0;
-    const startTime = Date.now();
-
-    try {
-      // Get the scraper configuration using admin client to bypass RLS
-      const { data: scraper } = await supabaseAdmin
-        .from('scrapers')
-        .select('*')
-        .eq('id', scraperId)
-        .single();
-
-      if (!scraper) {
-        throw new Error('Scraper not found');
-      }
-
-      // Only support Python and AI scrapers
-      if (scraper.scraper_type !== 'python' && scraper.scraper_type !== 'ai') {
-        throw new Error(`Unsupported scraper type: ${scraper.scraper_type}`);
-      }
-
-      if (!scraper.python_script) {
-        throw new Error('Scraper script content is missing.');
-      }
-
-      // Get required libraries from metadata
-      const requiredLibraries = (scraper.script_metadata as ScraperMetadata | undefined)?.required_libraries || [];
-
-      // Determine the absolute URL for the Python execution endpoint
-      // Use VERCEL_URL in production/preview, fallback to localhost for development
-      const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-      const executionUrl = `${baseUrl}/api/execute_scraper`;
-
-      console.log(`Run ${runId} (Test): Calling Python execution endpoint: ${executionUrl}`);
-
-      // Update progress
-      const progress = this.progressCache.get(runId);
-      if (progress) {
-        this.progressCache.set(runId, { ...progress, progressMessages: [...progress.progressMessages, `Calling Python execution endpoint...`] });
-      }
-
-      // Call the Python execution endpoint
-      const response = await fetch(executionUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          run_id: runId,
-          script_content: scraper.python_script,
-          requirements: requiredLibraries,
-          // Add is_test_run: true if the Python endpoint needs it
-        }),
-        // Set a reasonable timeout for the API call itself (e.g., 10 minutes)
-        // The Python function has its own internal timeout for the script execution
-        signal: AbortSignal.timeout(10 * 60 * 1000)
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        hasErrors = true;
-        finalErrorMessage = result.error || `Python execution endpoint failed with status ${response.status}`;
-        console.error(`Run ${runId} (Test): Python execution failed: ${finalErrorMessage}`);
-      } else {
-        console.log(`Run ${runId} (Test): Python execution successful.`);
-        totalProducts = result.product_count || 0; // Get product count from response
-        // Note: Test runs in the Python script might be designed to return 0 products
-        // We only care about successful execution here.
-      }
-
-    } catch (error) {
-      console.error(`Error in runScraperTestInternal calling Python endpoint for ${scraperId}:`, error);
-      hasErrors = true;
-      finalErrorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      // Calculate execution time
-      const endTime = Date.now();
-      const executionTime = endTime - startTime;
-
-      // Update scraper status based on results
-      const scraperStatus = hasErrors ? 'failed' : 'success'; // Test run succeeds if execution is ok
-      const scraperErrorMessage = hasErrors ? `Test run failed: ${finalErrorMessage}` : null;
-
-      await supabaseAdmin
-        .from('scrapers')
-        .update({
-          status: scraperStatus, // Update main scraper status based on test success/fail
-          error_message: scraperErrorMessage,
-          execution_time: executionTime // Store execution time for the test
-        })
-        .eq('id', scraperId);
-
-      // Update run record with final status
-      await supabaseAdmin
-        .from('scraper_runs')
-        .update({
-          status: scraperStatus,
-          completed_at: new Date(endTime).toISOString(),
-          product_count: totalProducts, // Store products found during test
-          error_message: scraperErrorMessage,
-          execution_time_ms: executionTime
-        })
-        .eq('id', runId);
-
-      // Update progress cache with final status
-      const finalProgress = this.progressCache.get(runId);
-      if (finalProgress) {
-        this.progressCache.set(runId, {
-          ...finalProgress,
-          status: scraperStatus,
-          endTime: endTime,
-          executionTime: executionTime,
-          productCount: totalProducts,
-          errorMessage: scraperErrorMessage,
-          progressMessages: [...(finalProgress.progressMessages || []), `Test run finished with status: ${scraperStatus}`]
-        });
-      } else {
-         // If cache expired, log final status
-         console.warn(`Run ${runId} (Test): Progress cache entry expired before final update. Final status: ${scraperStatus}`);
-      }
-    }
-  }
-
-  /**
    * Run a scraper and store the results in batches with real-time progress tracking
-   * @param scraperId The ID of the scraper to run
-   * @param runId Optional run ID for tracking progress (generated if not provided)
+   * @param scraperId The ID of the scraper to run.
+   * @param runId Optional run ID for tracking progress (generated if not provided).
+   * @param isTestRun Optional flag to indicate if this is a limited test run (default: false).
    */
-  static async runScraper(scraperId: string, runId?: string): Promise<{ runId: string }> {
+  static async runScraper(scraperId: string, runId?: string, isTestRun: boolean = false): Promise<{ runId: string }> {
     // Generate a run ID if not provided
     const actualRunId = runId || randomUUID();
     
@@ -339,7 +82,8 @@ export class ScraperExecutionService {
       endTime: null,
       executionTime: null,
       errorMessage: null,
-      progressMessages: []
+      progressMessages: [],
+      productsPerSecond: null, // Initialize
     });
     
     // Import here to avoid circular dependencies
@@ -351,7 +95,7 @@ export class ScraperExecutionService {
       // Get the scraper to get the user_id
       const { data: scraper } = await supabaseAdmin
         .from('scrapers')
-        .select('user_id')
+        .select('user_id') // Fetch user_id needed for run record
         .eq('id', scraperId)
         .single();
       
@@ -360,23 +104,57 @@ export class ScraperExecutionService {
       }
       
       // Create a record in the scraper_runs table
-      await supabaseAdmin
+      const { error: insertError } = await supabaseAdmin
         .from('scraper_runs')
         .insert({
           id: actualRunId,
           scraper_id: scraperId,
-          user_id: scraper.user_id,
+          user_id: scraper.user_id, // Use fetched user_id
           status: 'initializing',
           started_at: new Date().toISOString(),
-          is_test_run: false
+          is_test_run: isTestRun // Use the parameter here
         });
+
+      if (insertError) {
+          console.error(`Error inserting run record in database: ${insertError.message}`);
+          // Update cache to reflect failure before throwing
+          const progress = this.progressCache.get(actualRunId);
+          if (progress) {
+              this.progressCache.set(actualRunId, {
+                  ...progress,
+                  status: 'failed',
+                  endTime: Date.now(),
+                  executionTime: Date.now() - progress.startTime,
+                  errorMessage: `Failed to create initial run record in DB: ${insertError.message}`
+              });
+          }
+          // CRITICAL FIX: Throw error to stop execution if DB record fails
+          throw new Error(`Failed to create run record in database: ${insertError.message}`);
+      }
+      console.log(`Created database record for run ${actualRunId}`);
+
     } catch (error) {
       console.error(`Error creating run record in database: ${error}`);
-      // We'll continue anyway since we have the in-memory cache
+       // If the error wasn't the insertError handled above, update cache and re-throw
+       if (!(error instanceof Error && error.message.startsWith('Failed to create run record'))) {
+           const progress = this.progressCache.get(actualRunId);
+           if (progress) {
+               this.progressCache.set(actualRunId, {
+                   ...progress,
+                   status: 'failed',
+                   endTime: Date.now(),
+                   executionTime: Date.now() - progress.startTime,
+                   errorMessage: `Error during run initialization: ${error instanceof Error ? error.message : String(error)}`
+               });
+           }
+       }
+       // Re-throw the error to prevent execution
+       throw error;
     }
     
     // Run the scraper asynchronously - use Promise.resolve() to ensure a full Promise is returned
-    Promise.resolve().then(() => this.runScraperInternal(scraperId, actualRunId))
+    // Pass isTestRun to the internal method
+    Promise.resolve().then(() => this.runScraperInternal(scraperId, actualRunId, isTestRun))
       .catch(async error => {
         console.error(`Unhandled error in runScraperInternal for ${scraperId}:`, error);
         // Update progress cache with error
@@ -415,194 +193,360 @@ export class ScraperExecutionService {
    * Internal implementation of runScraper that handles the actual execution
    * This runs asynchronously and updates the progress cache
    */
-  private static async runScraperInternal(scraperId: string, runId: string): Promise<void> {
+  private static async runScraperInternal(scraperId: string, runId: string, isTestRun: boolean): Promise<void> {
     // Import here to avoid circular dependencies
     const { createSupabaseAdminClient } = await import('@/lib/supabase/server');
     const supabaseAdmin = createSupabaseAdminClient();
 
-    // Update progress status to running
-    const initialProgress = this.progressCache.get(runId);
-    if (initialProgress) {
-      this.progressCache.set(runId, {
-        ...initialProgress,
-        status: 'running',
-        progressMessages: [...initialProgress.progressMessages, 'Starting scraper run...']
-      });
-    }
-
-    // Update scraper status to running
-    await supabaseAdmin
-      .from('scrapers')
-      .update({
-        status: 'running',
-        last_run: new Date().toISOString(),
-      })
-      .eq('id', scraperId);
-
+    // --- Declare variables needed in try/catch/finally ---
     let hasErrors = false;
     let finalErrorMessage: string | null = null;
-    let totalProducts = 0;
+    let totalProductsFound = 0; // Renamed to reflect products found by scraper
+    let totalProductsInserted = 0; // Track products inserted by processBatch
+    let lastReportedBatchNumber = 0; // Track the last batch number reported by scraper
     const startTime = Date.now();
+    let scraper: ScraperConfig | null = null; // Fetch scraper config early
+
+    // --- Progress Update Callback ---
+    const handleProgressUpdate: ProgressCallback = async (progressData) => {
+        console.log(`Run ${runId}: Progress Update - Batch ${progressData.batchNumber}, Products Found: ${progressData.processedProductCount}`);
+        const currentProgress = ScraperExecutionService.progressCache.get(runId);
+        if (!currentProgress || currentProgress.status === 'failed') {
+            console.warn(`Run ${runId}: Skipping progress update as run is failed or cache missing.`);
+            return; // Don't update if already failed or cache gone
+        }
+
+        const now = Date.now();
+        const elapsedMs = now - currentProgress.startTime;
+        const elapsedSec = elapsedMs / 1000.0;
+        const productsPerSecond = elapsedSec > 0 ? parseFloat((progressData.processedProductCount / elapsedSec).toFixed(2)) : 0;
+
+        // Create summary message
+        const summary = `Batch ${progressData.batchNumber}: Found ${progressData.processedProductCount} products (${productsPerSecond.toFixed(1)}/sec)`;
+
+        // Update Cache
+        ScraperExecutionService.progressCache.set(runId, {
+            ...currentProgress,
+            productCount: progressData.processedProductCount, // Update with count from scraper
+            currentBatch: progressData.batchNumber,
+            totalBatches: null, // Keep totalBatches null during run for UI calculation
+            executionTime: elapsedMs,
+            productsPerSecond: productsPerSecond,
+            // Replace previous messages with the latest summary
+            progressMessages: [summary]
+        });
+        lastReportedBatchNumber = progressData.batchNumber; // Keep track of the latest batch number
+
+        // Update Database (async, don't wait for it to avoid blocking scraper)
+        supabaseAdmin
+            .from('scraper_runs')
+            .update({
+                product_count: progressData.processedProductCount,
+                current_batch: progressData.batchNumber,
+                total_batches: null, // Keep null in DB during run
+                execution_time_ms: elapsedMs,
+                products_per_second: productsPerSecond,
+                status: 'running' // Ensure status stays running
+            })
+            .eq('id', runId)
+            .then(({ error }) => {
+                if (error) {
+                    console.error(`Run ${runId}: Failed to update progress in DB:`, error);
+                } else {
+                     console.log(`Run ${runId}: DEBUG - Updated progress in DB (Batch ${progressData.batchNumber})`);
+                }
+            });
+    };
+
 
     try {
-      // Get the scraper configuration using admin client to bypass RLS
-      const { data: scraper } = await supabaseAdmin
-        .from('scrapers')
-        .select('*')
-        .eq('id', scraperId)
-        .single();
+        // --- Initial Setup ---
+        // Get the FULL scraper configuration including script content
+        const { data: fetchedScraper, error: fetchError } = await supabaseAdmin
+            .from('scrapers')
+            .select('*') // Select all fields to satisfy ScraperConfig
+            .eq('id', scraperId)
+            .single();
 
-      if (!scraper) {
-        throw new Error('Scraper not found');
-      }
-
-      // Only support Python and AI scrapers
-      if (scraper.scraper_type !== 'python' && scraper.scraper_type !== 'ai') {
-        throw new Error(`Unsupported scraper type: ${scraper.scraper_type}`);
-      }
-
-      if (!scraper.python_script) {
-        throw new Error('Scraper script content is missing.');
-      }
-
-      // Get required libraries from metadata
-      const requiredLibraries = (scraper.script_metadata as ScraperMetadata | undefined)?.required_libraries || [];
-
-      // Determine the absolute URL for the Python execution endpoint
-      const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-      const executionUrl = `${baseUrl}/api/execute_scraper`;
-
-      console.log(`Run ${runId}: Calling Python execution endpoint: ${executionUrl}`);
-
-      // Update progress
-      const progress = this.progressCache.get(runId);
-      if (progress) {
-        this.progressCache.set(runId, { ...progress, progressMessages: [...progress.progressMessages, `Calling Python execution endpoint...`] });
-      }
-
-      // Call the Python execution endpoint
-      const response = await fetch(executionUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          run_id: runId,
-          script_content: scraper.python_script,
-          requirements: requiredLibraries,
-        }),
-         // Set a reasonable timeout for the API call itself (e.g., 10 minutes)
-        // The Python function has its own internal timeout for the script execution
-        signal: AbortSignal.timeout(10 * 60 * 1000)
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        hasErrors = true;
-        finalErrorMessage = result.error || `Python execution endpoint failed with status ${response.status}`;
-        console.error(`Run ${runId}: Python execution failed: ${finalErrorMessage}`);
-      } else {
-        console.log(`Run ${runId}: Python execution successful.`);
-        totalProducts = result.product_count || 0; // Get product count from response
-        // Process the products returned/counted by the Python function
-        // NOTE: The current Python script only *counts* products.
-        // If we need to process the actual product data here, the Python script
-        // would need to return the data, and this Node.js code would need
-        // to call `this.processBatch` with that data.
-        // For now, we just record the count reported by the Python function.
-        if (totalProducts > 0) {
-           const progress = this.progressCache.get(runId);
-           if (progress) {
-             this.progressCache.set(runId, {
-               ...progress,
-               productCount: totalProducts,
-               // Assuming Python script processes all in one go for now
-               currentBatch: 1,
-               totalBatches: 1,
-               progressMessages: [...progress.progressMessages, `Python function reported ${totalProducts} products.`]
-             });
-           }
-           // Update DB record for product count immediately
-           await supabaseAdmin
-             .from('scraper_runs')
-             .update({ product_count: totalProducts, current_batch: 1, total_batches: 1 })
-             .eq('id', runId);
+        if (fetchError || !fetchedScraper) {
+            throw new Error(`Scraper not found or fetch error: ${fetchError?.message || 'Not found'}`);
         }
-      }
+        // Assign to the outer scope variable, ensuring type compatibility
+        scraper = fetchedScraper as ScraperConfig;
 
-    } catch (error) {
-      console.error(`Error in runScraperInternal calling Python endpoint for ${scraperId}:`, error);
-      hasErrors = true;
-      finalErrorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      // Calculate execution time
-      const endTime = Date.now();
-      const executionTime = endTime - startTime;
-      const finalProgress = this.progressCache.get(runId); // Get latest cache state
+        // Update progress status to running in cache (using static access)
+        const initialProgress = ScraperExecutionService.progressCache.get(runId);
+        if (initialProgress) {
+            ScraperExecutionService.progressCache.set(runId, {
+                ...initialProgress,
+                status: 'running',
+                progressMessages: [...initialProgress.progressMessages, 'Starting scraper run...']
+            });
+        } else {
+             // Initialize if somehow missing
+             ScraperExecutionService.progressCache.set(runId, {
+                status: 'running', productCount: 0, currentBatch: 0, totalBatches: null,
+                startTime: startTime, endTime: null, executionTime: null, errorMessage: null, progressMessages: ['Starting scraper run...'], productsPerSecond: null
+             });
+        }
 
-      // Calculate products per second
-      let products_per_second: number | null = null;
-      const executionTimeSeconds = executionTime / 1000.0;
-      if (executionTimeSeconds > 0 && totalProducts > 0) {
-        products_per_second = parseFloat((totalProducts / executionTimeSeconds).toFixed(2));
-      }
+        // Update scraper status to running in DB
+        await supabaseAdmin
+            .from('scrapers')
+            .update({
+                status: 'running',
+                last_run: new Date().toISOString(),
+            })
+            .eq('id', scraperId);
 
-      // Prepare scraper update data
-      const scraperStatus = hasErrors ? 'failed' : 'success';
-      const scraperErrorMessage = hasErrors ? finalErrorMessage : null;
-      const scraperUpdateData: {
-        status: string;
-        error_message: string | null;
-        execution_time: number;
-        last_products_per_second?: number | null;
-      } = {
-        status: scraperStatus,
-        error_message: scraperErrorMessage,
-        execution_time: executionTime,
-      };
-      if (!hasErrors) {
-        scraperUpdateData.last_products_per_second = products_per_second;
-      }
+        // --- Scraper Execution Logic ---
+        // Scraper object is guaranteed to be non-null here due to check above
 
-      // Update scraper status based on results
-      await supabaseAdmin
-        .from('scrapers')
-        .update(scraperUpdateData)
-        .eq('id', scraperId);
+        // Check scraper type to determine execution path
 
-      // Update run record in the database
-      await supabaseAdmin
-        .from('scraper_runs')
-        .update({
-          status: scraperStatus,
-          completed_at: new Date(endTime).toISOString(),
-          product_count: totalProducts,
-          current_batch: finalProgress?.currentBatch || 1, // Use cache value or assume 1
-          total_batches: finalProgress?.totalBatches || 1, // Use cache value or assume 1
-          error_message: scraperErrorMessage,
-          execution_time_ms: executionTime,
-          products_per_second: products_per_second
-        })
-        .eq('id', runId);
+        // --- Determine Execution Path ---
+        if (scraper.scraper_type === 'crawlee') {
+            // --- Execute Crawlee Scraper ---
+            const runType = isTestRun ? 'Test Run' : 'Full Run';
+            console.log(`Run ${runId} (${runType}): Starting Crawlee scraper: ${scraper.name}`);
+            const progress = ScraperExecutionService.progressCache.get(runId); // Use static access
+            if (progress) {
+                // Add a message indicating Crawlee start
+                ScraperExecutionService.progressCache.set(runId, { ...progress, progressMessages: [...progress.progressMessages, `Starting Crawlee execution (${runType})...`] }); // Use static access
+            }
 
-      // Update progress cache with final status
-      if (finalProgress) {
-        this.progressCache.set(runId, {
-          ...finalProgress,
-          status: scraperStatus,
-          endTime: endTime,
-          executionTime: executionTime,
-          productCount: totalProducts, // Ensure final count is set
-          errorMessage: scraperErrorMessage,
-          progressMessages: [...(finalProgress.progressMessages || []), `Run finished with status: ${scraperStatus}`]
-        });
-      } else {
-         console.warn(`Run ${runId}: Progress cache entry expired before final update. Final status: ${scraperStatus}`);
-      }
-    }
-  }
+            // Prepare options, including the progress callback
+            const crawleeOptions: Parameters<typeof runNorrmalmselScraper>[0] = {
+                 isValidationRun: isTestRun,
+                 maxRequests: isTestRun ? 200 : undefined, // Limit requests for test runs
+                 onProgress: handleProgressUpdate // Pass the callback
+            };
+
+            // --- CURRENT POC IMPLEMENTATION (Runs from imported file) ---
+            // TODO: Refactor this section to dynamically execute scraper.typescript_script
+            //       This will likely involve:
+            //       1. Fetching scraper.typescript_script (already available in `scraper` variable).
+            //       2. Defining a structure for the script content (e.g., exporting specific functions).
+            //       3. Using `vm` module or similar to safely execute the script string from the DB,
+            //          injecting necessary modules (`crawlee`, `MemoryStorage`, helpers) and the `crawleeOptions`.
+            //       4. The executed script should return the scraped products array.
+            console.warn(`Run ${runId}: WARNING - Currently executing Crawlee scraper from imported file, NOT from database script.`);
+            const scrapedProducts = await runNorrmalmselScraper(crawleeOptions);
+            // --- END OF CURRENT POC IMPLEMENTATION ---
+
+            totalProductsFound = scrapedProducts.length; // Store the count found by scraper
+            console.log(`Run ${runId} (${runType}): Crawlee scraper finished. Found ${totalProductsFound} raw products.`);
   
+             // Process the results using processBatch
+             if (scrapedProducts.length > 0) {
+                 console.log(`Run ${runId}: Processing ${scrapedProducts.length} products with processBatch...`);
+                 // Ensure the scraper object passed to processBatch matches ScraperConfig type
+                 const fullScraperConfig: ScraperConfig = scraper; // Already fetched with '*'
+  
+                 // Use static access for processBatch
+                 console.log(`Run ${runId}: DEBUG - Calling processBatch...`); // <<< ADDED LOG
+                 const insertedCount = await ScraperExecutionService.processBatch(scrapedProducts, fullScraperConfig, scraperId, supabaseAdmin);
+                 totalProductsInserted = insertedCount; // Update totalProductsInserted with the count from processBatch
+                 console.log(`Run ${runId}: processBatch finished. Inserted ${insertedCount} products.`);
+                 console.log(`Run ${runId}: DEBUG - processBatch returned ${insertedCount}`); // <<< ADDED LOG
+  
+                 // Update progress cache with FINAL product count (inserted) and batch info - use static access
+                 // This might overwrite the last incremental update, which is fine
+                 const finalScrapeProgress = ScraperExecutionService.progressCache.get(runId);
+                 if (finalScrapeProgress) {
+                     ScraperExecutionService.progressCache.set(runId, {
+                         ...finalScrapeProgress,
+                         productCount: totalProductsInserted, // Reflect inserted count
+                         currentBatch: lastReportedBatchNumber, // Use last reported batch
+                         totalBatches: lastReportedBatchNumber, // Assume last reported is total for now
+                         progressMessages: [...finalScrapeProgress.progressMessages, `Crawlee run complete. Processed & Inserted ${totalProductsInserted} products.`]
+                     });
+                 }
+                  // Update DB record for product count immediately (use inserted count)
+                  await supabaseAdmin
+                    .from('scraper_runs')
+                    .update({ product_count: totalProductsInserted, current_batch: lastReportedBatchNumber, total_batches: lastReportedBatchNumber })
+                    .eq('id', runId);
+  
+             } else {
+                  totalProductsInserted = 0; // Ensure this is 0 if no products were scraped
+                  console.log(`Run ${runId}: Crawlee scraper returned 0 products. Nothing to process.`);
+             }
+  
+         } else if (scraper.scraper_type === 'python' || scraper.scraper_type === 'ai') {
+             // --- Existing Python/AI Execution Logic ---
+             // NOTE: This path does not currently support incremental progress reporting
+             if (!scraper.python_script) {
+                 throw new Error('Scraper script content is missing.');
+             }
+             const requiredLibraries = (scraper.script_metadata as ScraperMetadata | undefined)?.required_libraries || [];
+             const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+             const executionUrl = `${baseUrl}/api/execute_scraper`;
+             console.log(`Run ${runId}: Calling Python execution endpoint: ${executionUrl}`);
+             // Update progress (using static access)
+             const progressPy = ScraperExecutionService.progressCache.get(runId);
+             if (progressPy) {
+                 ScraperExecutionService.progressCache.set(runId, { ...progressPy, progressMessages: [...progressPy.progressMessages, `Calling Python execution endpoint...`] });
+             }
+             const response = await fetch(executionUrl, {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify({
+                     run_id: runId,
+                     script_content: scraper.python_script,
+                     requirements: requiredLibraries,
+                 }),
+                 signal: AbortSignal.timeout(10 * 60 * 1000)
+             });
+             const result = await response.json();
+             if (!response.ok) {
+                 hasErrors = true;
+                 finalErrorMessage = result.error || `Python execution endpoint failed with status ${response.status}`;
+                 console.error(`Run ${runId}: Python execution failed: ${finalErrorMessage}`);
+             } else {
+                 console.log(`Run ${runId}: Python execution successful.`);
+                 totalProductsInserted = result.product_count || 0; // Assume Python response count is inserted count
+                 // Update progress cache and DB based on Python result
+                 if (totalProductsInserted > 0) {
+                     // Use static access
+                     const progressPyUpdate = ScraperExecutionService.progressCache.get(runId);
+                     if (progressPyUpdate) {
+                         ScraperExecutionService.progressCache.set(runId, {
+                             ...progressPyUpdate,
+                             productCount: totalProductsInserted,
+                             currentBatch: 1, // Assume Python does one batch for now
+                             totalBatches: 1,
+                             progressMessages: [...progressPyUpdate.progressMessages, `Python function reported ${totalProductsInserted} products.`]
+                         });
+                     }
+                     await supabaseAdmin
+                         .from('scraper_runs')
+                         .update({ product_count: totalProductsInserted, current_batch: 1, total_batches: 1 })
+                         .eq('id', runId);
+                 }
+             }
+         } else {
+              // This path should ideally not be reached if type is validated on creation
+              console.error(`Run ${runId}: Encountered unsupported scraper type: ${scraper.scraper_type}`);
+              throw new Error(`Unsupported scraper type: ${scraper.scraper_type}`);
+         }
+      // End of main execution logic
+
+    } catch (error: unknown) { // Catch errors from setup or execution
+        console.error(`Error during scraper execution for ${scraperId} (Run ID: ${runId}):`, error);
+        hasErrors = true;
+        finalErrorMessage = error instanceof Error ? error.message : String(error);
+        // Ensure progress cache reflects the error immediately (using static access)
+        const progress = ScraperExecutionService.progressCache.get(runId);
+        if (progress) {
+            ScraperExecutionService.progressCache.set(runId, {
+                ...progress,
+                status: 'failed',
+                errorMessage: finalErrorMessage,
+                endTime: Date.now(), // Set end time on error
+                executionTime: Date.now() - startTime, // Set execution time on error
+            });
+        }
+    } finally {
+        // --- Final Updates (Always Run) ---
+        const endTime = Date.now();
+        const executionTime = endTime - startTime;
+        // Use static access for cache
+        const finalProgress = ScraperExecutionService.progressCache.get(runId);
+
+        // Calculate final products per second based on inserted products
+        let final_products_per_second: number | null = null;
+        const executionTimeSeconds = executionTime / 1000.0;
+        // Use totalProductsInserted for final calculation
+        if (executionTimeSeconds > 0 && totalProductsInserted > 0) {
+            final_products_per_second = parseFloat((totalProductsInserted / executionTimeSeconds).toFixed(2));
+        }
+
+        // Determine final status based on hasErrors flag
+        const scraperStatus = hasErrors ? 'failed' : 'success';
+        // Use finalErrorMessage which is set in the catch block
+        const scraperErrorMessage = hasErrors ? finalErrorMessage : null;
+
+        // Prepare scraper update data for the 'scrapers' table
+        // Use Partial<ScraperConfig> for update data
+        const scraperUpdateData: Partial<ScraperConfig> & { execution_time: number, last_products_per_second?: number | null } = {
+            status: scraperStatus,
+            error_message: scraperErrorMessage === null ? undefined : scraperErrorMessage, // Convert null to undefined
+            execution_time: executionTime,
+        };
+        // Update last_products_per_second only on success
+        if (!hasErrors) {
+            scraperUpdateData.last_products_per_second = final_products_per_second;
+        }
+
+        // Update main scraper status in 'scrapers' table
+        // Ensure supabaseAdmin is accessible here (it should be from the outer scope)
+        try {
+             console.log(`Run ${runId}: DEBUG - Updating 'scrapers' table in finally block...`); // <<< ADDED LOG
+             await supabaseAdmin
+                .from('scrapers')
+                .update(scraperUpdateData)
+                .eq('id', scraperId);
+        } catch (dbError) {
+             console.error(`Run ${runId}: Failed to update main scraper status in DB:`, dbError);
+        }
+
+        // Prepare final run record update data for the 'scraper_runs' table
+        const runUpdateData = {
+            status: scraperStatus,
+            completed_at: new Date(endTime).toISOString(),
+            // Use totalProductsInserted for the final count
+            product_count: totalProductsInserted,
+            // Use last reported batch number for current and total
+            current_batch: lastReportedBatchNumber,
+            total_batches: lastReportedBatchNumber, // Set final total batches
+            error_message: scraperErrorMessage,
+            execution_time_ms: executionTime,
+            products_per_second: final_products_per_second // Use final calculated value
+        };
+
+        // Update run record in the 'scraper_runs' table
+        try {
+            console.log(`Run ${runId}: DEBUG - Updating 'scraper_runs' table in finally block...`); // <<< ADDED LOG
+            await supabaseAdmin
+                .from('scraper_runs')
+                .update(runUpdateData)
+                .eq('id', runId);
+            console.log(`Run ${runId}: DEBUG - Successfully updated 'scraper_runs' table.`); // <<< ADDED LOG
+        } catch (dbError) {
+             console.error(`Run ${runId}: Failed to update scraper run status in DB:`, dbError);
+        }
+
+        // Update progress cache with final status (using static access)
+        // Ensure cache reflects the final state even if errors occurred
+        if (finalProgress) {
+            console.log(`Run ${runId}: DEBUG - Updating progress cache in finally block...`); // <<< ADDED LOG
+            // Construct final summary message
+            const finalSummary = scraperStatus === 'success'
+                ? `Run finished: Inserted ${totalProductsInserted} products in ${lastReportedBatchNumber} batches (${(executionTime / 1000).toFixed(1)}s, ${final_products_per_second?.toFixed(1) ?? '0.0'}/sec)`
+                : `Run failed: ${scraperErrorMessage || 'Unknown error'}`;
+
+            ScraperExecutionService.progressCache.set(runId, { // Use static access
+                ...finalProgress,
+                status: scraperStatus,
+                endTime: endTime,
+                executionTime: executionTime,
+                productCount: totalProductsInserted, // Ensure final inserted count is set
+                currentBatch: lastReportedBatchNumber, // Reflect final batch state
+                totalBatches: lastReportedBatchNumber, // Reflect final batch state
+                productsPerSecond: final_products_per_second, // Set final rate
+                errorMessage: scraperErrorMessage,
+                // Replace intermediate messages with the final summary
+                progressMessages: [finalSummary]
+            });
+        } else {
+            // Log if cache expired, but still try to update DB above
+            console.warn(`Run ${runId}: Progress cache entry expired before final update. Final status: ${scraperStatus}`);
+        }
+
+    } // End finally
+  } // End runScraperInternal method
+
   /**
    * Process a batch of products
    * Maps products to the correct format and inserts them into the database
@@ -617,7 +561,7 @@ export class ScraperExecutionService {
     if (!Array.isArray(batch) || batch.length === 0) {
       return 0;
     }
-    
+
     // Map the products to the correct format
     const scrapedProducts = batch.map((product: ScrapedProductData) => ({
       scraper_id: scraperId,
@@ -633,12 +577,12 @@ export class ScraperExecutionService {
       scraped_at: new Date().toISOString(),
       user_id: scraper.user_id,
     }));
-    
+
     // Process each scraped product to match with existing products
     const processedProducts = await Promise.all(scrapedProducts.map(async (product) => {
       // Try to match with existing products
       let matchedProductId = null;
-      
+
       // Try to match by EAN if available
       if (product.ean) {
         const { data: matchedProducts } = await supabaseAdmin
@@ -647,12 +591,12 @@ export class ScraperExecutionService {
           .eq('user_id', scraper.user_id)
           .eq('ean', product.ean)
           .limit(1);
-        
+
         if (matchedProducts && matchedProducts.length > 0) {
           matchedProductId = matchedProducts[0].id;
         }
       }
-      
+
       // If no match by EAN, try by brand and SKU
       if (!matchedProductId && product.brand && product.sku) {
         const { data: matchedProducts } = await supabaseAdmin
@@ -662,12 +606,12 @@ export class ScraperExecutionService {
           .eq('brand', product.brand)
           .eq('sku', product.sku)
           .limit(1);
-        
+
         if (matchedProducts && matchedProducts.length > 0) {
           matchedProductId = matchedProducts[0].id;
         }
       }
-      
+
       // If a match was found, link the product
       if (matchedProductId) {
         return {
@@ -675,20 +619,36 @@ export class ScraperExecutionService {
           product_id: matchedProductId,
         };
       }
-      
+
       // No match found, the database trigger will handle creating a new product
       return product;
     }));
-    
-    // Store the results
-    const { error: insertError } = await supabaseAdmin
-      .from('scraped_products')
-      .insert(processedProducts);
-    
-    if (insertError) {
-      throw new Error(`Failed to store scraped products: ${insertError.message}`);
+
+    // --- Batch Insert Logic ---
+    const BATCH_SIZE = 500; // Define the size of each insert chunk
+    let insertedCount = 0;
+    console.log(`processBatch: Starting insert of ${processedProducts.length} products in chunks of ${BATCH_SIZE}...`);
+
+    for (let i = 0; i < processedProducts.length; i += BATCH_SIZE) {
+        const chunk = processedProducts.slice(i, i + BATCH_SIZE);
+        console.log(`processBatch: Inserting chunk ${i / BATCH_SIZE + 1} (${chunk.length} products)...`);
+
+        const { error: insertError } = await supabaseAdmin
+            .from('scraped_products')
+            .insert(chunk);
+
+        if (insertError) {
+            // Log the error and the chunk number for easier debugging
+            console.error(`processBatch: Error inserting chunk ${i / BATCH_SIZE + 1}: ${insertError.message}`);
+            // Throw the error to stop processing and let the calling function handle it
+            throw new Error(`Failed to store scraped products chunk ${i / BATCH_SIZE + 1}: ${insertError.message}`);
+        } else {
+            insertedCount += chunk.length;
+            console.log(`processBatch: Successfully inserted chunk ${i / BATCH_SIZE + 1}. Total inserted so far: ${insertedCount}`);
+        }
     }
-    
-    return processedProducts.length;
+
+    console.log(`processBatch: Finished inserting all chunks. Total inserted: ${insertedCount}`);
+    return insertedCount; // Return the total count of successfully inserted products
   }
 }

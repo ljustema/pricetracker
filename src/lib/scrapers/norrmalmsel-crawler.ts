@@ -1,0 +1,253 @@
+// pricetracker/src/lib/scrapers/norrmalmsel-crawler.ts
+
+import {
+    CheerioCrawler,
+    RequestQueue,
+    Dataset,
+    // Configuration, // Not needed for this approach
+    log,
+    LogLevel,
+    CheerioCrawlingContext, // Import context type
+    Request, // Import Request type for failed handler
+    Log, // Import Log type for failed handler
+} from 'crawlee';
+import { MemoryStorage } from '@crawlee/memory-storage'; // Import MemoryStorage
+import * as cheerio from 'cheerio'; // Import cheerio namespace
+import { URL } from 'url'; // Use Node.js URL
+import { ScrapedProductData } from '@/lib/services/scraper-types'; // Assuming this path is correct
+
+// --- Constants ---
+const BASE_URL = "https://www.norrmalmsel.se";
+const BRAND_URL = "https://www.norrmalmsel.se/varumarken";
+const LABELS = {
+    BRAND_LIST: 'BRAND_LIST',
+    BRAND_PAGE: 'BRAND_PAGE',
+    PRODUCT_DETAIL: 'PRODUCT_DETAIL',
+};
+const PROGRESS_BATCH_SIZE = 100; // Report progress every 100 products
+
+// --- Types ---
+export type ProgressCallback = (data: {
+    processedProductCount: number;
+    batchNumber: number;
+    estimatedTotalProducts?: number; // Optional: Can be estimated later
+}) => Promise<void>;
+
+
+// --- Helper Functions ---
+
+/**
+ * Extracts and cleans the price from text.
+ * @param priceText Raw price string
+ * @returns Parsed price as a number or null
+ */
+function parsePrice(priceText: string | undefined | null): number | null {
+    if (!priceText) return null;
+    let cleanedPrice = priceText.replace(/kr|sek|\s|&nbsp;/gi, '').trim();
+    cleanedPrice = cleanedPrice.replace(',', '.');
+    cleanedPrice = cleanedPrice.replace(/[^\d.]/g, '');
+    const parts = cleanedPrice.split('.');
+    if (parts.length > 2) {
+        cleanedPrice = parts.slice(0, -1).join('') + '.' + parts[parts.length - 1];
+    } else if (parts.length === 2 && parts[0] === '') {
+        cleanedPrice = '0' + cleanedPrice;
+    } else if (parts.length === 1 && cleanedPrice !== '') {
+         // Integer price
+    } else if (cleanedPrice === '' || cleanedPrice === '.') {
+        return null;
+    }
+    try {
+        const price = parseFloat(cleanedPrice);
+        return isNaN(price) ? null : price;
+    } catch (_error) {
+        log.warning(`Could not parse price from cleaned string: '${cleanedPrice}' (original: '${priceText}')`);
+        return null;
+    }
+}
+
+/**
+ * Parses product details from the Cheerio context of a product page.
+ * @param $ CheerioAPI context from Crawlee
+ * @param productUrl The URL of the product page
+ * @returns Scraped product data or null if essential info is missing
+ */
+function parseProductDetails($: cheerio.CheerioAPI, productUrl: string): Partial<Omit<ScrapedProductData, 'scraper_id' | 'competitor_id' | 'user_id' | 'scraped_at' | 'product_id'>> | null {
+    const product: Partial<ScrapedProductData> = { url: productUrl };
+    try {
+        product.name = $('h1[data-testid="product-title"]').first().text().trim() || undefined;
+        const metaPrice = $('meta[property="product:price:amount"]').attr('content');
+        if (metaPrice) {
+            product.price = parsePrice(metaPrice) ?? undefined;
+        } else {
+            const priceDivText = $('div.price.n77d0ua').first().text();
+            product.price = parsePrice(priceDivText) ?? undefined;
+        }
+        product.brand = $('#drop-header-brand span.drop-text').first().text().trim() || undefined;
+        let imageUrl = $('div.slick-slide.slick-active.slick-current picture[data-flight-image] img').first().attr('src');
+        if (!imageUrl) {
+            imageUrl = $(`img[alt="${product.name}"]`).first().attr('src');
+        }
+        if (imageUrl) {
+            try { product.image_url = new URL(imageUrl, BASE_URL).toString(); }
+            catch (_urlError) { log.warning(`Invalid image URL found: ${imageUrl} on page ${productUrl}`); product.image_url = undefined; }
+        } else { product.image_url = undefined; }
+        product.sku = undefined;
+        $('tr').each((_, element) => {
+            const tr = $(element); const th = tr.find('th');
+            if (th.text().trim() === 'Artikelnummer') { product.sku = th.next('td').text().trim(); return false; }
+        });
+        product.ean = undefined;
+        $('#article-details tr').each((_, element) => {
+            const tr = $(element); const th = tr.find('th');
+            if (th.text().includes('EAN')) { product.ean = th.next('td').text().trim(); return false; }
+        });
+        product.currency = 'SEK';
+        if (!product.name || product.price === undefined) {
+            log.debug(`Skipping product - missing essential info (name or price): ${productUrl}`); return null;
+        }
+        const hasEan = !!product.ean; const hasBrandSku = !!product.brand && !!product.sku;
+        if (!hasEan && !hasBrandSku) {
+             log.debug(`Skipping product - insufficient identification (EAN or Brand+SKU): Name='${product.name}', Brand='${product.brand}', SKU='${product.sku}', EAN='${product.ean}' (${productUrl})`); return null;
+        }
+        return { name: product.name, price: product.price, currency: product.currency, url: product.url, image_url: product.image_url, sku: product.sku, brand: product.brand, ean: product.ean };
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        log.error(`Error parsing product details for ${productUrl}: ${errorMessage}`); return null;
+    }
+}
+
+// --- Main Scraper Function ---
+interface NorrmalmselScraperOptions {
+  isValidationRun?: boolean;
+  maxRequests?: number;
+  onProgress?: ProgressCallback; // Add callback parameter
+}
+
+export async function runNorrmalmselScraper(options: NorrmalmselScraperOptions = {}): Promise<ScrapedProductData[]> {
+    log.setLevel(LogLevel.DEBUG);
+    const start = Date.now();
+
+    // --- Explicitly configure and use MemoryStorage with persistence disabled ---
+    const storageClient = new MemoryStorage({ persistStorage: false }); // Disable disk persistence
+    log.info(`Using MemoryStorage explicitly with persistStorage=false.`);
+    // ---
+
+    // Progress tracking variables
+    let processedProductCount = 0;
+    let batchNumber = 0;
+    const onProgress = options.onProgress;
+
+    // Initialize Crawlee components with explicit storage client
+    const requestQueue = await RequestQueue.open(undefined, { storageClient }); // Pass storageClient
+    const dataset = await Dataset.open(undefined, { storageClient }); // Pass storageClient
+    await requestQueue.addRequest({ url: BRAND_URL, label: LABELS.BRAND_LIST });
+
+    // Define crawler options
+    const crawlerOptions: ConstructorParameters<typeof CheerioCrawler>[0] = {
+        requestQueue, // Uses the memory-backed queue instance
+        maxConcurrency: 50,
+        maxRequestRetries: options.isValidationRun ? 1 : 3,
+        requestHandlerTimeoutSecs: 60,
+        useSessionPool: true, // Sessions should implicitly use memory storage now
+    };
+
+    // Apply maxRequestsPerCrawl conditionally
+    if (options.maxRequests !== undefined && options.maxRequests !== null) {
+        crawlerOptions.maxRequestsPerCrawl = options.maxRequests;
+        log.info(`Limiting crawl to ${crawlerOptions.maxRequestsPerCrawl} requests.`);
+    } else if (options.isValidationRun) {
+        crawlerOptions.maxRequestsPerCrawl = 15;
+        log.info(`Running in validation mode (default limit). Max requests: ${crawlerOptions.maxRequestsPerCrawl}`);
+    }
+
+    const crawler = new CheerioCrawler({
+        ...crawlerOptions,
+
+        // Define handlers directly in the constructor options
+        async requestHandler(context: CheerioCrawlingContext) {
+            const { request, $, enqueueLinks, log } = context;
+            log.info(`Processing [${request.label || 'START'}]: ${request.url}`);
+
+            if (request.label === LABELS.BRAND_LIST) {
+                const brandLinks = $('li.s1e1rog7 a[href]')
+                    .map((_, el) => { const href = $(el).attr('href'); return href ? new URL(href, BASE_URL).toString() : null; })
+                    .get().filter((link): link is string => link !== null);
+                log.info(`Found ${brandLinks.length} brand links.`);
+                for (const link of brandLinks) { await requestQueue.addRequest({ url: link, label: LABELS.BRAND_PAGE }); }
+            } else if (request.label === LABELS.BRAND_PAGE) {
+                log.debug(`Extracting product links from brand page: ${request.url}`);
+                const productLinks = await enqueueLinks({ selector: 'div.product-card a', label: LABELS.PRODUCT_DETAIL, baseUrl: BASE_URL });
+                log.info(`Enqueued ${productLinks.processedRequests.length} product links from ${request.url}`);
+                const paginationLinks = await enqueueLinks({ selector: 'a.s17fl53a.s5htbx1', label: LABELS.BRAND_PAGE, baseUrl: BASE_URL });
+                if (paginationLinks.processedRequests.length > 0) { log.info(`Enqueued next page link: ${paginationLinks.processedRequests[0].uniqueKey}`); }
+                else { log.info(`No next page link found on ${request.url}`); }
+            } else if (request.label === LABELS.PRODUCT_DETAIL) {
+                log.debug(`Parsing product details: ${request.url}`);
+                const productData = parseProductDetails($, request.url);
+                if (productData) {
+                    log.info(`Successfully parsed product: ${productData.name}`);
+                    processedProductCount++;
+                    await dataset.pushData(productData); // Use the dataset INSTANCE
+                    if (onProgress && processedProductCount % PROGRESS_BATCH_SIZE === 0) {
+                        batchNumber++;
+                        log.debug(`Reporting progress: Batch ${batchNumber}, Products ${processedProductCount}`);
+                        try { await onProgress({ processedProductCount, batchNumber }); }
+                        catch (progressError) { log.error(`Error in onProgress callback: ${progressError}`); }
+                    }
+                } else { log.warning(`Failed to parse sufficient details for: ${request.url}`); }
+            } else {
+                 log.warning(`Default handler processing unexpected URL/Label: [${request.label || 'NO_LABEL'}] ${request.url}`);
+            }
+        },
+
+        failedRequestHandler({ request, log }: { request: Request; log: Log }) {
+            log.error(`Request failed: ${request.url} (Retries: ${request.retryCount})`);
+        },
+    });
+
+    log.info('Starting NorrmalmsEl scraper...');
+    await crawler.run();
+    log.info('NorrmalmsEl scraper finished.');
+
+    // --- Final Progress Report (if needed) ---
+    if (onProgress && processedProductCount % PROGRESS_BATCH_SIZE !== 0 && processedProductCount > 0) {
+        batchNumber++;
+        log.debug(`Reporting final progress: Batch ${batchNumber}, Products ${processedProductCount}`);
+         try { await onProgress({ processedProductCount, batchNumber }); }
+         catch (progressError) { log.error(`Error in final onProgress callback: ${progressError}`); }
+    }
+
+    // --- Data Processing & Filtering (Post-Crawl) ---
+    log.info('Fetching scraped data...');
+    // Use the dataset INSTANCE
+    const results = await dataset.getData();
+    const items = results.items as ScrapedProductData[];
+
+    log.info(`Retrieved ${items.length} raw items from dataset.`);
+    const filteredItems = items.filter(item => item !== null) as ScrapedProductData[];
+
+    const duration = (Date.now() - start) / 1000;
+    log.info(`Scraping took ${duration.toFixed(2)} seconds. Found ${filteredItems.length} valid products.`);
+
+    if (filteredItems.length !== processedProductCount) {
+         log.warning(`Mismatch between final filtered count (${filteredItems.length}) and incrementally counted products (${processedProductCount}). Using filtered count.`);
+    }
+
+    return filteredItems;
+}
+
+// --- Test Execution (Optional, for direct running) ---
+// if (require.main === module) {
+//     (async () => {
+//         const products = await runNorrmalmselScraper({
+//              async onProgress(data) {
+//                  console.log(`--- Progress Update ---`);
+//                  console.log(`Batch Number: ${data.batchNumber}`);
+//                  console.log(`Products Processed: ${data.processedProductCount}`);
+//                  console.log(`-----------------------`);
+//              }
+//         });
+//         console.log(`Found ${products.length} products.`);
+//         // await Dataset.exportToCSV('norrmalmsel_products'); // This would fail with memory storage
+//     })();
+// }

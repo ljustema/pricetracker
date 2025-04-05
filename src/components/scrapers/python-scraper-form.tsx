@@ -27,6 +27,7 @@ export default function PythonScraperForm({
   const [competitorName, setCompetitorName] = useState("");
   const [pythonScript, setPythonScript] = useState(initialScript || "");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [scraperType, setScraperType] = useState<'python' | 'crawlee'>('python'); // Add state for type, default to python
   const [isValidating, setIsValidating] = useState(false);
   const [validationResult, setValidationResult] = useState<{
     valid: boolean; // Structure validation
@@ -102,7 +103,8 @@ export default function PythonScraperForm({
 
     try {
       // Call validation without the URL
-      const result = await ScraperClientService.validatePythonScraper(pythonScript);
+      // Call the renamed validation function and pass the type
+      const result = await ScraperClientService.validateScraper(pythonScript, scraperType);
       // The result now includes executionError, rawStdout, rawStderr, totalProductsFound
       setValidationResult(result);
 
@@ -156,7 +158,9 @@ export default function PythonScraperForm({
         // Update existing scraper using direct fetch
         console.log("Updating scraper with ID:", scraperId);
         console.log("Update payload:", {
-          python_script: pythonScript ? pythonScript.substring(0, 100) + "..." : "undefined",
+          // Include scraper_type in update payload if needed by backend PUT route
+          scraper_type: scraperType,
+          [scraperType === 'python' ? 'python_script' : 'typescript_script']: pythonScript ? pythonScript.substring(0, 100) + "..." : "undefined", // Log correct script key
           url: targetUrl,
           schedule,
         });
@@ -167,7 +171,9 @@ export default function PythonScraperForm({
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            python_script: pythonScript,
+            // Send type and correct script key
+            scraper_type: scraperType,
+            [scraperType === 'python' ? 'python_script' : 'typescript_script']: pythonScript,
             url: targetUrl,
             schedule,
           }),
@@ -181,12 +187,12 @@ export default function PythonScraperForm({
         const scraper = await response.json();
         onSuccess(scraper.id);
       } else {
-        // Create new scraper
-        const scraper = await ScraperClientService.createPythonScraper({
+        // Create new scraper using the updated service method
+        const scraper = await ScraperClientService.createScriptScraper({
           competitor_id: competitorId,
-          // Name will be auto-generated on the server following the convention
-          url: targetUrl, // Use URL from metadata or empty string
-          python_script: pythonScript,
+          url: targetUrl,
+          scraper_type: scraperType, // Pass the selected type
+          scriptContent: pythonScript, // Pass the script content
           schedule,
         });
         onSuccess(scraper.id);
@@ -235,11 +241,30 @@ export default function PythonScraperForm({
             </p>
           </div>
 
+           {/* Scraper Type Selection */}
+           <div>
+             <label htmlFor="scraper-type" className="block text-sm font-medium text-gray-700">
+               Scraper Type
+             </label>
+             <select
+               id="scraper-type"
+               value={scraperType}
+               onChange={(e) => setScraperType(e.target.value as 'python' | 'crawlee')}
+               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+             >
+               <option value="python">Python</option>
+               <option value="crawlee">Crawlee (TypeScript)</option>
+             </select>
+             <p className="mt-1 text-xs text-gray-500">
+                Select the type of scraper code you are providing.
+             </p>
+           </div>
+
           {/* Removed Target Website URL input */}
 
           <div>
             <label className="block text-sm font-medium text-gray-700">
-              Python Script
+              Script Content ({scraperType === 'python' ? 'Python' : 'TypeScript'})
             </label>
             <div className="mt-1 flex items-center space-x-2">
               <a
@@ -248,18 +273,18 @@ export default function PythonScraperForm({
                 className="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
               >
                 <UploadIcon className="h-4 w-4 mr-2" />
-                Download Template
+                Download {scraperType === 'python' ? 'Python' : 'TS'} Template
               </a>
               <label
                 htmlFor="file-upload"
                 className="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 cursor-pointer"
               >
                 <UploadIcon className="h-4 w-4 mr-2" />
-                Upload Script
+                Upload {scraperType === 'python' ? '.py' : '.ts'} Script
                 <input
                   id="file-upload"
                   type="file"
-                  accept=".py"
+                  accept={scraperType === 'python' ? '.py' : '.ts'} // Accept correct file type
                   onChange={handleFileUpload}
                   className="sr-only"
                 />
@@ -312,7 +337,7 @@ export default function PythonScraperForm({
 
           <div>
             <label htmlFor="python-code" className="block text-sm font-medium text-gray-700">
-              Python Code
+              {scraperType === 'python' ? 'Python Code' : 'TypeScript Code'}
             </label>
             <textarea
               id="python-code"
@@ -320,7 +345,7 @@ export default function PythonScraperForm({
               onChange={(e) => setPythonScript(e.target.value)}
               rows={18} // Increased rows for bigger code block
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm font-mono"
-              placeholder="# Paste your Python scraper code here"
+              placeholder={`# Paste your ${scraperType === 'python' ? 'Python' : 'TypeScript'} scraper code here`}
             />
           </div>
           

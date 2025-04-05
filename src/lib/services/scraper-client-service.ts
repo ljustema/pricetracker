@@ -138,12 +138,13 @@ export class ScraperClientService {
   }
 
   /**
-   * Create a Python scraper
+   * Create a script-based scraper (Python or Crawlee)
    */
-  static async createPythonScraper(config: {
+  static async createScriptScraper(config: {
     competitor_id: string;
     url: string;
-    python_script: string;
+    scraper_type: 'python' | 'crawlee'; // Add type
+    scriptContent: string; // Use generic name
     schedule: {
       frequency: 'daily' | 'weekly' | 'monthly';
       time?: string;
@@ -155,12 +156,19 @@ export class ScraperClientService {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(config),
+      // Construct payload with correct script key
+      body: JSON.stringify({
+        competitor_id: config.competitor_id,
+        url: config.url,
+        scraper_type: config.scraper_type,
+        schedule: config.schedule,
+        [config.scraper_type === 'python' ? 'python_script' : 'typescript_script']: config.scriptContent,
+      }),
     });
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error || 'Failed to create Python scraper');
+      throw new Error(error.error || `Failed to create ${config.scraper_type} scraper`);
     }
 
     return response.json();
@@ -170,15 +178,19 @@ export class ScraperClientService {
    * Validate a Python scraper script by running its 'scrape' command via the backend.
    * The backend will perform structure validation and a limited execution run.
    */
-  static async validatePythonScraper(script: string) {
+  static async validateScraper(scriptContent: string, scraperType: 'python' | 'crawlee') {
     // Call the single validation endpoint which now handles execution too
-    const response = await fetch('/api/scrapers/python/validate', {
+    const response = await fetch('/api/scrapers/python/validate', { // Endpoint name might need changing later if we fully separate python/crawlee
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      // Send only the script; backend handles the rest
-      body: JSON.stringify({ python_script: script }),
+      // Send the script content and the type
+      body: JSON.stringify({
+        scraper_type: scraperType,
+        // Use the correct key based on the type
+        [scraperType === 'python' ? 'python_script' : 'typescript_script']: scriptContent
+      }),
     });
 
     // Always parse the response, whether ok or not, to get potential error details
@@ -240,12 +252,13 @@ export class ScraperClientService {
    */
   static async startTestRun(scraperId: string): Promise<{ runId: string }> {
     try {
-      // Call the API endpoint to start the test run asynchronously
-      const response = await fetch(`/api/scrapers/${scraperId}/test-run`, {
+      // Call the API endpoint to start the test run asynchronously using the /run endpoint with the flag
+      const response = await fetch(`/api/scrapers/${scraperId}/run`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify({ isTestRun: true }), // Add the flag here
       });
       
       if (!response.ok) {

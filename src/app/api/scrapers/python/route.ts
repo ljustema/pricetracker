@@ -1,17 +1,19 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server';
+import { ScraperMetadata } from '@/lib/services/scraper-types'; // Import the type
 import { ScraperService } from "@/lib/services/scraper-service";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import crypto from 'crypto';
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import fs from 'fs';
-import path from 'path';
-import { randomUUID } from 'crypto';
-import os from 'os';
-import { exec } from 'child_process';
+// Remove unused imports: fs, path, randomUUID, os
+// import fs from 'fs';
+// import path from 'path';
+// import { randomUUID } from 'crypto';
+// import os from 'os';
+import { exec } from 'child_process'; // Keep exec as it's used by _execPromise
 import util from 'util';
 
-const execPromise = util.promisify(exec);
+const _execPromise = util.promisify(exec); // Prefix unused variable
 
 export async function POST(req: NextRequest) {
   try {
@@ -35,11 +37,14 @@ export async function POST(req: NextRequest) {
 
     const userId = ensureUUID(session.user.id);
     const data = await req.json();
-    
+    const scraperType = data.scraper_type || 'python'; // Get type, default to python
+    const scriptContent = scraperType === 'python' ? data.python_script : data.typescript_script;
+
     // Validate required fields
-    if (!data.competitor_id || !data.url || !data.python_script || !data.schedule) {
+    // Remove !data.url check, as URL might be derived from metadata later or be optional initially
+    if (!data.competitor_id || !scriptContent || !data.schedule) {
       return NextResponse.json(
-        { error: "Missing required fields" },
+        { error: "Missing required fields (competitor_id, script content, schedule)" },
         { status: 400 }
       );
     }
@@ -48,63 +53,46 @@ export async function POST(req: NextRequest) {
     const supabase = createSupabaseAdminClient();
     
     const now = new Date().toISOString();
-    // We need to extract the actual metadata from the script by executing it
-    // Create a temporary directory for the script
-    const tempDir = path.join(os.tmpdir(), "pricetracker-" + randomUUID());
-    fs.mkdirSync(tempDir, { recursive: true });
-    
-    // Write the script to a temporary file
-    const scriptPath = path.join(tempDir, "script.py");
-    fs.writeFileSync(scriptPath, data.python_script);
-    
-    // Execute the metadata command to get the script metadata
-    const pythonCommands = ['python', 'python3', 'py'];
-    let scriptMetadata = null;
-    
-    for (const cmd of pythonCommands) {
-      try {
-        const result = await execPromise(`${cmd} -c "import sys; sys.stdout.reconfigure(encoding='utf-8'); exec(open('${scriptPath.replace(/\\/g, '\\\\')}', encoding='utf-8').read())" metadata`, { encoding: 'utf-8' });
-        const metadataOutput = result.stdout.trim();
-        scriptMetadata = JSON.parse(metadataOutput);
-        break;
-      } catch (_error) {
-        // Try the next command if this one fails
-        continue;
-      }
+    let scriptMetadata: ScraperMetadata | null = null;
+    let targetUrl = data.url; // Default to provided URL
+
+    if (scraperType === 'python') {
+        // --- Python Specific Validation & Metadata Extraction ---
+        // Validate structure first
+        const validationResult = await ScraperService.validatePythonScraper(scriptContent);
+        if (!validationResult.valid || validationResult.error) {
+            return NextResponse.json(
+                { error: `Invalid Python script: ${validationResult.error || 'Structure validation failed.'}` },
+                { status: 400 }
+            );
+        }
+        // If structure is valid, use metadata from validation
+        scriptMetadata = validationResult.metadata ?? null;
+        // Use target_url from metadata if available
+        targetUrl = scriptMetadata?.target_url || data.url;
+
+    } else if (scraperType === 'crawlee') {
+        // --- Crawlee Specific Setup ---
+        // Skip Python validation. Metadata might come from validation step later,
+        // or use placeholders for now.
+        scriptMetadata = { // Placeholder metadata for Crawlee
+             name: 'Crawlee Scraper (TS)', description: 'A Crawlee/TypeScript scraper', version: '1.0.0',
+             author: 'User', target_url: data.url, required_libraries: []
+        };
+        targetUrl = data.url; // Use provided URL for Crawlee
+        console.log("Creating Crawlee scraper, skipping Python validation/metadata extraction.");
+    } else {
+         return NextResponse.json({ error: "Invalid scraper_type specified" }, { status: 400 });
     }
-    
-    // Clean up the temporary files
-    try {
-      fs.unlinkSync(scriptPath);
-      fs.rmdirSync(tempDir, { recursive: true });
-    } catch (error) {
-      console.error("Error cleaning up temporary files:", error);
-    }
-    
-    // If we couldn't extract the metadata, use a default object
-    if (!scriptMetadata) {
-      scriptMetadata = {
-        name: 'Unknown Scraper',
-        description: 'A Python scraper',
-        version: '1.0.0',
-        author: 'Unknown',
-        target_url: '',
-        required_libraries: [],
-      };
-    }
-    
-    // Use target_url from metadata if available, otherwise use the provided URL
-    // This ensures synchronization between metadata and the database URL
-    const targetUrl = scriptMetadata.target_url || data.url;
-    
-    // Also validate the script structure
-    const validationResult = await ScraperService.validatePythonScraper(data.python_script);
-    if (!validationResult.valid) {
-      return NextResponse.json(
-        { error: `Invalid Python script: ${validationResult.error}` },
-        { status: 400 }
-      );
-    }
+
+    // Ensure metadata is not null before proceeding (use default if Python extraction failed)
+     if (!scriptMetadata) {
+       scriptMetadata = {
+         name: scraperType === 'python' ? 'Unknown Python Scraper' : 'Unknown Crawlee Scraper',
+         description: `A ${scraperType} scraper`,
+         version: '1.0.0', author: 'Unknown', target_url: targetUrl, required_libraries: [],
+       };
+     }
     
     // Get competitor name for the naming convention
     const { data: competitor, error: competitorError } = await supabase
@@ -118,7 +106,8 @@ export async function POST(req: NextRequest) {
     }
     
     // Check if a scraper with a similar name already exists
-    const baseScraperName = `${competitor.name} Python Scraper`;
+    const typeSuffix = scraperType === 'python' ? 'Python' : 'Crawlee';
+    const baseScraperName = `${competitor.name} ${typeSuffix} Scraper`;
     const { data: existingScrapers, error: existingScrapersError } = await supabase
       .from('scrapers')
       .select('name')
@@ -150,9 +139,10 @@ export async function POST(req: NextRequest) {
       competitor_id: data.competitor_id,
       name: scraperName, // Use the generated name following the convention
       url: targetUrl, // Use the synchronized URL
-      scraper_type: 'python' as const,
-      python_script: data.python_script,
-      script_metadata: scriptMetadata, // Use the actual metadata extracted from the script
+      scraper_type: scraperType, // Use dynamic type
+      python_script: scraperType === 'python' ? scriptContent : null, // Assign to correct field
+      typescript_script: scraperType === 'crawlee' ? scriptContent : null, // Assign to correct field
+      script_metadata: scriptMetadata, // Use extracted or placeholder metadata
       // Add empty selectors object since the database might require it
       selectors: {}, // Empty object for Python scrapers since they don't use selectors
       schedule: data.schedule,

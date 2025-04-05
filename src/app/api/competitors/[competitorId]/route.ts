@@ -14,7 +14,7 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { competitorId } = context.params; // Använd context.params istället
+    const { competitorId } = await context.params;
     if (!competitorId) {
       return NextResponse.json(
         { error: "Missing competitor ID" },
