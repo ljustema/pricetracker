@@ -26,7 +26,8 @@ export async function POST(
 
     // Start the scraper asynchronously (non-blocking), passing the test run flag
     // No need to await here as runScraper starts the process in the background
-    ScraperExecutionService.runScraper(scraperId, runId, isTestRun);
+    // Await the runScraper call to ensure the initial DB record is created before responding
+    await ScraperExecutionService.runScraper(scraperId, runId, isTestRun);
 
     // Return 202 Accepted with the runId
     return NextResponse.json({ runId: runId }, { status: 202 }); // Return the runId in the response body
