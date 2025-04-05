@@ -194,6 +194,7 @@ export class ScraperExecutionService {
    * This runs asynchronously and updates the progress cache
    */
   private static async runScraperInternal(scraperId: string, runId: string, isTestRun: boolean): Promise<void> {
+    console.log(`Run ${runId}: Entering runScraperInternal. isTestRun: ${isTestRun}`); // <<< ADDED LOG
     // Import here to avoid circular dependencies
     const { createSupabaseAdminClient } = await import('@/lib/supabase/server');
     const supabaseAdmin = createSupabaseAdminClient();
@@ -290,7 +291,8 @@ export class ScraperExecutionService {
              });
         }
 
-        // Update scraper status to running in DB
+        // Update scraper status to running in DB (for the main scraper record)
+        console.log(`Run ${runId}: Updating main scraper record status to 'running'...`); // <<< ADDED LOG
         await supabaseAdmin
             .from('scrapers')
             .update({
@@ -298,6 +300,15 @@ export class ScraperExecutionService {
                 last_run: new Date().toISOString(),
             })
             .eq('id', scraperId);
+        console.log(`Run ${runId}: Main scraper record status updated.`); // <<< ADDED LOG
+
+        // Update the specific RUN record status to 'running' BEFORE starting the heavy work
+        console.log(`Run ${runId}: Updating DB run record status to 'running' before scraper execution...`); // <<< ADDED LOG
+        await supabaseAdmin
+            .from('scraper_runs')
+            .update({ status: 'running' }) // Update status here
+            .eq('id', runId);
+        console.log(`Run ${runId}: DB run record status updated to 'running'.`); // <<< ADDED LOG
 
         // --- Scraper Execution Logic ---
         // Scraper object is guaranteed to be non-null here due to check above
@@ -332,6 +343,7 @@ export class ScraperExecutionService {
             //       4. The executed script should return the scraped products array.
             console.warn(`Run ${runId}: WARNING - Currently executing Crawlee scraper from imported file, NOT from database script.`);
             const scrapedProducts = await runNorrmalmselScraper(crawleeOptions);
+            console.log(`Run ${runId}: runNorrmalmselScraper finished. Found ${scrapedProducts.length} products.`); // <<< ADDED LOG
             // --- END OF CURRENT POC IMPLEMENTATION ---
 
             totalProductsFound = scrapedProducts.length; // Store the count found by scraper
@@ -344,8 +356,8 @@ export class ScraperExecutionService {
                  const fullScraperConfig: ScraperConfig = scraper; // Already fetched with '*'
   
                  // Use static access for processBatch
-                 console.log(`Run ${runId}: DEBUG - Calling processBatch...`); // <<< ADDED LOG
                  const insertedCount = await ScraperExecutionService.processBatch(scrapedProducts, fullScraperConfig, scraperId, supabaseAdmin);
+                 console.log(`Run ${runId}: processBatch finished. Inserted ${insertedCount} products.`); // <<< ADDED LOG
                  totalProductsInserted = insertedCount; // Update totalProductsInserted with the count from processBatch
                  console.log(`Run ${runId}: processBatch finished. Inserted ${insertedCount} products.`);
                  console.log(`Run ${runId}: DEBUG - processBatch returned ${insertedCount}`); // <<< ADDED LOG
@@ -433,6 +445,7 @@ export class ScraperExecutionService {
       // End of main execution logic
 
     } catch (error: unknown) { // Catch errors from setup or execution
+        console.error(`Run ${runId}: ERROR caught in runScraperInternal:`, error); // <<< ADDED LOG
         console.error(`Error during scraper execution for ${scraperId} (Run ID: ${runId}):`, error);
         hasErrors = true;
         finalErrorMessage = error instanceof Error ? error.message : String(error);
@@ -449,6 +462,7 @@ export class ScraperExecutionService {
         }
     } finally {
         // --- Final Updates (Always Run) ---
+        console.log(`Run ${runId}: Entering finally block of runScraperInternal.`); // <<< ADDED LOG
         const endTime = Date.now();
         const executionTime = endTime - startTime;
         // Use static access for cache
@@ -543,8 +557,9 @@ export class ScraperExecutionService {
             // Log if cache expired, but still try to update DB above
             console.warn(`Run ${runId}: Progress cache entry expired before final update. Final status: ${scraperStatus}`);
         }
-
+        console.log(`Run ${runId}: Exiting finally block of runScraperInternal.`); // <<< ADDED LOG
     } // End finally
+    console.log(`Run ${runId}: Exiting runScraperInternal function.`); // <<< ADDED LOG
   } // End runScraperInternal method
 
   /**
