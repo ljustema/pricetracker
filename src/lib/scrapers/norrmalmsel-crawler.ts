@@ -4,7 +4,6 @@ import {
     CheerioCrawler,
     RequestQueue,
     Dataset,
-    Configuration, // Import Configuration
     log,
     LogLevel,
     CheerioCrawlingContext, // Import context type
@@ -12,7 +11,6 @@ import {
     Log, // Import Log type for failed handler
     CheerioCrawlerOptions, // Correct options type
 } from 'crawlee';
-import { MemoryStorage } from '@crawlee/memory-storage'; // Import MemoryStorage
 import * as cheerio from 'cheerio'; // Import cheerio namespace
 import { URL } from 'url'; // Use Node.js URL
 import { ScrapedProductData } from '@/lib/services/scraper-types'; // Assuming this path is correct

@@ -97,7 +97,7 @@ export default function ScraperRunProgress({
       // Increase polling interval on error to avoid hammering the server
       setPollingInterval(prev => Math.min(prev * 1.5, 10000));
     }
-  }, [scraperId, runId, onComplete, consecutiveErrors]);
+  }, [scraperId, runId, onComplete, consecutiveErrors, error]);
   
   // Set up polling
   useEffect(() => {

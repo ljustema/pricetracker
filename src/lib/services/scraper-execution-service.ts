@@ -349,8 +349,10 @@ export class ScraperExecutionService {
             // Imports are already at the top level
             const storageClientPatch = new MemoryStorage({ persistStorage: false });
             const configurationPatch = new Configuration({ storageClient: storageClientPatch });
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
             // @ts-ignore - Necessary workaround for Crawlee 3
             Configuration.globalConfig = configurationPatch;
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
             // @ts-ignore - Necessary workaround for Crawlee 3
             Configuration.getGlobal = () => configurationPatch;
             console.log(`Run ${runId}: MemoryStorage monkey-patch applied.`);
