@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json", // Inherit base settings (paths, target, lib, etc.)
+  "compilerOptions": {
+    // --- Overrides for Worker Build ---
+    "module": "CommonJS",         // Use CommonJS for Node.js execution
+    "moduleResolution": "node",   // Standard Node resolution
+    "outDir": "./dist",           // Output directory for worker JS
+    "noEmit": false,              // MUST emit JavaScript files
+    "isolatedModules": false,     // Not needed for this build type
+    "incremental": false,         // Not needed
+    "jsx": "react",               // Keep react setting for consistency if shared libs use JSX
+    "plugins": []                 // Remove Next.js specific plugin
+  },
+  "include": [
+    "src/worker.ts",            // Only compile the worker script
+    "src/**/*.d.ts"             // Include any custom type definitions
+  ],
+  "exclude": [
+    "node_modules",             // Exclude dependencies
+    ".next"                     // Exclude Next.js build artifacts
+  ]
+}

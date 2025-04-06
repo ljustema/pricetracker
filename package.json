@@ -6,7 +6,7 @@
     "dev": "cross-env NODE_OPTIONS=\"--no-deprecation\" next dev",
     "dev:turbo": "cross-env NODE_OPTIONS=\"--no-deprecation\" next dev --turbopack",
     "build:next": "cross-env NODE_OPTIONS=\"--no-deprecation\" next build",
-    "build:worker": "tsc --module commonjs --outDir dist src/worker.ts",
+    "build:worker": "tsc --project tsconfig.worker.json",
     "build": "npm run build:next ; npm run build:worker",
     "start": "cross-env NODE_OPTIONS=\"--no-deprecation\" next start",
     "lint": "next lint",
