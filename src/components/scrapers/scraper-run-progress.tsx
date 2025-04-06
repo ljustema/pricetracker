@@ -29,6 +29,7 @@ export default function ScraperRunProgress({
   const [error, setError] = useState<string | null>(null);
   const [pollingInterval, setPollingInterval] = useState<number>(3000); // 3 seconds
   const [consecutiveErrors, setConsecutiveErrors] = useState<number>(0);
+  const [stoppedPollingOnError, setStoppedPollingOnError] = useState<boolean>(false); // Track if polling stopped due to errors
   
   // Format elapsed time as mm:ss
   const formatTime = (ms: number) => {
@@ -82,9 +83,11 @@ export default function ScraperRunProgress({
       setConsecutiveErrors(newErrorCount);
       
       // If we've had too many consecutive errors, stop polling
-      if (newErrorCount >= 5) {
-        console.error("Too many consecutive errors, stopping polling");
-        setPollingInterval(0);
+      const MAX_ERRORS = 8; // Increase tolerance slightly
+      if (newErrorCount >= MAX_ERRORS) {
+        console.error(`Reached ${MAX_ERRORS} consecutive errors, stopping polling.`);
+        setPollingInterval(0); // Stop regular polling
+        setStoppedPollingOnError(true); // Mark that we stopped due to errors
         
         // If we have an onComplete callback, call it with failure
         if (onComplete) {
@@ -112,20 +115,33 @@ export default function ScraperRunProgress({
     // Set up polling interval
     const intervalId = setInterval(fetchStatus, pollingInterval);
     
-    // Clean up on unmount or when run is complete
+    // Clean up on unmount or when polling stops
     return () => {
       clearInterval(intervalId);
     };
   }, [fetchStatus, pollingInterval, progress?.isComplete]);
   
-  // Stop polling when the run is complete
+  // Stop polling when the run is complete OR if stopped due to errors
   useEffect(() => {
-    if (progress?.isComplete) {
-      // Directly clear any existing intervals by setting polling interval to 0
-      setPollingInterval(0);
-      console.log("Run complete, stopping polling");
+    if (progress?.isComplete || stoppedPollingOnError) {
+      setPollingInterval(0); // Ensure interval is 0
+      console.log(`Polling stopped. Reason: ${progress?.isComplete ? 'Run complete' : 'Max errors reached'}`);
     }
-  }, [progress?.isComplete]);
+  }, [progress?.isComplete, stoppedPollingOnError]);
+
+  // Attempt one final fetch if polling stopped due to errors
+  useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+    if (stoppedPollingOnError) {
+      // Wait a moment then try one last fetch
+      timeoutId = setTimeout(() => {
+        console.log("Attempting one final status fetch after polling stopped due to errors...");
+        fetchStatus();
+      }, 1500); // Wait 1.5 seconds
+    }
+    return () => clearTimeout(timeoutId); // Cleanup timeout on unmount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stoppedPollingOnError]); // Run only when stoppedPollingOnError changes
   
   if (error) {
     return (
