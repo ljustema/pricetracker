@@ -130,13 +130,6 @@ export async function runNorrmalmselScraper(options: NorrmalmselScraperOptions =
 
     // --- Configure Crawlee to use MemoryStorage explicitly via Configuration ---
     // This sets the default storage for subsequent operations
-    const storageClient = new MemoryStorage({ persistStorage: false });
-    const configuration = new Configuration({
-        storageClient: storageClient,
-        // Other config options if needed, e.g., defaultDatasetId: 'norrmalmsel-results'
-    });
-    log.info(`Using MemoryStorage explicitly via Configuration object.`);
-    // ---
 
     // Progress tracking variables
     let processedProductCount = 0;
@@ -144,8 +137,8 @@ export async function runNorrmalmselScraper(options: NorrmalmselScraperOptions =
     const onProgress = options.onProgress; // Get callback from options
 
     // Initialize RequestQueue and Dataset. They should use the storage from the Configuration instance.
-    const requestQueue = await RequestQueue.open(); // No options needed here
-    const dataset = await Dataset.open(); // No options needed here
+    const requestQueue = await RequestQueue.open();
+    const dataset = await Dataset.open();
     await requestQueue.addRequest({ url: BRAND_URL, label: LABELS.BRAND_LIST });
 
     // Define crawler options

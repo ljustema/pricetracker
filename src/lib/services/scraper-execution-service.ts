@@ -3,6 +3,8 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { randomUUID } from 'crypto';
 // Import the new Crawlee scraper function and the callback type
 import { runNorrmalmselScraper, ProgressCallback } from '@/lib/scrapers/norrmalmsel-crawler';
+import { Configuration } from 'crawlee'; // Added for patching
+import { MemoryStorage } from '@crawlee/memory-storage'; // Added for patching
 
 // Progress cache to store run status information
 interface ProgressData {
@@ -342,6 +344,18 @@ export class ScraperExecutionService {
             //          injecting necessary modules (`crawlee`, `MemoryStorage`, helpers) and the `crawleeOptions`.
             //       4. The executed script should return the scraped products array.
             console.warn(`Run ${runId}: WARNING - Currently executing Crawlee scraper from imported file, NOT from database script.`);
+            // --- Monkey-patch Crawlee Configuration for MemoryStorage ---
+            console.log(`Run ${runId}: Applying MemoryStorage monkey-patch...`);
+            // Imports are already at the top level
+            const storageClientPatch = new MemoryStorage({ persistStorage: false });
+            const configurationPatch = new Configuration({ storageClient: storageClientPatch });
+            // @ts-ignore - Necessary workaround for Crawlee 3
+            Configuration.globalConfig = configurationPatch;
+            // @ts-ignore - Necessary workaround for Crawlee 3
+            Configuration.getGlobal = () => configurationPatch;
+            console.log(`Run ${runId}: MemoryStorage monkey-patch applied.`);
+            // --- End Patch ---
+
             const scrapedProducts = await runNorrmalmselScraper(crawleeOptions);
             console.log(`Run ${runId}: runNorrmalmselScraper finished. Found ${scrapedProducts.length} products.`); // <<< ADDED LOG
             // --- END OF CURRENT POC IMPLEMENTATION ---
