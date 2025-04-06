@@ -112,7 +112,7 @@ export class ScraperExecutionService {
           id: actualRunId,
           scraper_id: scraperId,
           user_id: scraper.user_id, // Use fetched user_id
-          status: 'initializing',
+          status: 'pending', // Set initial status to 'pending'
           started_at: new Date().toISOString(),
           is_test_run: isTestRun // Use the parameter here
         });
@@ -154,39 +154,8 @@ export class ScraperExecutionService {
        throw error;
     }
     
-    // Run the scraper asynchronously - use Promise.resolve() to ensure a full Promise is returned
-    // Pass isTestRun to the internal method
-    Promise.resolve().then(() => this.runScraperInternal(scraperId, actualRunId, isTestRun))
-      .catch(async error => {
-        console.error(`Unhandled error in runScraperInternal for ${scraperId}:`, error);
-        // Update progress cache with error
-        const progress = this.progressCache.get(actualRunId);
-        if (progress) {
-          this.progressCache.set(actualRunId, {
-            ...progress,
-            status: 'failed',
-            endTime: Date.now(),
-            executionTime: Date.now() - progress.startTime,
-            errorMessage: error instanceof Error ? error.message : String(error)
-          });
-        }
-        
-        // Update the database record
-        try {
-          const supabaseAdmin = createSupabaseAdminClient();
-          await supabaseAdmin
-            .from('scraper_runs')
-            .update({
-              status: 'failed',
-              completed_at: new Date().toISOString(),
-              error_message: error instanceof Error ? error.message : String(error)
-            })
-            .eq('id', actualRunId);
-        } catch (dbError) {
-          console.error(`Error updating run record in database: ${dbError}`);
-        }
-      });
-    
+    // DO NOT run the scraper here. The worker service will pick up 'pending' jobs.
+    // The run record is already created in the DB with status 'pending'.
     // Return the run ID immediately
     return { runId: actualRunId };
   }
@@ -195,7 +164,7 @@ export class ScraperExecutionService {
    * Internal implementation of runScraper that handles the actual execution
    * This runs asynchronously and updates the progress cache
    */
-  private static async runScraperInternal(scraperId: string, runId: string, isTestRun: boolean): Promise<void> {
+  public static async runScraperInternal(scraperId: string, runId: string, isTestRun: boolean): Promise<void> {
     console.log(`Run ${runId}: Entering runScraperInternal. isTestRun: ${isTestRun}`); // <<< ADDED LOG
     // Import here to avoid circular dependencies
     const { createSupabaseAdminClient } = await import('@/lib/supabase/server');

@@ -13,7 +13,7 @@ import {
 } from 'crawlee';
 import * as cheerio from 'cheerio'; // Import cheerio namespace
 import { URL } from 'url'; // Use Node.js URL
-import { ScrapedProductData } from '@/lib/services/scraper-types'; // Assuming this path is correct
+import { ScrapedProductData } from '../services/scraper-types'; // Use relative path for robustness
 
 // --- Constants ---
 const BASE_URL = "https://www.norrmalmsel.se";
