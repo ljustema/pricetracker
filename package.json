@@ -5,10 +5,12 @@
   "scripts": {
     "dev": "cross-env NODE_OPTIONS=\"--no-deprecation\" next dev",
     "dev:turbo": "cross-env NODE_OPTIONS=\"--no-deprecation\" next dev --turbopack",
-    "build": "cross-env NODE_OPTIONS=\"--no-deprecation\" next build",
+    "build:next": "cross-env NODE_OPTIONS=\"--no-deprecation\" next build",
+    "build:worker": "tsc --project tsconfig.json --outDir dist src/worker.ts",
+    "build": "npm run build:next ; npm run build:worker",
     "start": "cross-env NODE_OPTIONS=\"--no-deprecation\" next start",
     "lint": "next lint",
-    "start:worker": "node .next/server/worker.js"
+    "start:worker": "node dist/worker.js"
   },
   "dependencies": {
     "@auth/supabase-adapter": "^1.8.0",
