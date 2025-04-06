@@ -230,8 +230,16 @@ export async function runNorrmalmselScraper(options: NorrmalmselScraperOptions =
         },
     });
 
-    log.info('Starting NorrmalmsEl scraper...');
-    await crawler.run();
+    log.info('>>> Starting NorrmalmsEl scraper (await crawler.run())...'); // Log before
+    try {
+        await crawler.run();
+    } catch (crawlError) {
+        // Log the error message specifically
+        const errorMessage = crawlError instanceof Error ? crawlError.message : String(crawlError);
+        log.error(`>>> ERROR during crawler.run(): ${errorMessage}`, { error: crawlError });
+        throw crawlError; // Re-throw error to be caught by service
+    }
+    log.info('>>> Finished NorrmalmsEl scraper (await crawler.run()).'); // Log after
     log.info('NorrmalmsEl scraper finished.');
 
     // --- Final Progress Report (if needed) ---
