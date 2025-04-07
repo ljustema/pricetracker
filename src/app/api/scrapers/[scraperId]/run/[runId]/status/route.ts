@@ -16,14 +16,17 @@ interface Params {
 }
 
 export async function GET(req: NextRequest, { params }: Params) {
+  console.log(`[Status API] Received request for runId: ${params.runId}`); // Log entry
   try {
     // Check authentication
     const session = await getServerSession(authOptions);
     if (!session?.user) {
+      console.error(`[Status API] Unauthorized access attempt for runId: ${params.runId}`);
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    console.log(`[Status API] Session validated for runId: ${params.runId}`); // Log session success
 
-    const { scraperId, runId } = await params;
+    const { scraperId, runId } = params; // No need for await here
     
     // Get the progress data for the run from in-memory cache
     let progress = ScraperExecutionService.getProgress(runId);
@@ -37,7 +40,8 @@ export async function GET(req: NextRequest, { params }: Params) {
         .select('*')
         .eq('id', runId)
         .single();
-      
+
+      console.log(`[Status API] DB query for runId ${runId}: Error - ${!!error}, Found - ${!!runData}`); // Log DB query result
       if (error || !runData) {
         console.error(`Run not found in database: ${runId}`, error);
         return NextResponse.json(
@@ -70,7 +74,7 @@ export async function GET(req: NextRequest, { params }: Params) {
       : Date.now() - progress.startTime;
     
     // Return the progress data
-    return NextResponse.json({
+    const responseData = {
       scraperId,
       runId,
       status: progress.status,
@@ -81,7 +85,9 @@ export async function GET(req: NextRequest, { params }: Params) {
       errorMessage: progress.errorMessage,
       progressMessages: progress.progressMessages.slice(-5), // Return only the last 5 messages
       isComplete: progress.status === 'success' || progress.status === 'failed'
-    });
+    };
+    console.log(`[Status API] Returning status for runId ${runId}: Status=${responseData.status}, isComplete=${responseData.isComplete}`); // Log return data
+    return NextResponse.json(responseData);
   } catch (error) {
     console.error("Error getting run status:", error);
     return NextResponse.json(

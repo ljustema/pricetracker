@@ -6,11 +6,12 @@
     "dev": "cross-env NODE_OPTIONS=\"--no-deprecation\" next dev",
     "dev:turbo": "cross-env NODE_OPTIONS=\"--no-deprecation\" next dev --turbopack",
     "build:next": "cross-env NODE_OPTIONS=\"--no-deprecation\" next build",
-    "build:worker": "tsc --project tsconfig.worker.json ; tsc-alias -p tsconfig.worker.json",
+    "build:worker": "tsc --project tsconfig.worker.json && tsc-alias -p tsconfig.worker.json",
     "build": "npm run build:next ; npm run build:worker",
     "start": "cross-env NODE_OPTIONS=\"--no-deprecation\" next start",
     "lint": "next lint",
-    "start:worker": "node dist/worker.js"
+    "start:worker": "node dist/worker.js",
+    "dev:worker": "npm run build:worker && node dist/worker.js"
   },
   "dependencies": {
     "@auth/supabase-adapter": "^1.8.0",
@@ -54,6 +55,8 @@
     "eslint-config-next": "15.2.4",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "tsc-alias": "^1.8.10"
+    "tsc-alias": "^1.8.10",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0"
   }
 }

@@ -1,3 +1,7 @@
+// Load environment variables from .env.local for local execution
+import * as dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
+
 import { ScraperExecutionService } from './lib/services/scraper-execution-service';
 import { createSupabaseAdminClient } from './lib/supabase/server'; // Assuming this path is correct for standalone script
 import { SupabaseClient } from '@supabase/supabase-js';
