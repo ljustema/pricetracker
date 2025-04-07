@@ -3,6 +3,10 @@ import { ScraperExecutionService } from "@/lib/services/scraper-execution-servic
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+// import { revalidatePath } from 'next/cache'; // Not needed when using 'force-dynamic'
+
+// Force dynamic execution, disable caching for this route
+export const dynamic = 'force-dynamic';
 
 interface Params {
   params: {
