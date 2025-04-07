@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ScraperExecutionService } from "@/lib/services/scraper-execution-service";
+// import { ScraperExecutionService } from "@/lib/services/scraper-execution-service"; // No longer needed, status read from DB
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
@@ -28,63 +28,44 @@ export async function GET(req: NextRequest, { params }: Params) {
 
     const { scraperId, runId } = params; // No need for await here
     
-    // Get the progress data for the run from in-memory cache
-    let progress = ScraperExecutionService.getProgress(runId);
-    
-    // If not found in memory cache, try to get from database
-    if (!progress) {
-      const supabaseAdmin = createSupabaseAdminClient();
-      // Query for the run, including both regular runs and test runs
-      const { data: runData, error } = await supabaseAdmin
-        .from('scraper_runs')
-        .select('*')
-        .eq('id', runId)
-        .single();
+    // ALWAYS query the database for the authoritative status
+    const supabaseAdmin = createSupabaseAdminClient();
+    const { data: runData, error } = await supabaseAdmin
+      .from('scraper_runs')
+      .select('*')
+      .eq('id', runId)
+      .single();
 
-      console.log(`[Status API] DB query for runId ${runId}: Error - ${!!error}, Found - ${!!runData}`); // Log DB query result
-      if (error || !runData) {
-        console.error(`Run not found in database: ${runId}`, error);
-        return NextResponse.json(
-          { error: "Run not found or expired" },
-          { status: 404 }
-        );
-      }
-      
-      // Convert database record to progress format
-      const startTime = new Date(runData.started_at).getTime();
-      const endTime = runData.completed_at ? new Date(runData.completed_at).getTime() : null;
-      
-      // Create a progress object from the database record
-      progress = {
-        status: runData.status,
-        productCount: runData.product_count || 0,
-        currentBatch: runData.current_batch || 0,
-        totalBatches: runData.total_batches || null,
-        startTime,
-        endTime,
-        executionTime: endTime ? endTime - startTime : null,
-        errorMessage: runData.error_message || null,
-        progressMessages: runData.progress_messages || []
-      };
+    console.log(`[Status API] DB query for runId ${runId}: Error - ${!!error}, Found - ${!!runData}`); // Log DB query result
+    if (error || !runData) {
+      console.error(`Run not found in database: ${runId}`, error);
+      return NextResponse.json(
+        { error: "Run not found or expired" },
+        { status: 404 }
+      );
     }
+
+    // Calculate progress details directly from the database record
+    const startTime = new Date(runData.started_at).getTime();
+    const endTime = runData.completed_at ? new Date(runData.completed_at).getTime() : null;
+    const executionTime = endTime ? endTime - startTime : null;
     
-    // Calculate elapsed time
-    const elapsedTime = progress.endTime
-      ? progress.executionTime
-      : Date.now() - progress.startTime;
+    // Calculate elapsed time (use current time if not completed)
+    const elapsedTime = endTime ? executionTime : Date.now() - startTime;
     
     // Return the progress data
     const responseData = {
       scraperId,
       runId,
-      status: progress.status,
-      productCount: progress.productCount,
-      currentBatch: progress.currentBatch,
-      totalBatches: progress.totalBatches,
+      status: runData.status,
+      productCount: runData.product_count || 0,
+      currentBatch: runData.current_batch || 0,
+      totalBatches: runData.total_batches || null,
       elapsedTime,
-      errorMessage: progress.errorMessage,
-      progressMessages: progress.progressMessages.slice(-5), // Return only the last 5 messages
-      isComplete: progress.status === 'success' || progress.status === 'failed'
+      errorMessage: runData.error_message || null,
+      // TODO: Consider storing/retrieving progress messages if needed, currently not in DB schema shown
+      progressMessages: [], // Assuming progressMessages aren't stored/needed for now
+      isComplete: runData.status === 'success' || runData.status === 'failed'
     };
     console.log(`[Status API] Returning status for runId ${runId}: Status=${responseData.status}, isComplete=${responseData.isComplete}`); // Log return data
     return NextResponse.json(responseData);
