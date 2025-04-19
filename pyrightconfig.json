@@ -1,0 +1,6 @@
+{
+  "reportMissingModuleSource": "none",
+  "reportMissingImports": false,
+  "pythonVersion": "3.9",
+  "typeCheckingMode": "basic"
+}
