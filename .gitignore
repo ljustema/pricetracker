@@ -17,6 +17,9 @@ next-env.d.ts
 /build
 /src/workers/ts-worker/dist
 
+# Docs for building
+/docs
+
 # Logs
 /logs
 *.log
