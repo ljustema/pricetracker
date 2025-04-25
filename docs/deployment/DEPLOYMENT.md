@@ -49,8 +49,8 @@ The Python Worker additionally requires:
 3. Select the GitHub repository containing the PriceTracker codebase
 4. Configure the service:
    - Root Directory: `/` (root of the repository)
-   - Build Command: `cd pricetracker && yarn install && yarn build`
-   - Start Command: `cd pricetracker && yarn start`
+   - Build Command: `yarn install && yarn build`
+   - Start Command: `yarn start`
 5. Add the required environment variables
 6. Deploy the service
 
@@ -59,7 +59,7 @@ The Python Worker additionally requires:
 1. In the same Railway project, add a new service from GitHub
 2. Select the same GitHub repository
 3. Configure the service:
-   - Root Directory: `pricetracker/src/workers/py-worker`
+   - Root Directory: `src/workers/py-worker`
    - Build Command: `pip install -r requirements.txt`
    - Start Command: `python main.py`
 4. Add the required environment variables
@@ -70,7 +70,7 @@ The Python Worker additionally requires:
 1. In the same Railway project, add a new service from GitHub
 2. Select the same GitHub repository
 3. Configure the service:
-   - Root Directory: `pricetracker/src/workers/ts-worker`
+   - Root Directory: `src/workers/ts-worker`
    - Build Command: `yarn install && yarn build`
    - Start Command: `yarn start`
 4. Add the required environment variables
@@ -81,7 +81,7 @@ The Python Worker additionally requires:
 1. In the same Railway project, add a new service from GitHub
 2. Select the same GitHub repository
 3. Configure the service:
-   - Root Directory: `pricetracker/src/workers/ts-util-worker`
+   - Root Directory: `src/workers/ts-util-worker`
    - Build Command: `yarn install && yarn build`
    - Start Command: `yarn start`
 4. Add the required environment variables
