@@ -1,14 +1,13 @@
 [phases.setup]
-nixPkgs = ["nodejs", "yarn", "bash"]
+nixPkgs = ["nodejs", "npm"]
 
 [phases.install]
-cmds = ["yarn install"]
+cmds = ["npm ci"]
 
 [phases.build]
 cmds = [
-  "bash ./railway-prebuild.sh",
-  "NODE_OPTIONS=\"--no-deprecation\" yarn build --no-lint"
+  "NODE_OPTIONS=\"--no-deprecation\" npm run build"
 ]
 
 [start]
-cmd = "NODE_OPTIONS=\"--no-deprecation\" yarn start"
+cmd = "NODE_OPTIONS=\"--no-deprecation\" npm run start"

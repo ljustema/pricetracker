@@ -71,8 +71,6 @@ The Python Worker additionally requires:
 2. Select the same GitHub repository
 3. Configure the service:
    - Root Directory: `src/workers/ts-worker`
-   - Build Command: `yarn install && yarn build`
-   - Start Command: `yarn start`
 4. Add the required environment variables
 5. Deploy the service
 
@@ -82,8 +80,6 @@ The Python Worker additionally requires:
 2. Select the same GitHub repository
 3. Configure the service:
    - Root Directory: `src/workers/ts-util-worker`
-   - Build Command: `yarn install && yarn build`
-   - Start Command: `yarn start`
 4. Add the required environment variables
 5. Deploy the service
 
