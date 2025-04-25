@@ -5,9 +5,9 @@
   "description": "TypeScript scraper execution worker for PriceTracker",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc -w -p tsconfig.json & nodemon dist/index.js"
+    "dev": "tsc -w & nodemon dist/index.js"
   },
   "keywords": [],
   "author": "",
