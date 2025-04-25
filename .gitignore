@@ -21,8 +21,9 @@ next-env.d.ts
 
 # Docs for building
 /docs
-# Allow deployment documentation
+# Allow deployment and architecture documentation
 !/docs/deployment
+!/docs/architecture
 
 # Logs
 /logs
