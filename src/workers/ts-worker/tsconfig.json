@@ -1,30 +1,30 @@
 {
-  // Inherit base settings (paths, target, lib, etc.) from the root tsconfig
   "extends": "../../../tsconfig.json",
   "compilerOptions": {
-    // --- Overrides for TS Worker Build ---
-    "module": "CommonJS",         // Use CommonJS for Node.js execution
-    "moduleResolution": "node",   // Standard Node resolution
-    "outDir": "./dist",           // Output directory relative to this tsconfig.json
-    "rootDir": "./src",           // Root directory relative to this tsconfig.json
-    "noEmit": false,              // MUST emit JavaScript files
-    "isolatedModules": false,     // Not strictly necessary here, can be false
-    "incremental": false,         // Optional, can be false for simpler builds
-    "jsx": "react",               // Keep consistent if shared libs use JSX
-    "plugins": [],                // Remove Next.js specific plugin if inherited
-
-    // Ensure source maps are generated for easier debugging
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "noEmit": false,
+    "isolatedModules": false,
+    "incremental": false,
+    "jsx": "react",
+    "plugins": [],
     "sourceMap": true,
-    // Generate declaration files (.d.ts)
     "declaration": true,
-    // Ensure declaration maps are generated if needed (useful for debugging types)
-    "declarationMap": true
+    "declarationMap": true,
+    
+    // Viktiga tillägg:
+    "target": "ES2020",         // Använd en nyare JavaScript-version
+    "lib": ["ES2020"],          // Inkludera ES2020-bibliotek
+    "esModuleInterop": true,    // Förbättrad modul-interoperabilitet
+    "resolveJsonModule": true   // Tillåt import av JSON-filer
   },
   "include": [
-    "src/**/*.ts"               // Compile all .ts files within the worker's src directory
+    "src/**/*.ts"
   ],
   "exclude": [
-    "node_modules",             // Exclude dependencies
-    "dist"                      // Exclude the output directory
+    "node_modules",
+    "dist"
   ]
 }
