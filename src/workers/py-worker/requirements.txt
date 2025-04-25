@@ -1,4 +1,13 @@
-psycopg2-binary
 requests
 python-dotenv
-flake8
+beautifulsoup4
+urllib3
+lxml
+html5lib
+aiohttp
+aiohttp-retry
+asyncio
+nest_asyncio
+selenium
+webdriver-manager
+psycopg2-binary
