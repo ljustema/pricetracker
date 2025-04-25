@@ -414,19 +414,22 @@ BEGIN
     _offset := (p_page - 1) * p_page_size;
     _limit := p_page_size;
 
-    -- Validate and sanitize sort direction
-    IF lower(p_sort_order) = 'asc' THEN
-        _sort_direction := 'ASC';
-    ELSE
-        _sort_direction := 'DESC';
-    END IF;
-
-    -- Validate sort column
-    IF p_sort_by = ANY(_allowed_sort_columns) THEN
+    -- Validate sort_by parameter to prevent null field name error
+    IF p_sort_by IS NULL OR p_sort_by = '' THEN
+        _safe_sort_by := 'created_at';
+    ELSIF p_sort_by = ANY(_allowed_sort_columns) THEN
         _safe_sort_by := p_sort_by;
     ELSE
         _safe_sort_by := 'created_at'; -- Default sort column
-        _sort_direction := 'DESC';     -- Default sort direction
+    END IF;
+
+    -- Validate and sanitize sort direction
+    IF p_sort_order IS NULL OR p_sort_order = '' THEN
+        _sort_direction := 'DESC';
+    ELSIF lower(p_sort_order) = 'asc' THEN
+        _sort_direction := 'ASC';
+    ELSE
+        _sort_direction := 'DESC';
     END IF;
 
     -- Base query construction for counting
@@ -445,38 +448,36 @@ BEGIN
     END IF;
     IF p_search IS NOT NULL AND p_search <> '' THEN
         _count_query := _count_query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
+                                   '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
     END IF;
     IF p_is_active IS NOT NULL THEN
         _count_query := _count_query || format(' AND p.is_active = %L', p_is_active);
     END IF;
-    IF p_has_price IS NOT NULL AND p_has_price = true THEN
+    IF p_has_price = TRUE THEN
         _count_query := _count_query || ' AND p.our_price IS NOT NULL';
     END IF;
+
+    -- Add competitor filter to count query
     IF p_competitor_id IS NOT NULL THEN
-        -- Ensure the product has *at least one* price change record for the specified competitor
-         _count_query := _count_query || format(' AND pc_filter.competitor_id = %L', p_competitor_id);
+        _count_query := _count_query || format('
+            AND p.id IN (
+                SELECT DISTINCT pc.product_id
+                FROM price_changes pc
+                WHERE pc.user_id = %L
+                AND pc.competitor_id = %L
+            )', p_user_id, p_competitor_id);
     END IF;
 
     -- Execute count query first
     EXECUTE _count_query INTO _total_count;
 
-    -- Base query construction for data fetching, including competitor prices
+    -- Base query construction for data fetching
     _query := format('
-        WITH LatestPrices AS (
-            SELECT
-                pc.product_id,
-                pc.competitor_id,
-                pc.new_price,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            WHERE pc.user_id = %L -- Filter by user_id early if possible
-        ),
-        FilteredProducts AS (
+        WITH FilteredProductsBase AS ( -- Renamed to avoid conflict later
             SELECT p.id
             FROM products p
             LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-            WHERE p.user_id = %L', p_user_id, p_user_id); -- user_id used twice
+            WHERE p.user_id = %L', p_user_id);
 
     -- Apply filters dynamically to data query (similar to count query)
     IF p_brand IS NOT NULL AND p_brand <> '' THEN
@@ -492,11 +493,19 @@ BEGIN
     IF p_is_active IS NOT NULL THEN
         _query := _query || format(' AND p.is_active = %L', p_is_active);
     END IF;
-    IF p_has_price IS NOT NULL AND p_has_price = true THEN
+    IF p_has_price = TRUE THEN
         _query := _query || ' AND p.our_price IS NOT NULL';
     END IF;
+
+    -- Add competitor filter to data query
     IF p_competitor_id IS NOT NULL THEN
-         _query := _query || format(' AND pc_filter.competitor_id = %L', p_competitor_id);
+        _query := _query || format('
+            AND p.id IN (
+                SELECT DISTINCT pc.product_id
+                FROM price_changes pc
+                WHERE pc.user_id = %L
+                AND pc.competitor_id = %L
+            )', p_user_id, p_competitor_id);
     END IF;
 
     -- Add grouping, sorting and pagination to the subquery selecting product IDs
@@ -504,21 +513,69 @@ BEGIN
             GROUP BY p.id -- Ensure unique product IDs before sorting/limiting
             ORDER BY p.%I %s
             LIMIT %L OFFSET %L
+        ),
+        -- CTEs for fetching and aggregating latest prices from competitors and integrations
+        LatestCompetitorPrices AS (
+            SELECT
+                pc.product_id,
+                pc.competitor_id as source_id,
+                pc.new_price,
+                ''competitor'' as source_type,
+                c.name as source_name,
+                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
+            FROM price_changes pc
+            JOIN competitors c ON pc.competitor_id = c.id
+            WHERE pc.user_id = %L AND pc.competitor_id IS NOT NULL
+        ),
+        LatestIntegrationPrices AS (
+            SELECT
+                pc.product_id,
+                pc.integration_id as source_id,
+                pc.new_price,
+                ''integration'' as source_type,
+                i.name as source_name,
+                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
+            FROM price_changes pc
+            JOIN integrations i ON pc.integration_id = i.id
+            WHERE pc.user_id = %L AND pc.integration_id IS NOT NULL
+        ),
+        AllLatestPrices AS (
+            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestCompetitorPrices WHERE rn = 1
+            UNION ALL
+            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestIntegrationPrices WHERE rn = 1
+        ),
+        AggregatedSourcePrices AS (
+            SELECT
+                product_id,
+                jsonb_object_agg(
+                    source_id::text,
+                    jsonb_build_object(''price'', new_price, ''source_type'', source_type, ''source_name'', COALESCE(source_name, ''Unknown''))
+                ) as source_prices
+            FROM AllLatestPrices
+            GROUP BY product_id
+        ),
+        AggregatedCompetitorPrices AS (
+             SELECT
+                product_id,
+                jsonb_object_agg(source_id::text, new_price) as competitor_prices
+            FROM AllLatestPrices
+            GROUP BY product_id
         )
+        -- Final SELECT joining products with aggregated prices
         SELECT
             p.*,
-            COALESCE(
-                (SELECT jsonb_object_agg(lp.competitor_id, lp.new_price)
-                 FROM LatestPrices lp
-                 WHERE lp.product_id = p.id AND lp.rn = 1),
-                ''{}''::jsonb
-            ) AS competitor_prices
+            COALESCE(asp.source_prices, ''{}''::jsonb) as source_prices,
+            COALESCE(acp.competitor_prices, ''{}''::jsonb) as competitor_prices
         FROM products p
-        JOIN FilteredProducts fp ON p.id = fp.id
+        JOIN FilteredProductsBase fp ON p.id = fp.id -- Join with the filtered product IDs
+        LEFT JOIN AggregatedSourcePrices asp ON p.id = asp.product_id
+        LEFT JOIN AggregatedCompetitorPrices acp ON p.id = acp.product_id
         ORDER BY p.%I %s', -- Apply final sorting based on the main product table fields
-        _safe_sort_by, _sort_direction, _limit, _offset, _safe_sort_by, _sort_direction
+        _safe_sort_by, _sort_direction, _limit, _offset, -- Parameters for LIMIT/OFFSET
+        p_user_id, -- For LatestCompetitorPrices CTE
+        p_user_id, -- For LatestIntegrationPrices CTE
+        _safe_sort_by, _sort_direction -- Parameters for final ORDER BY
     );
-
 
     -- Execute the main query and construct the JSON result
     EXECUTE format('SELECT json_build_object(%L, COALESCE(json_agg(q), %L::json), %L, %L) FROM (%s) q',
@@ -1173,5 +1230,95 @@ BEGIN
             last_sync_status = 'success'
         WHERE id = integration_record.integration_id;
     END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 16. Function to get the latest competitor prices for a list of products
+CREATE OR REPLACE FUNCTION get_latest_competitor_prices_for_products(
+    p_user_id UUID,
+    p_product_ids UUID[]
+)
+RETURNS TABLE (
+    id UUID,
+    product_id UUID,
+    competitor_id UUID,
+    new_price DECIMAL(10, 2),
+    changed_at TIMESTAMP WITH TIME ZONE,
+    competitors JSONB
+) AS $$
+BEGIN
+    RETURN QUERY
+    WITH LatestPrices AS (
+        SELECT
+            pc.id,
+            pc.product_id,
+            pc.competitor_id,
+            pc.new_price,
+            pc.changed_at,
+            ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
+        FROM price_changes pc
+        WHERE pc.user_id = p_user_id
+        AND pc.product_id = ANY(p_product_ids)
+        AND pc.competitor_id IS NOT NULL
+    )
+    SELECT
+        lp.id,
+        lp.product_id,
+        lp.competitor_id,
+        lp.new_price,
+        lp.changed_at,
+        jsonb_build_object(
+            'name', c.name,
+            'website', c.website
+        ) AS competitors
+    FROM LatestPrices lp
+    JOIN competitors c ON lp.competitor_id = c.id
+    WHERE lp.rn = 1
+    ORDER BY lp.product_id, lp.competitor_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 17. Function to get the latest integration prices for a list of products
+CREATE OR REPLACE FUNCTION get_latest_integration_prices_for_products(
+    p_user_id UUID,
+    p_product_ids UUID[]
+)
+RETURNS TABLE (
+    id UUID,
+    product_id UUID,
+    integration_id UUID,
+    new_price DECIMAL(10, 2),
+    changed_at TIMESTAMP WITH TIME ZONE,
+    integrations JSONB
+) AS $$
+BEGIN
+    RETURN QUERY
+    WITH LatestPrices AS (
+        SELECT
+            pc.id,
+            pc.product_id,
+            pc.integration_id,
+            pc.new_price,
+            pc.changed_at,
+            ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
+        FROM price_changes pc
+        WHERE pc.user_id = p_user_id
+        AND pc.product_id = ANY(p_product_ids)
+        AND pc.integration_id IS NOT NULL
+    )
+    SELECT
+        lp.id,
+        lp.product_id,
+        lp.integration_id,
+        lp.new_price,
+        lp.changed_at,
+        jsonb_build_object(
+            'name', i.name,
+            'platform', i.platform
+        ) AS integrations
+    FROM LatestPrices lp
+    JOIN integrations i ON lp.integration_id = i.id
+    WHERE lp.rn = 1
+    ORDER BY lp.product_id, lp.integration_id;
 END;
 $$ LANGUAGE plpgsql;
