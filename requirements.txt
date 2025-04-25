@@ -1,0 +1,13 @@
+requests
+python-dotenv
+beautifulsoup4
+urllib3
+lxml
+html5lib
+aiohttp
+aiohttp-retry
+asyncio
+nest_asyncio
+selenium
+webdriver-manager
+psycopg2-binary
