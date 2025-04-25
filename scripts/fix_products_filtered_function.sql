@@ -85,22 +85,13 @@ BEGIN
     -- Execute count query first
     EXECUTE _count_query INTO _total_count;
 
-    -- Base query construction for data fetching, including competitor prices
+    -- Base query construction for data fetching
     _query := format('
-        WITH LatestPrices AS (
-            SELECT
-                pc.product_id,
-                pc.competitor_id,
-                pc.new_price,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            WHERE pc.user_id = %L -- Filter by user_id early if possible
-        ),
-        FilteredProducts AS (
+        WITH FilteredProductsBase AS ( -- Renamed to avoid conflict later
             SELECT p.id
             FROM products p
             LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-            WHERE p.user_id = %L', p_user_id, p_user_id); -- user_id used twice
+            WHERE p.user_id = %L', p_user_id);
 
     -- Apply filters dynamically to data query (similar to count query)
     IF p_brand IS NOT NULL AND p_brand <> '' THEN
@@ -136,19 +127,68 @@ BEGIN
             GROUP BY p.id -- Ensure unique product IDs before sorting/limiting
             ORDER BY p.%I %s
             LIMIT %L OFFSET %L
+        ),
+        -- CTEs for fetching and aggregating latest prices from competitors and integrations
+        LatestCompetitorPrices AS (
+            SELECT
+                pc.product_id,
+                pc.competitor_id as source_id,
+                pc.new_price,
+                ''competitor'' as source_type,
+                c.name as source_name,
+                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
+            FROM price_changes pc
+            JOIN competitors c ON pc.competitor_id = c.id
+            WHERE pc.user_id = %L AND pc.competitor_id IS NOT NULL
+        ),
+        LatestIntegrationPrices AS (
+            SELECT
+                pc.product_id,
+                pc.integration_id as source_id,
+                pc.new_price,
+                ''integration'' as source_type,
+                i.name as source_name,
+                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
+            FROM price_changes pc
+            JOIN integrations i ON pc.integration_id = i.id
+            WHERE pc.user_id = %L AND pc.integration_id IS NOT NULL
+        ),
+        AllLatestPrices AS (
+            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestCompetitorPrices WHERE rn = 1
+            UNION ALL
+            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestIntegrationPrices WHERE rn = 1
+        ),
+        AggregatedSourcePrices AS (
+            SELECT
+                product_id,
+                jsonb_object_agg(
+                    source_id::text,
+                    jsonb_build_object(''price'', new_price, ''source_type'', source_type, ''source_name'', COALESCE(source_name, ''Unknown''))
+                ) as source_prices
+            FROM AllLatestPrices
+            GROUP BY product_id
+        ),
+        AggregatedCompetitorPrices AS (
+             SELECT
+                product_id,
+                jsonb_object_agg(source_id::text, new_price) as competitor_prices
+            FROM AllLatestPrices
+            GROUP BY product_id
         )
+        -- Final SELECT joining products with aggregated prices
         SELECT
             p.*,
-            COALESCE(
-                (SELECT jsonb_object_agg(lp.competitor_id, lp.new_price)
-                 FROM LatestPrices lp
-                 WHERE lp.product_id = p.id AND lp.rn = 1),
-                ''{}''::jsonb
-            ) AS competitor_prices
+            COALESCE(asp.source_prices, ''{}''::jsonb) as source_prices,
+            COALESCE(acp.competitor_prices, ''{}''::jsonb) as competitor_prices
         FROM products p
-        JOIN FilteredProducts fp ON p.id = fp.id
+        JOIN FilteredProductsBase fp ON p.id = fp.id -- Join with the filtered product IDs
+        LEFT JOIN AggregatedSourcePrices asp ON p.id = asp.product_id
+        LEFT JOIN AggregatedCompetitorPrices acp ON p.id = acp.product_id
         ORDER BY p.%I %s', -- Apply final sorting based on the main product table fields
-        _safe_sort_by, _sort_direction, _limit, _offset, _safe_sort_by, _sort_direction
+        _safe_sort_by, _sort_direction, _limit, _offset, -- Parameters for LIMIT/OFFSET
+        p_user_id, -- For LatestCompetitorPrices CTE
+        p_user_id, -- For LatestIntegrationPrices CTE
+        _safe_sort_by, _sort_direction -- Parameters for final ORDER BY
     );
 
     -- Execute the main query and construct the JSON result
