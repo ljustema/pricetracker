@@ -25,7 +25,7 @@ PriceTracker uses a decoupled architecture with separate worker services for exe
 - **TypeScript Utility Worker**: A dedicated service for handling integrations and other utility tasks
 
 This architecture improves reliability, scalability, and maintainability by separating the web application from the resource-intensive scraping tasks.
-
+For more details, see [worker-architecture.md](./docs/architecture/worker-architecture.md).
 
 ## Deployment
 
