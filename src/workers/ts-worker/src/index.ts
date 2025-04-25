@@ -60,14 +60,33 @@ const WORKER_TYPE = 'typescript'; // Define the type of scraper this worker hand
 const POLLING_INTERVAL_MS = 5000; // Poll every 5 seconds (adjust as needed)
 const SCRIPT_TIMEOUT_SECONDS = 900; // Timeout for script execution (15 minutes)
 const DB_BATCH_SIZE = 100; // How many products to buffer before saving to DB
+const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 
 console.log(`Starting TypeScript Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
+
+// Track last successful job time and last health check time
+let lastJobTime = Date.now();
+let lastHealthCheckTime = Date.now();
+let lastPollMessageTime = 0; // To reduce polling message frequency
 
 async function fetchAndProcessJob() {
   let job: any = null; // Define job variable in the outer scope for the catch block
 
   try {
-    console.log('Polling for pending jobs...');
+    // Periodically check for long periods of inactivity and log health status
+    const currentTime = Date.now();
+    if (currentTime - lastHealthCheckTime > HEALTH_CHECK_INTERVAL_MS) {
+      const inactivityDuration = (currentTime - lastJobTime) / 1000; // Convert to seconds
+      console.log(`Worker health check: ${inactivityDuration.toFixed(1)} seconds since last job processed. Worker is still running.`);
+      lastHealthCheckTime = currentTime;
+    }
+
+    // Only log polling message once every minute to reduce noise
+    if (currentTime - lastPollMessageTime > 60000) { // 1 minute
+      console.log('Polling for pending jobs...');
+      lastPollMessageTime = currentTime;
+    }
+
     // 1. Fetch a pending job for this worker type
     // TODO: Implement atomic claim (e.g., using RPC or careful UPDATE ... RETURNING)
     const { data: fetchedJob, error: fetchError } = await supabase
@@ -113,6 +132,9 @@ async function fetchAndProcessJob() {
     // For now, assume claim was successful if no error.
 
     console.log(`Job ${job.id} claimed successfully.`);
+
+    // Update last job time when a job is successfully claimed
+    lastJobTime = Date.now();
 
     // 3. Fetch the scraper script
     const { data: scraper, error: scraperError } = await supabase

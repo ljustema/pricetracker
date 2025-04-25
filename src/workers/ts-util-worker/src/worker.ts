@@ -29,6 +29,7 @@ console.log('Using Supabase URL:', supabaseUrl);
 const supabase = createClient<any>(supabaseUrl, supabaseServiceRoleKey);
 
 const POLLING_INTERVAL_MS = 5000; // Poll every 5 seconds (adjust as needed)
+const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 
 console.log(`Starting TypeScript Utility Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
 
@@ -42,19 +43,28 @@ interface SyncResult {
   logDetails?: Record<string, any>[];
 }
 
-// Track last poll message time
+// Track last poll message time and job time
 let lastPollMessageTime = 0;
+let lastJobTime = Date.now();
+let lastHealthCheckTime = Date.now();
 
 // Function to fetch and process integration jobs
 async function fetchAndProcessIntegrationJob() {
   let job: any = null; // Define job variable in the outer scope for the catch block
 
   try {
-    // Only log polling message once every 5 minutes
-    const now = Date.now();
-    if (now - lastPollMessageTime > 5 * 60 * 1000) {
+    // Periodically check for long periods of inactivity and log health status
+    const currentTime = Date.now();
+    if (currentTime - lastHealthCheckTime > HEALTH_CHECK_INTERVAL_MS) {
+      const inactivityDuration = (currentTime - lastJobTime) / 1000; // Convert to seconds
+      console.log(`Worker health check: ${inactivityDuration.toFixed(1)} seconds since last job processed. Worker is still running.`);
+      lastHealthCheckTime = currentTime;
+    }
+
+    // Only log polling message once every minute to reduce noise
+    if (currentTime - lastPollMessageTime > 60000) { // 1 minute
       console.log('Polling for pending integration jobs...');
-      lastPollMessageTime = now;
+      lastPollMessageTime = currentTime;
     }
     // 1. Fetch a pending job
     const { data: fetchedJob, error: fetchError } = await supabase
@@ -92,6 +102,9 @@ async function fetchAndProcessIntegrationJob() {
     }
 
     console.log(`Integration job ${job.id} claimed successfully.`);
+
+    // Update last job time when a job is successfully claimed
+    lastJobTime = Date.now();
 
     // 3. Fetch the integration details
     const { data: integration, error: integrationError } = await supabase
