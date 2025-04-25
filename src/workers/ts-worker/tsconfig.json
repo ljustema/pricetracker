@@ -17,7 +17,8 @@
     "baseUrl": ".",
     "noEmit": false,
     "isolatedModules": false,
-    "jsx": "react"
+    "jsx": "react",
+    "forceConsistentCasingInFileNames": true
   },
   "include": [
     "src/**/*.ts"

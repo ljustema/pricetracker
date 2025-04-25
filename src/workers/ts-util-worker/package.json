@@ -5,18 +5,21 @@
   "description": "TypeScript utility worker for PriceTracker integrations",
   "main": "dist/worker.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc",
     "start": "node dist/worker.js",
-    "dev": "tsc -p tsconfig.json && node dist/worker.js"
+    "dev": "tsc && node dist/worker.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "dotenv": "^16.5.0",
-    "fast-xml-parser": "^5.2.0"
+    "fast-xml-parser": "^5.2.0",
+    "@supabase/supabase-js": "^2.0.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.9"
+    "nodemon": "^3.1.9",
+    "typescript": "^5.0.0",
+    "@types/node": "^18.0.0"
   }
 }
