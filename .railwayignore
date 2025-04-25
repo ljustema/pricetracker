@@ -1,2 +1,0 @@
-# Ignore the problematic database.types.ts file
-src/lib/supabase/database.types.ts
