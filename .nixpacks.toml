@@ -1,0 +1,15 @@
+[phases.setup]
+nixPkgs = ["nodejs", "yarn"]
+
+[phases.install]
+cmds = ["yarn install"]
+
+[phases.build]
+cmds = [
+  "rm -f src/lib/supabase/database.types.ts",
+  "echo 'export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]; export type Database = any;' > src/lib/supabase/database.types.ts",
+  "yarn build"
+]
+
+[start]
+cmd = "yarn start"
