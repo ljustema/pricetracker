@@ -1,13 +1,12 @@
 [phases.setup]
-nixPkgs = ["nodejs", "yarn"]
+nixPkgs = ["nodejs", "yarn", "bash"]
 
 [phases.install]
 cmds = ["yarn install"]
 
 [phases.build]
 cmds = [
-  "rm -f src/lib/supabase/database.types.ts",
-  "echo 'export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]; export type Database = any;' > src/lib/supabase/database.types.ts",
+  "bash ./railway-prebuild.sh",
   "NODE_OPTIONS=\"--no-deprecation\" yarn build --no-lint"
 ]
 
