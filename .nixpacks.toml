@@ -12,4 +12,4 @@ cmds = [
 ]
 
 [start]
-cmd = "node dist/index.js"
+cmd = "npm run start"

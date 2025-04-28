@@ -7,7 +7,8 @@
     "dev:turbo": "cross-env NODE_OPTIONS=\"--no-deprecation\" next dev --turbopack",
     "build:next": "cross-env NODE_OPTIONS=\"--no-deprecation\" next build --no-lint",
     "build": "npm run build:next",
-    "start": "cross-env NODE_OPTIONS=\"--no-deprecation\" next start",
+    "start": "next start",
+    "start:with-options": "cross-env NODE_OPTIONS=\"--no-deprecation\" next start",
     "lint": "next lint"
   },
   "dependencies": {

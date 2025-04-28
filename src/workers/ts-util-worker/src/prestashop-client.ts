@@ -708,16 +708,8 @@ private async getDefaultCurrency(): Promise<string> {
         // Extract wholesale_price
         const wholesalePrice = this.getNumberValue(product.wholesale_price, 0);
 
-        // Try to get supplier_reference first, then fall back to reference if needed
+        // Only use supplier_reference as SKU, never use reference as fallback
         let reference = this.getStringValue(product.supplier_reference);
-
-        // If supplier_reference is empty, try to use reference as fallback
-        if (!reference && product.reference) {
-          reference = this.getStringValue(product.reference);
-          if (reference) {
-            console.log(`Product ${id}: Using reference as fallback for SKU: ${reference}`);
-          }
-        }
 
         // Extract EAN13
         const ean13 = this.getStringValue(product.ean13);
