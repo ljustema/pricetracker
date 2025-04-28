@@ -1,4 +1,3 @@
-# IMPORTANT: Updated requirements.txt - Last modified: ${new Date().toISOString()}
 # HTTP and networking
 requests
 urllib3

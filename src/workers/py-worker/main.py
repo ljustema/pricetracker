@@ -1,7 +1,4 @@
 # pricetracker/src/workers/py-worker/main.py
-# IMPORTANT REBUILD TRIGGER - Updated with comprehensive scraping libraries
-# Added: selectolax, parsel, pyquery, httpx, playwright, pandas, numpy, etc.
-# Last modified: ${new Date().toISOString()}
 
 import os
 import time
