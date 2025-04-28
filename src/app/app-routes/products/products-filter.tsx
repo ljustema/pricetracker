@@ -4,6 +4,31 @@ import React, { useState, useEffect, useMemo } from "react";
 import { ReadonlyURLSearchParams } from "next/navigation";
 import type { ComplexFiltersState } from './products-client-wrapper';
 
+// Move debounce function outside the component so it doesn't get recreated on every render
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function debounce<T extends (...args: any[]) => void>(func: T, delay: number) {
+  let timeoutId: NodeJS.Timeout | null = null;
+  // The returned function signature uses Parameters<T> to match the input function `func`
+  const debouncedFunction = (...args: Parameters<T>) => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    timeoutId = setTimeout(() => {
+      func(...args); // Call the original function with the correct arguments
+    }, delay);
+  };
+
+  // Add a cancel method to the debounced function
+  debouncedFunction.cancel = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+
+  return debouncedFunction;
+}
+
 interface ProductsFilterProps {
   brands: { id: string; name: string }[];
   competitors: { id: string; name: string }[];
@@ -50,33 +75,6 @@ export default function ProductsFilter({
   }, [searchParams, sortBy, currentFilters.sortBy, currentFilters.sortOrder, onComplexFilterChange]);
 
 
-  // Debounced search handler (optional but good practice)
-  // Make debounce generic to correctly type the passed function and its arguments
-  // Revert constraint to any[] for flexibility, but keep Parameters<T> for the returned function
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const debounce = <T extends (...args: any[]) => void>(func: T, delay: number) => {
-    let timeoutId: NodeJS.Timeout | null = null;
-    // The returned function signature uses Parameters<T> to match the input function `func`
-    const debouncedFunction = (...args: Parameters<T>) => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      timeoutId = setTimeout(() => {
-        func(...args); // Call the original function with the correct arguments
-      }, delay);
-    };
-
-    // Add a cancel method to the debounced function
-    debouncedFunction.cancel = () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-    };
-
-    return debouncedFunction;
-  };
-
   // Use useMemo to memoize the debounced function itself
   const debouncedSearchHandler = useMemo(
     () => debounce((value: string) => {
@@ -84,7 +82,7 @@ export default function ProductsFilter({
         onComplexFilterChange({ search: value });
         // # Reason: The URL update will be handled by the useEffect in ProductsClientWrapper,
         // which reacts to changes in complexFilters.
-      }, 300),
+      }, 300), // Use a shorter delay for better responsiveness
     [onComplexFilterChange] // Depend on the stable callback prop
   );
 
@@ -95,17 +93,30 @@ export default function ProductsFilter({
   useEffect(() => {
     // Make sure we're always dealing with strings to avoid controlled/uncontrolled input warnings
     const currentSearch = currentFilters.search || "";
+    // Only update if the value is different to avoid infinite loops
+    // Don't include searchValue in the dependency array to prevent circular updates
     if (currentSearch !== searchValue) {
       setSearchValue(currentSearch);
     }
-  }, [currentFilters.search, searchValue]);
+  }, [currentFilters.search]); // Removed searchValue from dependencies
 
   // Handler for immediate search input change (updates UI instantly)
   const handleSearchInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newValue = e.target.value;
-    setSearchValue(newValue);
-    // Call the memoized debounced function
-    debouncedSearchHandler(newValue);
+    // Just update the local state, don't trigger search
+    setSearchValue(e.target.value);
+  };
+
+  // Handler for search form submission
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    // Trigger search on form submission
+    debouncedSearchHandler(searchValue);
+  };
+
+  // Handler for clearing the search
+  const handleClearSearch = () => {
+    setSearchValue("");
+    debouncedSearchHandler("");
   };
 
   // # Reason: No longer managing URL updates directly in this component.
@@ -114,22 +125,63 @@ export default function ProductsFilter({
 
   return (
     <div className="mb-6 space-y-4">
-      {/* Search input */}
-      <div className="relative">
-        <input
-          type="text"
-          placeholder="Search products..."
-          className="w-full rounded-md border-gray-300 pl-10 focus:border-indigo-500 focus:ring-indigo-500"
-          // Use controlled input with value from local state
-          value={searchValue}
-          onChange={handleSearchInputChange} // Use debounced handler
-        />
-        <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-          <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
+      {/* Search input with form */}
+      <form onSubmit={handleSearchSubmit} className="relative mb-2">
+        <div className="flex items-center">
+          <div className="relative flex-grow">
+            <input
+              type="text"
+              placeholder="Search products..."
+              className={`w-full rounded-l-md border py-2 pl-10 pr-8 focus:outline-none focus:ring-indigo-500 text-sm ${
+                currentFilters.search ? 'border-indigo-500 bg-indigo-50' : 'border-gray-300'
+              }`}
+              value={searchValue}
+              onChange={handleSearchInputChange}
+            />
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+              <svg
+                className={`h-5 w-5 ${currentFilters.search ? 'text-indigo-500' : 'text-gray-400'}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+            {searchValue && (
+              <button
+                type="button"
+                onClick={handleClearSearch}
+                className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-500 hover:text-gray-700"
+                aria-label="Clear search"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+          <button
+            type="submit"
+            className="rounded-r-md border border-l-0 border-gray-300 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+          >
+            Search
+          </button>
         </div>
-      </div>
+        {currentFilters.search && (
+          <div className="mt-2 flex items-center text-sm text-indigo-600">
+            <span className="mr-2">Showing results for:</span>
+            <span className="font-medium">{currentFilters.search}</span>
+            <button
+              type="button"
+              onClick={handleClearSearch}
+              className="ml-2 text-indigo-500 hover:text-indigo-700 underline"
+            >
+              Clear
+            </button>
+          </div>
+        )}
+      </form>
 
       <div className="grid gap-4 md:grid-cols-4">
         <div>
