@@ -1,4 +1,5 @@
 # pricetracker/src/workers/py-worker/main.py
+# Updated with additional scraping libraries in requirements.txt
 
 import os
 import time
