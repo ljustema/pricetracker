@@ -1,13 +1,39 @@
+# HTTP and networking
 requests
-python-dotenv
-beautifulsoup4
 urllib3
-lxml
-html5lib
 aiohttp
 aiohttp-retry
-asyncio
-nest_asyncio
+httpx
+
+# HTML parsing and scraping
+beautifulsoup4
+lxml
+html5lib
+selectolax
+parsel
+pyquery
+
+# Browser automation
 selenium
 webdriver-manager
+playwright
+
+# Async support
+asyncio
+nest_asyncio
+
+# Data processing
+pandas
+numpy
+
+# Database
 psycopg2-binary
+
+# Utilities
+python-dotenv
+tqdm
+fake-useragent
+parse
+w3lib
+extruct
+jsonpath-ng
