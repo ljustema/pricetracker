@@ -334,7 +334,7 @@ export default function ProductEditPage() {
 
             <div>
               <label htmlFor="wholesale_price" className="block text-sm font-medium">
-                Cost Price
+                Wholesale Price
               </label>
               <div className="relative mt-1 rounded-md shadow-sm">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">

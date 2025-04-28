@@ -31,11 +31,8 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
 
     const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
-    // Use the hardcoded user ID for testing
-    // const userId = ensureUUID(session.user.id);
-    const userId = "4529fe61-c0e8-4af8-b934-d0cc73506212";
-    console.log("Session user ID:", session.user.id);
-    console.log("Using user ID:", userId);
+    // Convert the NextAuth user ID to a UUID
+    const userId = ensureUUID(session.user.id);
 
     // Check if the user exists in the auth.users table
     const { data: authUser, error: authUserError } = await supabase
@@ -46,8 +43,6 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
 
     // If the user doesn't exist in auth.users, create one
     if (!authUser || authUserError) {
-      console.log("User not found in auth.users, creating one...");
-
       // Create a user in the auth.users table
       const { error: createUserError } = await supabase.rpc("create_user_for_nextauth", {
         user_id: userId,
@@ -290,30 +285,7 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
         .not("competitor_id", "is", null) // Ensure competitor_id is not null
         .order("changed_at", { ascending: false });
 
-      console.log("Competitor prices query result:", {
-        data: competitorPricesData?.length || 0,
-        error: competitorError?.message || null,
-        productIds: productIds.length,
-        userId
-      });
 
-      // Log the first few competitor prices to see what's in them
-      if (competitorPricesData && competitorPricesData.length > 0) {
-        console.log("First competitor price:", competitorPricesData[0]);
-
-        // Check if the competitor IDs in the price_changes table match the competitor IDs in the competitors table
-        if (competitors && competitors.length > 0) {
-          const priceChangeCompetitorIds = competitorPricesData.map(p => p.competitor_id);
-          const uniquePriceChangeCompetitorIds = [...new Set(priceChangeCompetitorIds)];
-          const competitorIds = competitors.map(c => c.id);
-
-          console.log("Competitor ID comparison in price_changes:", {
-            uniquePriceChangeCompetitorIds,
-            competitorIds,
-            priceChangeCompetitorIdsMatchCompetitorIds: uniquePriceChangeCompetitorIds.some(id => competitorIds.includes(id))
-          });
-        }
-      }
 
       if (competitorError) {
         console.error("Error fetching competitor prices:", competitorError);
@@ -360,20 +332,6 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
 
       // Process competitor prices
       if (competitorPrices && competitorPrices.length > 0) {
-        console.log("Processing competitor prices:", competitorPrices.length);
-        console.log("Sample competitor price:", competitorPrices[0]);
-
-        // Check if the competitor IDs in the price_changes table match the competitor IDs in the competitors table
-        if (competitors && competitors.length > 0) {
-          const priceChangeCompetitorIds = [...new Set(competitorPrices.map(p => p.competitor_id))];
-          const competitorIds = competitors.map(c => c.id);
-
-          console.log("Direct competitor ID comparison:", {
-            priceChangeCompetitorIds,
-            competitorIds,
-            match: priceChangeCompetitorIds.some(id => competitorIds.includes(id))
-          });
-        }
 
         // Group competitor prices by product_id and competitor_id to get only the latest price
         const latestCompetitorPrices = new Map();
@@ -386,7 +344,7 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
           }
         });
 
-        console.log("Latest competitor prices map size:", latestCompetitorPrices.size);
+
 
         // Add the latest competitor prices to both maps
         latestCompetitorPrices.forEach(price => {
@@ -423,20 +381,10 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
           }
         });
 
-        // Log the first product's competitor prices
-        if (products && products.length > 0) {
-          const firstProductId = products[0].id;
-          console.log("First product ID:", firstProductId);
-          console.log("First product competitor prices:", competitorPricesMap.get(firstProductId));
-        }
-      } else {
-        console.log("No competitor prices found");
       }
 
       // Process integration prices
       if (integrationPrices && integrationPrices.length > 0) {
-        console.log("Processing integration prices:", integrationPrices.length);
-        console.log("Sample integration price:", integrationPrices[0]);
 
         // Group integration prices by product_id and integration_id to get only the latest price
         const latestIntegrationPrices = new Map();
@@ -449,7 +397,7 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
           }
         });
 
-        console.log("Latest integration prices map size:", latestIntegrationPrices.size);
+
 
         // Add the latest integration prices to both maps
         latestIntegrationPrices.forEach(price => {
@@ -486,13 +434,6 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
           }
         });
 
-        // Log the first product's integration prices
-        if (products && products.length > 0) {
-          const firstProductId = products[0].id;
-          console.log("First product integration prices:", sourcePricesMap.get(firstProductId));
-        }
-      } else {
-        console.log("No integration prices found");
       }
 
       // Add competitor_prices and source_prices to each product

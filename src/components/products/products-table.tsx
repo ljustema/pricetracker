@@ -4,6 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import DeleteButton from "@/components/ui/delete-button";
 import type { Product } from "@/lib/services/product-service"; // Import the shared type
+import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter"; // Import our new hook
 
 // Removed unused CompetitorPrice interface
 
@@ -16,32 +17,7 @@ interface ProductsTableProps {
 }
 
 export default function ProductsTable({ products, competitors, onDelete }: ProductsTableProps) {
-  // Log the products and competitors
-  console.log("ProductsTable - products:", products.length);
-  console.log("ProductsTable - competitors:", competitors.length);
-  console.log("ProductsTable - First product:", products[0]);
-  console.log("ProductsTable - First competitor:", competitors[0]);
-
-  // Log the competitor prices for the first product
-  if (products.length > 0) {
-    console.log("ProductsTable - First product competitor_prices:", products[0].competitor_prices);
-    console.log("ProductsTable - First product source_prices:", products[0].source_prices);
-
-    // Check if the competitor IDs match the keys in the competitor_prices object
-    if (competitors.length > 0) {
-      const firstProductCompetitorPricesKeys = Object.keys(products[0].competitor_prices || {});
-      const competitorIds = competitors.map(c => c.id);
-      const competitorIdsStr = competitors.map(c => String(c.id));
-
-      console.log("ProductsTable - Competitor ID comparison:", {
-        firstProductCompetitorPricesKeys,
-        competitorIds,
-        competitorIdsStr,
-        keysMatchIds: competitorIds.some(id => firstProductCompetitorPricesKeys.includes(id)),
-        keysMatchIdsStr: competitorIdsStr.some(id => firstProductCompetitorPricesKeys.includes(id))
-      });
-    }
-  }
+  const { formatPrice } = useCurrencyFormatter();
 
   // Ensure products have competitor_prices and source_prices
   const productsWithPrices = products.map(product => ({
@@ -126,7 +102,7 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
               <td className="whitespace-nowrap px-6 py-4">
                 {product.our_price ? (
                   <div className="text-sm font-medium text-gray-900">
-                    ${product.our_price.toFixed(2)}
+                    {formatPrice(product.our_price)}
                   </div>
                 ) : (
                   <div className="text-sm text-gray-500">-</div>
@@ -138,26 +114,7 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                 let sourceData, price, sourceType;
 
                 // Get competitor price for this product
-                // Only log for the first product and first competitor to avoid console spam
-                if (product.id === productsWithPrices[0]?.id && competitor.id === competitors[0]?.id) {
-                  // Check if the competitor ID is in the source_prices or competitor_prices keys
-                  const sourcePricesKeys = Object.keys(product.source_prices || {});
-                  const competitorPricesKeys = Object.keys(product.competitor_prices || {});
-                  const competitorIdStr = String(competitor.id);
 
-                  console.log(`ProductsTable - Looking up price for product ${product.id}, competitor ${competitor.id}:`, {
-                    source_prices_keys: sourcePricesKeys,
-                    competitor_prices_keys: competitorPricesKeys,
-                    source_price_for_competitor: product.source_prices?.[competitor.id],
-                    competitor_price_for_competitor: product.competitor_prices?.[competitor.id],
-                    source_price_for_competitor_str: product.source_prices?.[competitorIdStr],
-                    competitor_price_for_competitor_str: product.competitor_prices?.[competitorIdStr],
-                    competitor_id_in_source_prices: sourcePricesKeys.includes(competitor.id),
-                    competitor_id_str_in_source_prices: sourcePricesKeys.includes(competitorIdStr),
-                    competitor_id_in_competitor_prices: competitorPricesKeys.includes(competitor.id),
-                    competitor_id_str_in_competitor_prices: competitorPricesKeys.includes(competitorIdStr)
-                  });
-                }
 
                 try {
                   // Ensure competitor ID is a string
@@ -170,16 +127,12 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                   if (sourceData) {
                     price = sourceData.price;
                     sourceType = sourceData.source_type;
-                    if (product.id === productsWithPrices[0]?.id && competitor.id === competitors[0]?.id) {
-                      console.log(`Found price in source_prices: ${price}`);
-                    }
+
                   } else {
                     // Otherwise, fall back to competitor_prices
                     price = product.competitor_prices?.[competitorIdStr];
                     sourceType = "competitor";
-                    if (product.id === productsWithPrices[0]?.id && competitor.id === competitors[0]?.id) {
-                      console.log(`Found price in competitor_prices: ${price}`);
-                    }
+
                   }
 
                   // If we still don't have a price, try searching through all keys
@@ -192,9 +145,7 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                         if (sourceData) {
                           price = sourceData.price;
                           sourceType = sourceData.source_type;
-                          if (product.id === productsWithPrices[0]?.id && competitor.id === competitors[0]?.id) {
-                            console.log(`Found price in source_prices with partial match (key: ${key}): ${price}`);
-                          }
+
                           break;
                         }
                       }
@@ -207,9 +158,7 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                         if (key.includes(competitor.id) || competitor.id.includes(key)) {
                           price = product.competitor_prices?.[key];
                           sourceType = "competitor";
-                          if (product.id === productsWithPrices[0]?.id && competitor.id === competitors[0]?.id) {
-                            console.log(`Found price in competitor_prices with partial match (key: ${key}): ${price}`);
-                          }
+
                           break;
                         }
                       }
@@ -236,7 +185,7 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                               ? "text-green-600"
                               : "text-gray-900"
                         }`}>
-                          ${price.toFixed(2)}
+                          {formatPrice(price)}
                         </div>
                         {sourceType === "integration" && (
                           <span className="ml-1 rounded-full bg-blue-100 px-1 py-0.5 text-xs text-blue-800">

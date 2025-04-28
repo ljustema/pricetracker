@@ -5,6 +5,7 @@ import Image from "next/image";
 import DeleteButton from "@/components/ui/delete-button";
 import type { Product } from "@/lib/services/product-service"; // Import the shared type
 import type { Competitor } from "@/lib/services/competitor-service"; // Import Competitor type
+import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter"; // Import our new hook
 
 // Removed local CompetitorPrice and Product interfaces
 
@@ -16,6 +17,7 @@ interface ProductCardProps {
 
 export default function ProductCard({ product, competitors, onDelete }: ProductCardProps) {
   // No need for router or isDeleting state as they're not used
+  const { formatPrice } = useCurrencyFormatter();
 
   // Ensure product has competitor_prices and source_prices
   const productWithPrices = {
@@ -111,7 +113,7 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
           <div>
             {productWithPrices.our_price ? (
               <span className="font-medium text-gray-900">
-                Our Price: ${productWithPrices.our_price.toFixed(2)}
+                Our Price: {formatPrice(productWithPrices.our_price)}
               </span>
             ) : (
               <span className="text-gray-500">No price set</span>
@@ -165,7 +167,7 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                             ? "text-green-600 font-medium"
                             : "text-gray-600"
                       }`}>
-                        ${price.toFixed(2)}
+                        {formatPrice(price)}
                       </span>
                     </li>
                   );
@@ -207,7 +209,7 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                             ? "text-green-600 font-medium"
                             : "text-gray-600"
                       }`}>
-                        ${price.toFixed(2)}
+                        {formatPrice(price)}
                       </span>
                     </li>
                   );

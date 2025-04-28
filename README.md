@@ -12,7 +12,7 @@ PriceTracker is a SaaS application designed to help businesses monitor competito
 -   **Insights**: Analyze price trends and derive actionable market insights.
 -   **Scrapers**: AI-powered generation of web scrapers. Support for custom Python scrapers and TypeScript scrapers.
 -   **Integrations** Integrate you own ecommerce to get your products and prices.
--   **Settings**: Configure account settings and potential third-party integrations.
+-   **Settings**: Configure user profile, company information, subscription plans, and advanced settings like data cleanup, export, matching rules, and price thresholds.
 -   **Admin**: User management and system-level configuration.
 
 ## Worker Architecture

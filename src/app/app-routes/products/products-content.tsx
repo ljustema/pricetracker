@@ -44,8 +44,7 @@ export default function ProductsContent({
   const itemsPerPage = 12; // Re-declare for use in rendering logic
   // --- End: Define constants and derived variables ---
 
-  // Log the competitors
-  console.log("ProductsContent - competitors:", competitors);
+
 
   // # Reason: Use the useSearchParams hook here to get the *current* client-side URL params for rendering-specific logic.
   // Data fetching parameters are derived from complexFilters state.
@@ -144,16 +143,6 @@ export default function ProductsContent({
         }
 
         const { data: apiProducts, totalCount: apiTotalCount } = await response.json();
-
-        // Log the API response to see what we're getting
-        console.log("API Response:", {
-          productsCount: apiProducts?.length || 0,
-          firstProduct: apiProducts?.[0],
-          firstProductHasCompetitorPrices: apiProducts?.[0]?.competitor_prices ?
-            Object.keys(apiProducts[0].competitor_prices).length > 0 : false,
-          firstProductHasSourcePrices: apiProducts?.[0]?.source_prices ?
-            Object.keys(apiProducts[0].source_prices).length > 0 : false
-        });
 
         // IMPORTANT: Transform competitor_prices from API response if needed
         // Assuming API returns the object format { competitor_id: price }
