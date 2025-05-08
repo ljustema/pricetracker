@@ -3,8 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { ScraperConfig, ScrapedProduct } from "@/lib/services/scraper-service";
-import ScraperForm from "@/components/scrapers/scraper-form";
-import PythonScraperForm from "@/components/scrapers/script-scraper-form";
+import ScriptScraperForm from "@/components/scrapers/script-scraper-form";
 import TestResultsModal from "@/components/scrapers/test-results-modal";
 import { useSession } from "next-auth/react";
 
@@ -17,20 +16,20 @@ export default function EditScraperPage() {
   const [scraper, setScraper] = useState<ScraperConfig | null>(null);
   const [testResults, _setTestResults] = useState<ScrapedProduct[]>([]);
   const [isTestModalOpen, setIsTestModalOpen] = useState(false);
-  
+
   const scraperId = params.scraperId as string;
-  
+
   // Fetch the scraper data
   useEffect(() => {
     const fetchScraper = async () => {
       try {
         const response = await fetch(`/api/scrapers/${scraperId}`);
         const data = await response.json();
-        
+
         if (!response.ok) {
           throw new Error(data.error || 'Failed to fetch scraper');
         }
-        
+
         setScraper(data);
       } catch (err) {
         console.error("Error fetching scraper:", err);
@@ -39,12 +38,12 @@ export default function EditScraperPage() {
         setIsLoading(false);
       }
     };
-    
+
     if (session?.user) {
       fetchScraper();
     }
   }, [scraperId, session]);
-  
+
   if (!session?.user) {
     return (
       <div className="container mx-auto px-4 py-8">
@@ -54,7 +53,7 @@ export default function EditScraperPage() {
       </div>
     );
   }
-  
+
   if (isLoading) {
     return (
       <div className="container mx-auto px-4 py-8">
@@ -65,7 +64,7 @@ export default function EditScraperPage() {
       </div>
     );
   }
-  
+
   if (error || !scraper) {
     return (
       <div className="container mx-auto px-4 py-8">
@@ -75,11 +74,11 @@ export default function EditScraperPage() {
       </div>
     );
   }
-  
+
   const handleSubmit = async (data: Partial<ScraperConfig>) => {
     setIsLoading(true);
     setError(null);
-    
+
     try {
       // Call the API route to update the scraper
       const response = await fetch(`/api/scrapers/${scraperId}`, {
@@ -89,13 +88,13 @@ export default function EditScraperPage() {
         },
         body: JSON.stringify(data),
       });
-      
+
       const responseData = await response.json();
-      
+
       if (!response.ok) {
         throw new Error(responseData.error || 'Failed to update scraper');
       }
-      
+
       // Redirect to the scrapers page
       router.push("/app-routes/scrapers");
     } catch (err) {
@@ -105,64 +104,53 @@ export default function EditScraperPage() {
       setIsLoading(false);
     }
   };
-  
+
   const handleCancel = () => {
     router.back();
   };
-  
-  const handlePythonScraperSuccess = (_scraperId: string) => {
+
+  const handleScriptScraperSuccess = (_scraperId: string) => {
     router.push("/app-routes/scrapers");
   };
-  
+
   // Render the appropriate form based on the scraper type
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="mb-8">
         <h1 className="text-3xl font-bold">
-          {scraper.scraper_type === 'python'
-            ? 'Update Python Scraper'
-            : scraper.scraper_type === 'typescript'
-            ? 'Update TypeScript Scraper'
+          {scraper.scraper_type === 'python' || scraper.scraper_type === 'typescript'
+            ? `Update ${scraper.scraper_type === 'python' ? 'Python' : 'TypeScript'} Scraper`
             : 'Edit Scraper'}
         </h1>
         <p className="mt-2 text-gray-600">
           Update your scraper configuration to improve data collection.
         </p>
       </div>
-      
+
       {error && (
         <div className="mb-6 rounded-lg bg-red-50 p-4 text-red-800">
           <p className="font-medium">Error</p>
           <p>{error}</p>
         </div>
       )}
-      
+
       <div className="rounded-lg bg-white p-6 shadow-sm">
-        {scraper.scraper_type === 'python' ? (
-          <div>
-            <p className="mb-4 text-sm text-gray-500">
-              To edit this Python scraper, please use the validation process to ensure your script works correctly.
-            </p>
-            <PythonScraperForm
-              competitorId={scraper.competitor_id}
-              scraperType={scraper.scraper_type}
-              onSuccess={handlePythonScraperSuccess}
-              onCancel={handleCancel}
-              initialScript={scraper.python_script}
-              isUpdate={true}
-              scraperId={scraperId}
-            />
-          </div>
-        ) : (
-          <ScraperForm
-            initialData={scraper}
+        <div>
+          <p className="mb-4 text-sm text-gray-500">
+            To edit this {scraper.scraper_type === 'python' ? 'Python' : 'TypeScript'} scraper, please use the validation process to ensure your script works correctly.
+          </p>
+          <ScriptScraperForm
             competitorId={scraper.competitor_id}
-            onSubmit={handleSubmit}
+            scraperType={scraper.scraper_type}
+            onSuccess={handleScriptScraperSuccess}
             onCancel={handleCancel}
+            initialScript={scraper.scraper_type === 'python' ? scraper.python_script : scraper.typescript_script}
+            isUpdate={true}
+            scraperId={scraperId}
           />
-        )}
+        </div>
       </div>
-      
+
       {/* Test Results Modal */}
       <TestResultsModal
         isOpen={isTestModalOpen}

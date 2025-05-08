@@ -98,7 +98,7 @@ export async function GET(
     while (retries < maxRetries) {
       const res = await supabaseAdmin
         .from('scraper_runs')
-        .select('*')
+        .select('*, claimed_by_worker_at') // Explicitly include claimed_by_worker_at
         .eq('id', runId)
         .single();
       runData = res.data;
@@ -144,6 +144,19 @@ export async function GET(
 
     // Calculate elapsed time (use current time if not completed)
     const elapsedTime = endTime ? executionTime : Date.now() - startTime;
+
+    // Check if the job has been claimed by a worker but status is 'failed'
+    // This could indicate a race condition where the main app marked it as failed
+    // but the worker is still processing it
+    if (runData.status === 'failed' && runData.claimed_by_worker_at) {
+      const claimedAt = new Date(runData.claimed_by_worker_at).getTime();
+      const timeSinceClaimed = Date.now() - claimedAt;
+
+      // If it was claimed recently (within 5 minutes), log a warning about possible race condition
+      if (timeSinceClaimed < 5 * 60 * 1000) { // 5 minutes in milliseconds
+        console.warn(`[Status API] Possible race condition detected for run ${runId}: Status is 'failed' but was claimed by worker ${Math.round(timeSinceClaimed/1000)}s ago`);
+      }
+    }
 
     // Extract phase information from progress messages
     const progressMessages = await getRecentProgressMessages(runId, 10);
@@ -202,30 +215,78 @@ export async function GET(
       // Log additional details that might help diagnose the issue
       console.log(`[Status API] Run details: Test run: ${runData.is_test_run}, Started at: ${runData.started_at}, Completed at: ${runData.completed_at || 'Not completed'}`);
 
-      // Extract and log detailed error information from progress_messages if available
-      // Worker now stores error details as a JSON string in progress_messages
-      if (runData.progress_messages && Array.isArray(runData.progress_messages)) {
-        // Find the specific error details log entry
-        const errorLogEntryStr = runData.progress_messages.find((msg: string) => msg.includes('"type": "error_details"'));
-        if (errorLogEntryStr) {
+      // First check if error_details field exists in the database record
+      if (runData.error_details) {
+        console.log(`[Status API] Found error_details in database for run ${runId}`);
+        responseData.errorDetails = runData.error_details;
+      }
+      // If no error_details in the database, try to extract from progress_messages
+      else if (runData.progress_messages) {
+        console.log(`[Status API] Checking progress_messages for error details for run ${runId}`);
+
+        // Check if progress_messages is an array or a JSON string
+        let messagesArray = runData.progress_messages;
+        if (typeof messagesArray === 'string') {
           try {
-            const errorLogEntry = JSON.parse(errorLogEntryStr);
-            if (errorLogEntry.details) {
-               console.log(`[Status API] Extracted error details for run ${runId}`);
-               responseData.errorDetails = errorLogEntry.details; // Assign extracted details
-            } else {
-               console.warn(`[Status API] Found error details log entry for ${runId}, but 'details' key is missing.`);
+            messagesArray = JSON.parse(messagesArray);
+          } catch (e) {
+            console.error(`[Status API] Failed to parse progress_messages JSON: ${e}`);
+            messagesArray = [];
+          }
+        }
+
+        if (Array.isArray(messagesArray)) {
+          // Look for error details in progress_messages
+          // First look for ERROR_DETAILS phase
+          const errorDetailsEntry = messagesArray.find((msg: any) =>
+            (typeof msg === 'object' && msg.phase === 'ERROR_DETAILS') ||
+            (typeof msg === 'string' && msg.includes('"phase": "ERROR_DETAILS"'))
+          );
+
+          if (errorDetailsEntry) {
+            try {
+              // Parse if it's a string
+              const entry = typeof errorDetailsEntry === 'string'
+                ? JSON.parse(errorDetailsEntry)
+                : errorDetailsEntry;
+
+              if (entry.data && entry.data.error_details) {
+                console.log(`[Status API] Found error details in ERROR_DETAILS entry for run ${runId}`);
+                responseData.errorDetails = entry.data.error_details;
+              }
+            } catch (e) {
+              console.error(`[Status API] Error parsing ERROR_DETAILS entry: ${e}`);
             }
-          } catch (parseError) {
-            console.error(`[Status API] Failed to parse error details JSON from progress_messages for run ${runId}: ${parseError}`);
-            // Optionally add the raw string if parsing fails
-            // responseData.errorDetails = `Failed to parse details: ${errorLogEntryStr}`;
+          }
+          // If no specific ERROR_DETAILS entry, look for any error entries
+          else {
+            const errorEntries = messagesArray.filter((msg: any) =>
+              (typeof msg === 'object' && msg.lvl === 'ERROR') ||
+              (typeof msg === 'string' && msg.includes('"lvl": "ERROR"'))
+            );
+
+            if (errorEntries.length > 0) {
+              console.log(`[Status API] Found ${errorEntries.length} error entries in progress_messages for run ${runId}`);
+              // Combine error messages
+              const errorMessages = errorEntries.map((entry: any) => {
+                try {
+                  const parsedEntry = typeof entry === 'string' ? JSON.parse(entry) : entry;
+                  return parsedEntry.msg || JSON.stringify(parsedEntry);
+                } catch (e) {
+                  return typeof entry === 'string' ? entry : JSON.stringify(entry);
+                }
+              });
+
+              responseData.errorDetails = errorMessages.join('\n');
+            } else {
+              console.log(`[Status API] No error entries found in progress_messages for run ${runId}`);
+            }
           }
         } else {
-           console.log(`[Status API] No specific error details log entry found in progress_messages for failed run ${runId}.`);
+          console.log(`[Status API] progress_messages is not an array for run ${runId}`);
         }
       } else {
-         console.log(`[Status API] No progress_messages found for failed run ${runId}.`);
+        console.log(`[Status API] No progress_messages found for failed run ${runId}.`);
       }
     } else if (runData.status === 'completed' || runData.status === 'success') {
       console.log(`[Status API] Run ${runId} completed successfully with ${runData.product_count || 0} products`);

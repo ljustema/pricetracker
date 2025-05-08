@@ -6,10 +6,32 @@ import fsSync from 'fs'; // Use fs for synchronous operations like existsSync/mk
 import path from 'path'; // Added for path manipulation
 import os from 'os'; // Added for temp directory
 import util from 'util'; // Added for promisify (if needed later)
+import { debugLog, logToDatabase } from './debug-logger'; // Import our debug logger
+
+// Log that the worker has started with our changes
+debugLog('TypeScript worker started with debug logging enabled');
 // import ivm from 'isolated-vm'; // Removed isolated-vm
 
 // Import Database type for type safety
 import type { Database } from './database.types';
+
+// Type for the data returned by the claim_next_scraper_job RPC
+interface ClaimedJobData {
+  id: string; // UUID
+  created_at: string; // TIMESTAMPTZ
+  scraper_id: string; // UUID
+  user_id: string; // UUID
+  status: string;
+  scraper_type: string;
+  started_at: string | null; // TIMESTAMPTZ
+  completed_at: string | null; // TIMESTAMPTZ
+  error_message: string | null;
+  error_details: any | null; // JSONB
+  product_count: number | null;
+  is_test_run: boolean | null;
+  is_validation_run: boolean | null;
+  fetched_competitor_id: string | null; // UUID
+}
 
 // Define types for context and results (align with scraper template)
 interface ScriptContext {
@@ -20,8 +42,11 @@ interface ScriptContext {
   ownProductSkuBrands?: { sku: string; brand: string; brand_id?: string }[];
   scrapeOnlyOwnProducts?: boolean;
   isTestRun?: boolean;
-  log: (level: string, message: string, data?: any) => void; // Add log function
-  // TODO: Add safe fetch wrapper if needed
+  isValidation?: boolean; // Scraper template expects this
+  run_id?: string; // Scraper template expects this
+  // The scraper template defines a log function in its context,
+  // but it seems to use console.error for PROGRESS/ERROR which this worker already captures.
+  // So, we might not need to pass a log function in the context object itself.
 }
 
 interface ScrapedProductData {
@@ -33,6 +58,7 @@ interface ScrapedProductData {
   sku?: string;
   brand?: string;
   ean?: string;
+  competitor_id?: string; // Added competitor_id field
   // Add other fields as needed
 }
 
@@ -58,7 +84,7 @@ const supabase = createClient<Database>(supabaseUrl, supabaseServiceRoleKey);
 
 const WORKER_TYPE = 'typescript'; // Define the type of scraper this worker handles
 const POLLING_INTERVAL_MS = 5000; // Poll every 5 seconds (adjust as needed)
-const SCRIPT_TIMEOUT_SECONDS = 900; // Timeout for script execution (15 minutes)
+const SCRIPT_TIMEOUT_SECONDS = 1200; // Timeout for script execution (20 minutes)
 const DB_BATCH_SIZE = 100; // How many products to buffer before saving to DB
 const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 
@@ -87,51 +113,32 @@ async function fetchAndProcessJob() {
       lastPollMessageTime = currentTime;
     }
 
-    // 1. Fetch a pending job for this worker type
-    // TODO: Implement atomic claim (e.g., using RPC or careful UPDATE ... RETURNING)
-    const { data: fetchedJob, error: fetchError } = await supabase
-      .from('scraper_runs')
-      .select('*')
-      .eq('status', 'pending')
-      .eq('scraper_type', WORKER_TYPE)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    // 1. Atomically fetch and claim a pending job using RPC
+    const { data: rpcData, error: rpcError } = await supabase.rpc(
+      'claim_next_scraper_job',
+      { worker_type_filter: WORKER_TYPE }
+    );
 
-    if (fetchError) {
-      console.error('Error fetching job:', fetchError);
+    if (rpcError) {
+      console.error('Error calling claim_next_scraper_job RPC:', rpcError);
+      logStructured(null, 'error', 'RPC_CALL_ERROR', `Error calling claim_next_scraper_job: ${rpcError.message}`, { details: rpcError.details, hint: rpcError.hint });
       return; // Wait for the next poll interval
     }
 
-    if (!fetchedJob) {
-      // console.log('No pending jobs found.'); // Can be noisy, uncomment if needed
-      return; // No job found, wait for the next poll interval
-    }
-    job = fetchedJob; // Assign to the outer scope variable
+    // rpcData will be an array of ClaimedJobData.
+    // If the array is empty or null, no job was claimed.
+    const claimedJobs = rpcData as ClaimedJobData[] | null;
 
-    console.log(`Found job: ${job.id}, Scraper ID: ${job.scraper_id}`);
-
-    // 2. Claim the job (Update status to 'running')
-    // This needs to be atomic to prevent multiple workers picking up the same job.
-    // A database function (RPC) is often the best way.
-    // For now, a simple update (less safe):
-    const { error: claimError } = await supabase
-      .from('scraper_runs')
-      .update({ status: 'running', started_at: new Date().toISOString() })
-      .eq('id', job.id)
-      .eq('status', 'pending'); // Ensure it's still pending
-
-    if (claimError) {
-      console.error(`Error claiming job ${job.id}:`, claimError);
-      job = null; // Reset job if claim failed
-      return; // Failed to claim, maybe another worker got it. Wait.
+    if (!claimedJobs || claimedJobs.length === 0) {
+      // console.log('No pending jobs found or claimed.'); // Can be noisy
+      return; // No job claimed, wait for the next poll interval
     }
 
-    // Check if the update actually happened (if another worker claimed it between fetch and update)
-    // This check is imperfect without atomicity. A better approach is needed.
-    // For now, assume claim was successful if no error.
+    job = claimedJobs[0]; // Assign the first (and should be only) claimed job
 
-    console.log(`Job ${job.id} claimed successfully.`);
+    // The job status is already 'running' and started_at is set by the RPC function.
+    console.log(`Job ${job.id} claimed successfully via RPC. Scraper ID: ${job.scraper_id}`);
+    logStructured(job.id, 'info', 'JOB_CLAIMED', `Job ${job.id} claimed successfully via RPC.`);
 
     // Update last job time when a job is successfully claimed
     lastJobTime = Date.now();
@@ -212,45 +219,145 @@ async function fetchAndProcessJob() {
     let productCount = 0;
     const productsBuffer: ScrapedProductData[] = [];
     let tmpScriptPath: string | null = null;
+    let compilationResult: any = null; // Store compilation result for cleanup
     const startTime = Date.now();
 
     try {
-        // Prepare context
-        const context = {
-            run_id: job.id,
-            scraper_id: job.scraper_id,
-            user_id: job.user_id,
-            competitor_id: job.competitor_id, // Assuming competitor_id is available on the job object
-            is_test_run: job.is_test_run ?? false,
-            filter_by_active_brands: scraper.filter_by_active_brands ?? false,
-            active_brand_names: activeBrandNames,
-            active_brand_ids: activeBrandIds,
-            scrape_only_own_products: scraper.scrape_only_own_products ?? false,
-            own_product_eans: ownProductEans,
-            own_product_sku_brands: ownProductSkuBrands,
-        };
-        const contextJson = JSON.stringify(context);
+        // Prepare context (simplified, not used in this version)
         logStructured(job.id, 'debug', 'SETUP', 'Prepared script context');
 
-        // Create temporary file
-        const tmpDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'pricetracker-ts-'));
-        tmpScriptPath = path.join(tmpDir, 'scraper.js'); // Assume script is JS or will be transpiled
-        await fsPromises.writeFile(tmpScriptPath, scraper.typescript_script, 'utf-8');
-        logStructured(job.id, 'info', 'SUBPROCESS_EXEC', `Executing script: ${tmpScriptPath}`);
+        // Import the TypeScript compiler
+        const { compileTypeScriptScraper, cleanupCompilation } = await import('./typescript-compiler');
 
-        // Spawn subprocess
+        // Compile the TypeScript script
+        logStructured(job.id, 'info', 'TYPESCRIPT_COMPILATION', 'Compiling TypeScript script...');
+        debugLog(`Compiling TypeScript script for job ${job.id}`);
+
+        // Declare the compilationResult variable at a higher scope
+        let compilationResult;
+
+        try {
+          // Log the first 100 characters of the script for debugging
+          const scriptPreview = scraper.typescript_script.substring(0, 100).replace(/\n/g, ' ');
+          debugLog(`Script preview: ${scriptPreview}...`);
+
+          compilationResult = await compileTypeScriptScraper(scraper.typescript_script, {
+            timeout: 60000 // 60 seconds timeout for compilation
+          });
+
+          if (!compilationResult || !compilationResult.success || !compilationResult.outputPath) {
+            const errorMessage = compilationResult?.error || 'Unknown compilation error';
+            logStructured(job.id, 'error', 'TYPESCRIPT_COMPILATION', `Compilation failed: ${errorMessage}`);
+            debugLog(`Compilation failed for job ${job.id}: ${errorMessage}`);
+
+            // Clean up temporary directory if it exists
+            if (compilationResult?.tempDir) {
+              await cleanupCompilation(compilationResult.tempDir);
+            }
+
+            throw new Error(`TypeScript compilation failed: ${errorMessage}`);
+          }
+
+          // Log success
+          debugLog(`Compilation successful for job ${job.id}`);
+          logStructured(job.id, 'info', 'TYPESCRIPT_COMPILATION', 'TypeScript compilation completed successfully');
+        } catch (compileError) {
+          // Enhanced error handling for compilation errors
+          const errorMessage = compileError instanceof Error ? compileError.message : String(compileError);
+          const errorStack = compileError instanceof Error ? compileError.stack : null;
+
+          logStructured(job.id, 'error', 'TYPESCRIPT_COMPILATION', `Compilation error: ${errorMessage}`, { stack: errorStack });
+          debugLog(`Compilation error for job ${job.id}: ${errorMessage}`);
+
+          if (errorStack) {
+            debugLog(`Error stack: ${errorStack}`);
+          }
+
+          throw new Error(`TypeScript compilation failed: ${errorMessage}`);
+        }
+
+        // Use the compiled JavaScript file
+        // Make sure compilationResult is defined and has an outputPath
+        if (!compilationResult || !compilationResult.outputPath) {
+            throw new Error('Compilation result is missing or invalid. This should not happen as we already checked for success.');
+        }
+
+        tmpScriptPath = compilationResult.outputPath;
+        logStructured(job.id, 'info', 'SUBPROCESS_EXEC', `Executing compiled script: ${tmpScriptPath}`);
+        debugLog(`Executing compiled script for job ${job.id}: ${tmpScriptPath}`);
+
+        // Spawn subprocess - simplified approach
         const command = 'node';
-        const args = [tmpScriptPath, 'scrape', `--context=${contextJson}`];
-        const process = spawn(command, args, {
+
+        // Prepare the context object for the scraper script
+        // Ensure this matches the ScriptContext interface expected by the scraper scripts
+        const scriptContextForScraper = {
+          activeBrandNames,
+          activeBrandIds, // Though scraper template might not use this directly, good to have if ScriptContext implies it
+          filterByActiveBrands: scraper.filter_by_active_brands,
+          ownProductEans,
+          ownProductSkuBrands,
+          scrapeOnlyOwnProducts: scraper.scrape_only_own_products,
+          isTestRun: job.is_test_run ?? false, // Default to false if undefined
+          isValidation: job.is_validation_run ?? false, // Assuming a field like is_validation_run on the job, or default
+          run_id: job.id,
+        };
+        const scriptContextString = JSON.stringify(scriptContextForScraper);
+        const base64ContextString = Buffer.from(scriptContextString).toString('base64');
+
+        const args = [tmpScriptPath, 'scrape', '--context', base64ContextString];
+        // Log the command we're about to execute
+        debugLog(`Executing command: ${command} ${args.join(' ')}`);
+        await logToDatabase(job.id, `Executing command: ${command} ${args.join(' ')}`);
+
+        // Add a small delay before spawning the process to ensure everything is ready
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Fix TypeScript type issues with spawn
+        const childProcess = spawn(command, args as string[], {
             stdio: ['pipe', 'pipe', 'pipe'], // stdin, stdout, stderr
+            shell: true, // Use shell to ensure proper command execution on Windows
+            cwd: path.dirname(tmpScriptPath), // Set working directory to the script directory
+            detached: false, // Make sure the child process is attached to the parent
+            windowsHide: true // Hide the console window on Windows
         });
 
         let stdoutData = '';
         let stderrData = '';
         const scriptErrors: string[] = [];
 
+        // Log that the process was spawned
+        debugLog(`Process spawned with PID: ${childProcess.pid || 'unknown'}`);
+        await logToDatabase(job.id, `Process spawned with PID: ${childProcess.pid || 'unknown'}`);
+
+        // Add error handler for the spawn itself
+        childProcess.on('error', (err: Error) => {
+            debugLog(`Process spawn error: ${err.message}`);
+            logToDatabase(job.id, `Process spawn error: ${err.message}`, { error: err.toString(), stack: err.stack });
+
+            // Make sure we update the job status on error
+            // Use direct update instead of a separate function
+            try {
+                supabase
+                    .from('scraper_runs')
+                    .update({
+                        status: 'failed',
+                        error_message: `Process spawn error: ${err.message}`,
+                        error_details: err.stack || 'No stack trace available',
+                        completed_at: new Date().toISOString()
+                    })
+                    .eq('id', job.id)
+                    .then(() => {
+                        debugLog(`Updated job status to failed after spawn error`);
+                    });
+            } catch (updateErr) {
+                const errorMessage = updateErr instanceof Error ? updateErr.message : String(updateErr);
+                debugLog(`Failed to update job status after spawn error: ${errorMessage}`);
+            }
+        });
+
         // Handle stdout
-        process.stdout?.on('data', (data) => {
+        childProcess.stdout?.on('data', (data: Buffer) => {
             stdoutData += data.toString();
             // Process line by line
             let newlineIndex;
@@ -267,7 +374,8 @@ async function fetchAndProcessJob() {
                                 const batchToSave = [...productsBuffer]; // Copy buffer
                                 productsBuffer.length = 0; // Clear buffer
                                 logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Saving batch of ${batchToSave.length} products...`);
-                                saveScrapedProducts(job.id, job.user_id, job.competitor_id, batchToSave)
+                                // Use job.fetched_competitor_id from the RPC response
+                                saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave)
                                     .then(() => logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted batch.`))
                                     .catch(err => logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save product batch: ${err.message}`));
                             }
@@ -281,19 +389,50 @@ async function fetchAndProcessJob() {
             }
         });
 
-        // Handle stderr
-        process.stderr?.on('data', (data) => {
+        // Handle stderr with improved error capture
+        childProcess.stderr?.on('data', (data: Buffer) => {
             const lines = data.toString().split('\n');
             lines.forEach((line: string) => {
                 line = line.trim();
                 if (!line) return;
                 stderrData += line + '\n'; // Store for potential error details
+
+                // Log all stderr output to the debug log for better debugging
+                debugLog(`STDERR: ${line}`);
+
+                // Also log to database for better visibility
+                logToDatabase(job.id, `STDERR: ${line}`);
+
                 if (line.startsWith("PROGRESS:")) {
                     logStructured(job.id, 'info', 'SCRIPT_LOG', line.substring(9).trim());
                 } else if (line.startsWith("ERROR:")) {
                     const errorLine = line.substring(6).trim();
                     logStructured(job.id, 'error', 'SCRIPT_LOG', errorLine);
                     scriptErrors.push(errorLine);
+                } else if (
+                    line.includes("Error:") ||
+                    line.includes("error:") ||
+                    line.includes("Exception:") ||
+                    line.includes("exception:") ||
+                    line.includes("TypeError:") ||
+                    line.includes("ReferenceError:") ||
+                    line.includes("SyntaxError:") ||
+                    line.includes("Cannot find module") ||
+                    line.includes("is not defined") ||
+                    line.includes("is not a function") ||
+                    line.includes("Cannot read property") ||
+                    line.includes("Cannot read properties")
+                ) {
+                    // Capture error-like messages that don't have the ERROR: prefix
+                    logStructured(job.id, 'error', 'SCRIPT_ERROR', line);
+                    scriptErrors.push(line);
+                } else if (line.includes("at ") && (line.includes(".js:") || line.includes(".ts:"))) {
+                    // This looks like a stack trace line
+                    logStructured(job.id, 'debug', 'SCRIPT_STACKTRACE', line);
+                    // Add to errors if we've seen an error recently
+                    if (scriptErrors.length > 0) {
+                        scriptErrors.push(line);
+                    }
                 } else {
                     logStructured(job.id, 'debug', 'SCRIPT_STDERR', line);
                 }
@@ -304,56 +443,196 @@ async function fetchAndProcessJob() {
         await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
                 logStructured(job.id, 'error', 'JOB_TIMEOUT', `Script execution timed out after ${SCRIPT_TIMEOUT_SECONDS} seconds.`);
-                process.kill('SIGTERM'); // Attempt graceful shutdown first
+                childProcess.kill(); // Use kill without signal for TypeScript compatibility
                 // Give it a moment to terminate before force killing
                 setTimeout(() => {
-                     if (!process.killed) {
-                        process.kill('SIGKILL');
+                     try {
+                        // Check if process is still running and force kill if needed
+                        if (childProcess.exitCode === null) {
+                            childProcess.kill();
+                        }
+                     } catch (killError) {
+                        debugLog(`Error during force kill: ${killError}`);
                      }
                 }, 2000);
                 reject(new Error(`Script execution timed out after ${SCRIPT_TIMEOUT_SECONDS} seconds.`));
             }, SCRIPT_TIMEOUT_SECONDS * 1000);
 
-            process.on('error', (err) => {
+            childProcess.on('error', (err: Error) => {
                 clearTimeout(timeout);
                 logStructured(job.id, 'error', 'SUBPROCESS_ERROR', `Failed to start subprocess: ${err.message}`);
                 reject(err);
             });
 
-            process.on('close', (code) => {
+            childProcess.on('close', (code: number | null) => {
                 clearTimeout(timeout);
                 logStructured(job.id, 'info', 'SUBPROCESS_EXEC', `Script finished with exit code: ${code}`);
+
+                // Debug log the exit code
+                debugLog(`Process exited with code: ${code}`);
+                logToDatabase(job.id, `Process exited with code: ${code}`);
+
+                // If the process failed, log the stderr output
+                if (code !== 0) {
+                    // Log the full stderr output for debugging
+                    debugLog(`Process exited with non-zero code ${code}. Full stderr output:`);
+                    debugLog(stderrData);
+
+                    // Log to database for better visibility
+                    logToDatabase(job.id, `Process exited with non-zero code ${code}. Full stderr output:`);
+
+                    // Extract a more meaningful error message from script errors or stderr
+                    let detailedErrorMessage = '';
+
+                    // First check for script errors (these are more likely to be user-friendly)
+                    if (scriptErrors.length > 0) {
+                        detailedErrorMessage = scriptErrors[0];
+                    } else {
+                        // Look for common error patterns in stderr
+                        const errorPatterns = [
+                            /Error:\s*(.+?)(?:\n|$)/i,
+                            /TypeError:\s*(.+?)(?:\n|$)/i,
+                            /ReferenceError:\s*(.+?)(?:\n|$)/i,
+                            /SyntaxError:\s*(.+?)(?:\n|$)/i,
+                            /Cannot find module\s*['"](.*?)['"](?:\n|$)/i,
+                            /(.*?)\s*is not defined(?:\n|$)/i,
+                            /(.*?)\s*is not a function(?:\n|$)/i,
+                            /Cannot read propert(?:y|ies) of\s*(.+?)(?:\n|$)/i
+                        ];
+
+                        for (const pattern of errorPatterns) {
+                            const match = stderrData.match(pattern);
+                            if (match && match[0]) {
+                                detailedErrorMessage = match[0].trim();
+                                break;
+                            }
+                        }
+                    }
+
+                    // Try to extract the most relevant error message
+                    const errorLines = stderrData.split('\n')
+                        .filter((line: string) =>
+                            line.includes('Error:') ||
+                            line.includes('TypeError:') ||
+                            line.includes('ReferenceError:') ||
+                            line.includes('SyntaxError:') ||
+                            line.includes('Cannot find module') ||
+                            line.includes('is not defined') ||
+                            line.includes('is not a function') ||
+                            line.includes('Cannot read property') ||
+                            line.includes('Cannot read properties')
+                        );
+
+                    if (errorLines.length > 0) {
+                        // Log the most relevant error message
+                        const primaryError = errorLines[0].trim();
+                        debugLog(`Primary error: ${primaryError}`);
+                        logToDatabase(job.id, `Primary error: ${primaryError}`);
+
+                        // If we don't have a detailed error message yet, use the primary error
+                        if (!detailedErrorMessage) {
+                            detailedErrorMessage = primaryError;
+                        }
+                    }
+
+                    // Use the detailed error message if we found one
+                    if (detailedErrorMessage) {
+                        errorMessage = detailedErrorMessage;
+                    } else {
+                        errorMessage = `Script execution failed with non-zero exit code ${code}.`;
+                    }
+
+                    // Create a structured error details object
+                    const errorDetailsObj = {
+                        exitCode: code,
+                        scriptErrors: scriptErrors,
+                        fullStderr: stderrData.trim(),
+                        primaryError: detailedErrorMessage || `Script execution failed with non-zero exit code ${code}.`,
+                        command: `${command} ${args.join(' ')}`,
+                        timestamp: new Date().toISOString(),
+                        contextInfo: {
+                            isTestRun: job.is_test_run,
+                            scraperId: job.scraper_id,
+                            runId: job.id,
+                            scriptPath: tmpScriptPath
+                        }
+                    };
+
+                    // Convert to string for storage
+                    errorDetails = JSON.stringify(errorDetailsObj, null, 2);
+
+                    debugLog(`Using error message: ${errorMessage}`);
+                    logToDatabase(job.id, `Using error message: ${errorMessage}`);
+                }
 
                 // Save any remaining products
                 if (productsBuffer.length > 0) {
                     const batchToSave = [...productsBuffer];
                     productsBuffer.length = 0;
                     logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Saving final batch of ${batchToSave.length} products...`);
-                    saveScrapedProducts(job.id, job.user_id, job.competitor_id, batchToSave)
+                    saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave)
                          .then(() => logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted final batch.`))
                          .catch(err => logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save final product batch: ${err.message}`));
                 }
 
                 if (code === 0) {
-                    if (scriptErrors.length > 0) {
+                    // For test runs, always mark as completed even if there are script errors
+                    if (job.is_test_run) {
+                        finalStatus = 'completed';
+                        logStructured(job.id, 'info', 'JOB_COMPLETION', `Test run completed successfully. Total products processed: ${productCount}`);
+                    } else if (scriptErrors.length > 0) {
                         finalStatus = 'failed';
                         errorMessage = `Script finished successfully (exit code 0) but reported errors via stderr.`;
                         errorDetails = scriptErrors.join('\n');
                         logStructured(job.id, 'error', 'JOB_COMPLETION', errorMessage);
-                    } else {
-                        finalStatus = 'completed';
-                        logStructured(job.id, 'info', 'JOB_COMPLETION', `Job completed successfully. Total products processed: ${productCount}`);
+
+                        // Create a more structured error details object
+                        const errorDetailsObj = {
+                            scriptErrors: scriptErrors,
+                            command: `${command} ${args.join(' ')}`,
+                            timestamp: new Date().toISOString(),
+                            fullStderr: stderrData.trim(),
+                            primaryError: scriptErrors.length > 0 ? scriptErrors[0] : 'Unknown error',
+                            contextInfo: {
+                                isTestRun: job.is_test_run,
+                                scraperId: job.scraper_id,
+                                runId: job.id,
+                                scriptPath: tmpScriptPath
+                            }
+                        };
+
+                        // Convert to string for storage
+                        errorDetails = JSON.stringify(errorDetailsObj, null, 2);
                     }
-                } else {
-                    finalStatus = 'failed';
-                    errorMessage = `Script execution failed with non-zero exit code ${code}.`;
-                    // Combine script errors and other stderr lines
-                    const stderrLines = stderrData.trim().split('\n').filter(l => !l.startsWith("PROGRESS:") && !l.startsWith("ERROR:"));
-                    errorDetails = [...scriptErrors, ...stderrLines].join('\n').trim();
-                    logStructured(job.id, 'error', 'JOB_COMPLETION', errorMessage);
-                    if (errorDetails) {
-                        logStructured(job.id, 'error', 'JOB_COMPLETION', `Stderr Output:\n${errorDetails}`);
+
+                    // Log the error
+                    logStructured(job.id, 'error', 'JOB_COMPLETION', errorMessage || 'Unknown error');
+
+                    // Log a summary of the error details
+                    if (scriptErrors.length > 0) {
+                        logStructured(job.id, 'error', 'JOB_COMPLETION', `Script reported ${scriptErrors.length} errors. First error: ${scriptErrors[0]}`);
                     }
+
+                    // Extract relevant lines from stderr for logging
+                    const stderrLines = stderrData.split('\n').filter(Boolean);
+                    if (stderrLines.length > 0) {
+                        const relevantLines = stderrLines.filter((line: string) =>
+                            line.includes("Error") ||
+                            line.includes("error") ||
+                            line.includes("Exception") ||
+                            line.includes("exception") ||
+                            line.includes("SyntaxError") ||
+                            line.includes("ReferenceError") ||
+                            line.includes("TypeError")
+                        );
+
+                        if (relevantLines.length > 0) {
+                            logStructured(job.id, 'error', 'JOB_COMPLETION', `Relevant stderr output:\n${relevantLines.slice(0, 5).join('\n')}`);
+                        } else {
+                            logStructured(job.id, 'error', 'JOB_COMPLETION', `Stderr Output (first 5 lines):\n${stderrLines.slice(0, 5).join('\n')}`);
+                        }
+                    }
+
                 }
                 resolve();
             });
@@ -365,14 +644,36 @@ async function fetchAndProcessJob() {
         errorDetails = err.stack || null;
         logStructured(job.id, 'error', 'JOB_PROCESSING', errorMessage, { stack: err.stack });
     } finally {
-        // Cleanup temporary file
+        // Cleanup temporary files
         if (tmpScriptPath) {
             try {
-                await fsPromises.unlink(tmpScriptPath);
-                await fsPromises.rmdir(path.dirname(tmpScriptPath)); // Remove the temp directory
-                logStructured(job.id, 'debug', 'CLEANUP', `Removed temporary script and directory: ${tmpScriptPath}`);
+                // Check if this is a compiled script (from our TypeScript compiler)
+                if (compilationResult?.tempDir) {
+                    // Import the cleanupCompilation function if needed
+                    const { cleanupCompilation } = await import('./typescript-compiler');
+
+                    // Use the cleanupCompilation function to clean up the entire directory
+                    await cleanupCompilation(compilationResult.tempDir);
+                    logStructured(job.id, 'debug', 'CLEANUP', `Cleaned up compilation directory: ${compilationResult.tempDir}`);
+                } else {
+                    // Fall back to the original cleanup logic for non-compiled scripts
+                    try {
+                        await fsPromises.unlink(tmpScriptPath);
+                        // Only try to remove the directory if it exists
+                        const dirPath = path.dirname(tmpScriptPath);
+                        if (fsSync.existsSync(dirPath)) {
+                            // Use recursive removal instead of rmdir
+                            await fsPromises.rm(dirPath, { recursive: true, force: true });
+                        }
+                        logStructured(job.id, 'debug', 'CLEANUP', `Removed temporary script and directory: ${tmpScriptPath}`);
+                    } catch (unlinkError) {
+                        logStructured(job.id, 'warn', 'CLEANUP', `Error removing temporary script: ${unlinkError instanceof Error ? unlinkError.message : String(unlinkError)}`);
+                    }
+                }
             } catch (cleanupError: any) {
-                logStructured(job.id, 'warn', 'CLEANUP', `Error removing temporary script ${tmpScriptPath}: ${cleanupError.message}`);
+                const errorMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+                logStructured(job.id, 'warn', 'CLEANUP', `Error cleaning up temporary files: ${errorMessage}`);
+                debugLog(`Error cleaning up temporary files for job ${job.id}: ${errorMessage}`);
             }
         }
     }
@@ -382,38 +683,106 @@ async function fetchAndProcessJob() {
     const productsPerSecond = executionTimeMs > 0 ? (productCount / (executionTimeMs / 1000.0)) : 0;
 
     try {
+        // Create update object
+        const updateData: any = {
+            status: finalStatus,
+            completed_at: new Date().toISOString(),
+            product_count: productCount,
+            execution_time_ms: executionTimeMs,
+            error_message: errorMessage ? errorMessage.substring(0, 1000) : null, // Truncate error message
+            products_per_second: productsPerSecond,
+        };
+
+        // Add error_details if we have them
+        if (errorDetails) {
+            updateData.error_details = errorDetails.substring(0, 10000); // Truncate to avoid DB limits
+
+            // Also log the error details to a special log entry that will be stored in progress_messages
+            logStructured(job.id, 'error', 'ERROR_DETAILS', 'Full error details', {
+                error_message: errorMessage,
+                error_details: errorDetails
+            });
+        }
+
+        // Update the database
         await supabase
             .from('scraper_runs')
-            .update({
-                status: finalStatus, // Use the status determined by subprocess logic
-                completed_at: new Date().toISOString(),
-                product_count: productCount,
-                execution_time_ms: executionTimeMs,
-                error_message: errorMessage ? errorMessage.substring(0, 1000) : null, // Truncate error message
-                // error_details column might not exist, add if needed or store in progress_messages
-                // error_details: errorDetails ? errorDetails.substring(0, 4000) : null, // Truncate error details
-                products_per_second: productsPerSecond,
-            })
+            .update(updateData)
             .eq('id', job.id);
+
         logStructured(job.id, 'info', 'COMPLETION', `Job final status updated to: ${finalStatus}.`);
     } catch (updateError: any) {
          logStructured(job.id, 'error', 'JOB_STATUS_UPDATE', `Critical error updating final job status: ${updateError.message}`);
+
+         // Try to log the error details separately if the main update failed
+         if (errorDetails && job.id) {
+             try {
+                 // Log error details to progress_messages via RPC
+                 const errorLogEntry = {
+                     ts: new Date().toISOString(),
+                     lvl: 'ERROR',
+                     phase: 'ERROR_DETAILS_FALLBACK',
+                     msg: 'Error details (fallback storage)',
+                     data: {
+                         error_message: errorMessage,
+                         error_details: errorDetails.substring(0, 5000) // Smaller truncation for fallback
+                     }
+                 };
+
+                 await supabase.rpc('append_log_to_scraper_run', {
+                     p_run_id: job.id,
+                     p_log_entry: errorLogEntry
+                 });
+             } catch (logError) {
+                 console.error(`Failed to store error details via fallback method: ${logError}`);
+             }
+         }
     }
 
   } catch (error) {
     console.error('Unhandled error during job processing:', error);
+
     // Attempt to mark the job as failed if an error occurred after it was claimed
     if (job && job.id) { // Check if job was successfully fetched and potentially claimed
         try {
+            // Create a detailed error object
+            const errorObj = {
+                message: error instanceof Error ? error.message : 'Unhandled worker error',
+                stack: error instanceof Error ? error.stack : null,
+                timestamp: new Date().toISOString(),
+                type: error instanceof Error ? error.constructor.name : typeof error
+            };
+
+            // Convert to JSON string for storage
+            const errorDetails = JSON.stringify(errorObj, null, 2);
+
+            // Update the job status
             await supabase
                 .from('scraper_runs')
                 .update({
                     status: 'failed',
                     completed_at: new Date().toISOString(),
-                    error_message: error instanceof Error ? error.message : 'Unhandled worker error',
+                    error_message: errorObj.message.substring(0, 1000), // Truncate if needed
+                    error_details: errorDetails.substring(0, 10000) // Truncate to avoid DB limits
                 })
                 .eq('id', job.id);
-             logStructured(job.id, 'error', 'ERROR', 'Job marked as failed due to unhandled worker error.');
+
+            // Log the error
+            logStructured(job.id, 'error', 'ERROR', 'Job marked as failed due to unhandled worker error.', errorObj);
+
+            // Also log to progress_messages via RPC for redundancy
+            const errorLogEntry = {
+                ts: new Date().toISOString(),
+                lvl: 'ERROR',
+                phase: 'UNHANDLED_ERROR',
+                msg: 'Unhandled worker error',
+                data: errorObj
+            };
+
+            await supabase.rpc('append_log_to_scraper_run', {
+                p_run_id: job.id,
+                p_log_entry: errorLogEntry
+            });
         } catch (updateError) {
             console.error(`Failed to update job ${job.id} status after unhandled error:`, updateError);
         }
@@ -468,15 +837,66 @@ function logStructured(jobId: string | null, level: string, phase: string, messa
   if (jobId) {
       (async () => {
           try {
-              // Use the logEntry object directly, Supabase client handles JSON conversion for RPC
+              // Use direct update instead of RPC to avoid type issues
+              // First, get the current progress_messages
+              const { data: currentRun, error: fetchError } = await supabase
+                  .from('scraper_runs')
+                  .select('progress_messages')
+                  .eq('id', jobId)
+                  .single();
+
+              if (fetchError) {
+                  console.error(`${logPrefix} Failed to fetch current run: ${fetchError.message}`);
+                  return;
+              }
+
+              // Parse the current progress_messages or initialize as empty array
+              let progressMessages = [];
+              try {
+                  if (currentRun?.progress_messages) {
+                      progressMessages = typeof currentRun.progress_messages === 'string'
+                          ? JSON.parse(currentRun.progress_messages)
+                          : currentRun.progress_messages;
+                  }
+              } catch (parseError) {
+                  const errorMessage = parseError instanceof Error ? parseError.message : String(parseError);
+                  console.error(`${logPrefix} Error parsing progress_messages: ${errorMessage}`);
+                  progressMessages = [];
+              }
+
+              // Add the new log entry
+              progressMessages.push(logEntry);
+
+              // Update with the new array
               const { error } = await supabase
-                  .rpc('append_log_to_scraper_run', { p_run_id: jobId, p_log_entry: logEntry });
-              // Note: Using an RPC function 'append_log_to_scraper_run' is recommended for atomicity.
-              // See comment below for the function definition.
+                  .from('scraper_runs')
+                  .update({
+                      progress_messages: progressMessages
+                  })
+                  .eq('id', jobId);
 
               if (error) {
                   // Avoid logging failure to append logs, as it could cause infinite loops
                   console.error(`${logPrefix} Failed to append log to DB: ${error.message}`);
+
+                  // Try a fallback approach - update error_details with the latest log
+                  try {
+                      const { error: fallbackError } = await supabase
+                          .from('scraper_runs')
+                          .update({
+                              error_details: JSON.stringify({
+                                  last_log: logEntry,
+                                  timestamp: new Date().toISOString()
+                              })
+                          })
+                          .eq('id', jobId);
+
+                      if (fallbackError) {
+                          console.error(`${logPrefix} Failed fallback log update: ${fallbackError.message}`);
+                      }
+                  } catch (fallbackError) {
+                      console.error(`${logPrefix} Exception during fallback log update:`, fallbackError);
+                  }
               }
           } catch (dbError) {
               console.error(`${logPrefix} Exception during log DB update:`, dbError);
@@ -501,20 +921,27 @@ $$;
 
 
 // --- Function to save scraped products ---
-async function saveScrapedProducts(runId: string, userId: string, competitorId: string, products: ScrapedProductData[]) {
+async function saveScrapedProducts(runId: string, userId: string, competitorId: string | undefined, products: ScrapedProductData[]) {
     if (!products || products.length === 0) return;
-    logStructured(runId, 'debug', 'DB_INSERT', `Attempting to save ${products.length} products...`);
+
+    // Check if competitorId is provided
+    if (!competitorId) {
+        logStructured(runId, 'error', 'DB_INSERT', `Missing competitor_id for run ${runId}. Cannot save products.`);
+        return;
+    }
+
+    logStructured(runId, 'debug', 'DB_INSERT', `Attempting to save ${products.length} products with competitor_id: ${competitorId}...`);
 
     // Map ScrapedProductData to the structure needed for scraped_products table
     const productsToInsert = products.map(p => ({
         // Let DB generate UUID for id
         user_id: userId,
-        scraper_run_id: runId, // Link back to the run
-        competitor_id: competitorId,
+        scraper_id: null, // Use the scraper_id column instead of scraper_run_id
+        competitor_id: p.competitor_id || competitorId, // Use product's competitor_id if available, otherwise use the one passed to the function
         // product_id will be handled by DB trigger/matching logic later if implemented
         name: p.name,
         price: p.price,
-        currency: p.currency ?? 'USD', // Default currency
+        currency: p.currency ?? 'SEK', // Default currency to SEK
         url: p.url,
         image_url: p.image_url,
         sku: p.sku,

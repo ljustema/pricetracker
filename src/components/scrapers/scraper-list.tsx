@@ -54,12 +54,12 @@ export default function ScraperList({
       alert(error instanceof Error ? error.message : "Failed to approve scraper");
     }
   }, [onRefresh]);
-  
+
   // Handle starting a test run
   const handleTestRun = useCallback(async (scraperId: string) => {
     setTestingId(scraperId);
     setTestRunId(null);
-    
+
     try {
       const { runId } = await ScraperClientService.startTestRun(scraperId);
       setTestRunId(runId);
@@ -69,22 +69,22 @@ export default function ScraperList({
       setTestingId(null);
     }
   }, []);
-  
+
   // Handle completion of a test run
   const handleRunComplete = useCallback((success: boolean) => {
     setTestingId(null);
     setTestRunId(null);
-    
+
     if (success) {
       onRefresh();
     }
   }, [onRefresh]);
-  
+
   // Handle starting a full run
   const handleRunScraper = useCallback(async (scraperId: string) => {
     setRunningId(scraperId);
     setFullRunId(null);
-    
+
     try {
       const { runId } = await ScraperClientService.runScraper(scraperId);
       setFullRunId(runId);
@@ -94,12 +94,12 @@ export default function ScraperList({
       setRunningId(null);
     }
   }, []);
-  
+
   // Handle completion of a full run
   const handleFullRunComplete = useCallback((success: boolean) => {
     setRunningId(null);
     setFullRunId(null);
-    
+
     if (success) {
       onRefresh();
     }
@@ -111,8 +111,8 @@ export default function ScraperList({
         return 'AI Generated';
       case 'python':
         return 'Python Script';
-      case 'csv':
-        return 'CSV Upload';
+      case 'typescript':
+        return 'TypeScript Script';
       default:
         return type;
     }
@@ -126,7 +126,7 @@ export default function ScraperList({
         </span>
       );
     }
-    
+
     if (!scraper.is_approved) {
       return (
         <span className="inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800">
@@ -134,7 +134,7 @@ export default function ScraperList({
         </span>
       );
     }
-    
+
     return (
       <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-800">
         Inactive
@@ -160,7 +160,7 @@ export default function ScraperList({
           Add Scraper
         </button>
       </div>
-      
+
       {scrapers.length === 0 ? (
         <div className="px-4 py-5 sm:p-6 text-center">
           <p className="text-sm text-gray-500">No scrapers found for this competitor.</p>
@@ -211,7 +211,7 @@ export default function ScraperList({
                 </div>
                 <div className="flex space-x-2">
                   {/* Show test run button for approved scrapers */}
-                  {(scraper.scraper_type === 'python' || scraper.scraper_type === 'crawlee') && scraper.is_approved && testingId !== scraper.id && (
+                  {(scraper.scraper_type === 'python' || scraper.scraper_type === 'typescript') && scraper.is_approved && testingId !== scraper.id && (
                     <button
                       type="button"
                       onClick={() => handleTestRun(scraper.id!)}
@@ -233,7 +233,7 @@ export default function ScraperList({
                       Approve Scraper
                     </button>
                   )}
-                  
+
                   {/* Show progress when a test run is in progress */}
                   {testingId === scraper.id && testRunId && (
                     <div className="flex-1 min-w-0 max-w-md">
@@ -247,7 +247,7 @@ export default function ScraperList({
                       </div>
                     </div>
                   )}
-                  
+
                   {scraper.is_approved && (
                     <>
                       <button
@@ -264,7 +264,7 @@ export default function ScraperList({
                           ? (scraper.is_active ? "Deactivating..." : "Activating...")
                           : (scraper.is_active ? "Deactivate" : "Activate")}
                       </button>
-                      
+
                       {/* Run Now button for full scraper runs */}
                       {runningId !== scraper.id && (
                         <button
@@ -276,7 +276,7 @@ export default function ScraperList({
                           Run Now
                         </button>
                       )}
-                      
+
                       {/* Show progress when a full run is in progress */}
                       {runningId === scraper.id && fullRunId && (
                         <div className="flex-1 min-w-0 max-w-md">
@@ -290,7 +290,7 @@ export default function ScraperList({
                           </div>
                         </div>
                       )}
-                      
+
                       <button
                         type="button"
                         onClick={() => onViewLogs(scraper.id!)}
@@ -301,7 +301,7 @@ export default function ScraperList({
                       </button>
                     </>
                   )}
-                  
+
                   <button
                     type="button"
                     onClick={() => onEditScraper(scraper.id!)}
@@ -310,7 +310,7 @@ export default function ScraperList({
                     <PencilIcon className="h-4 w-4 mr-1" />
                     Edit
                   </button>
-                  
+
                   <DeleteButton
                     id={scraper.id!}
                     name={scraper.name}

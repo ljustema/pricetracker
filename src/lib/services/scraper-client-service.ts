@@ -114,18 +114,20 @@ export class ScraperClientService {
   }
 
   /**
-   * Create an AI-generated scraper
+   * Create an AI-generated scraper using Gemini
    */
   static async createAIScraper(url: string, competitorId: string, name?: string) {
-    const response = await fetch('/api/scrapers/python', {
+    console.log(`Creating AI scraper for URL: ${url}, competitor: ${competitorId}`);
+
+    const response = await fetch('/api/scrapers/generate-ai', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        competitor_id: competitorId,
-        name: name || `AI Generated Scraper for ${new URL(url).hostname}`,
         url,
+        competitorId,
+        name: name || `AI Scraper for ${new URL(url).hostname}`,
       }),
     });
 

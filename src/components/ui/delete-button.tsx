@@ -40,6 +40,23 @@ export default function DeleteButton({
         const timestamp = new Date().getTime();
         router.push(`/app-routes/products?refresh=${timestamp}`);
       }
+
+      // If we're deleting a scraper, redirect to the scrapers page with a cache-busting parameter
+      if (endpoint === '/api/scrapers') {
+        // Get the current URL to determine if we're on a competitor-specific page or the main scrapers page
+        const currentPath = window.location.pathname;
+
+        // If we're on the main scrapers page, force a refresh
+        if (currentPath === '/app-routes/scrapers') {
+          const timestamp = new Date().getTime();
+          router.push(`/app-routes/scrapers?refresh=${timestamp}`);
+        }
+        // If we're on a competitor-specific page, the onRefresh callback should handle the refresh
+        // The URL pattern would be /app-routes/competitors/[competitorId]/scrapers
+        else if (currentPath.includes('/competitors/') && currentPath.endsWith('/scrapers')) {
+          // The onRefresh callback will be called above, so we don't need to do anything here
+        }
+      }
     } catch (error) {
       alert(`Failed to delete ${name}. Please try again.`);
     } finally {

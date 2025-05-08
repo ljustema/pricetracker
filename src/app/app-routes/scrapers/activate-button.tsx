@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ScraperClientService } from "@/lib/services/scraper-client-service";
 import { Button } from "@/components/ui/button";
+import { useRouter } from "next/navigation";
 
 interface ActivateButtonProps {
   scraperId: string;
@@ -18,6 +19,7 @@ export default function ActivateButton({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const router = useRouter();
 
   const handleActivate = async () => {
     setLoading(true);
@@ -26,7 +28,17 @@ export default function ActivateButton({
     try {
       await ScraperClientService.activateScraper(scraperId);
       setSuccess(true);
+
+      // Call the onActivated callback if provided
       if (onActivated) onActivated();
+
+      // Check if we're on the main scrapers page and force a refresh if needed
+      const currentPath = window.location.pathname;
+      if (currentPath === '/app-routes/scrapers') {
+        // Add a timestamp to force a fresh load of the page
+        const timestamp = new Date().getTime();
+        router.push(`/app-routes/scrapers?refresh=${timestamp}`);
+      }
     } catch (err) {
       setError((err as Error).message || "Failed to activate scraper");
     } finally {

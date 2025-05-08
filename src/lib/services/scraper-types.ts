@@ -8,6 +8,13 @@ export interface ScraperMetadata {
   author: string;
   target_url: string;
   required_libraries: string[];
+  // Additional fields for AI-generated scrapers
+  generation_method?: 'gemini-ai' | 'manual' | 'template';
+  generation_timestamp?: string;
+  batch_size?: number;
+  max_concurrency?: number;
+  // Fields for tracking script fixes
+  applied_fixes?: string[]; // List of fixes applied to the script
 }
 export interface ScraperConfig {
   id?: string;
@@ -15,7 +22,7 @@ export interface ScraperConfig {
   competitor_id: string;
   name: string;
   url: string;
-  scraper_type: 'ai' | 'python' | 'crawlee' | 'typescript'; // Added 'typescript' type
+  scraper_type: 'python' | 'typescript'; // Only Python and TypeScript scrapers are supported
   selectors?: {
     product: string;
     name: string;

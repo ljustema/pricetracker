@@ -155,8 +155,8 @@ export default function RunTestScraperPage() {
                 status
               );
 
-              setError('The Python worker did not pick up the job. This could be because the worker is not running or is busy with other tasks. Please check that the Python worker is running and try again.');
-            } else if (status.errorMessage && status.errorMessage.includes('Waiting for Python worker')) {
+              setError('The worker did not pick up the job. This could be because the worker is not running or is busy with other tasks. Please check that the appropriate worker is running and try again.');
+            } else if (status.errorMessage && (status.errorMessage.includes('Waiting for Python worker') || status.errorMessage.includes('Waiting for TypeScript worker'))) {
               // Handle the case where we're waiting for the worker to pick up the job
               logClientError(
                 status.errorMessage,
@@ -164,7 +164,7 @@ export default function RunTestScraperPage() {
                 status
               );
 
-              setError('Waiting for the Python worker to pick up the job. The worker may be busy or starting up. Please try again in a few moments.');
+              setError('Waiting for the worker to pick up the job. The worker may be busy or starting up. Please try again in a few moments.');
             } else if (status.errorMessage && status.errorMessage.includes('Network error')) {
               // Handle the common "Network error" case
               logClientError(
@@ -185,8 +185,11 @@ export default function RunTestScraperPage() {
               }
 
               // Call the completion handler
+              // Consider both 'success' and 'completed' as successful statuses
+              const isSuccess = status.status === 'success' || status.status === 'completed';
+              console.log(`[RunTestPage] Calling handleRunComplete with isSuccess=${isSuccess}, status=${status.status}`);
               handleRunComplete(
-                status.status === 'success',
+                isSuccess,
                 status.productCount || 0,
                 status.errorMessage || null
               );
@@ -243,7 +246,7 @@ export default function RunTestScraperPage() {
       <div className="mb-8">
         <h1 className="text-3xl font-bold">Run Scraper Test</h1>
         <p className="mt-2 text-gray-600">
-          Run the test function of your Python scraper to collect a sample of data.
+          Run a test of your scraper to collect a sample of data.
         </p>
       </div>
 

@@ -25,8 +25,26 @@ if (!supabaseUrl || !supabaseServiceRoleKey) {
 
 console.log('Using Supabase URL:', supabaseUrl);
 
-// Using `any` for now as Database types are not available
+// Using `any` for now as Database types are not available, but defining RPC return type
 const supabase = createClient<any>(supabaseUrl, supabaseServiceRoleKey);
+
+// Type for the data returned by the claim_next_integration_job RPC
+interface ClaimedIntegrationJobData {
+  id: string; // UUID
+  created_at: string; // TIMESTAMPTZ
+  integration_id: string; // UUID
+  user_id: string; // UUID
+  status: string;
+  started_at: string | null; // TIMESTAMPTZ
+  completed_at: string | null; // TIMESTAMPTZ
+  error_message: string | null;
+  log_details: any | null; // JSONB
+  products_processed: number | null;
+  products_updated: number | null;
+  products_created: number | null;
+  test_products: any | null; // JSONB
+  configuration: any | null; // JSONB
+}
 
 const POLLING_INTERVAL_MS = 5000; // Poll every 5 seconds (adjust as needed)
 const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
@@ -66,42 +84,31 @@ async function fetchAndProcessIntegrationJob() {
       console.log('Polling for pending integration jobs...');
       lastPollMessageTime = currentTime;
     }
-    // 1. Fetch a pending job
-    const { data: fetchedJob, error: fetchError } = await supabase
-      .from('integration_runs')
-      .select('*')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    // 1. Atomically fetch and claim a pending job using RPC
+    const { data: rpcData, error: rpcError } = await supabase.rpc(
+      'claim_next_integration_job'
+    );
 
-    if (fetchError) {
-      console.error('Error fetching integration job:', fetchError);
+    if (rpcError) {
+      console.error('Error calling claim_next_integration_job RPC:', rpcError);
+      logStructured('error', 'RPC_CALL_ERROR', `Error calling claim_next_integration_job: ${rpcError.message}`, { details: rpcError.details, hint: rpcError.hint });
       return; // Wait for the next poll interval
     }
 
-    if (!fetchedJob) {
-      // No job found, wait for the next poll interval
-      return;
-    }
-    job = fetchedJob; // Assign to the outer scope variable
+    // rpcData will be an array of ClaimedIntegrationJobData.
+    // If the array is empty or null, no job was claimed.
+    const claimedJobs = rpcData as ClaimedIntegrationJobData[] | null;
 
-    console.log(`Found integration job: ${job.id}, Integration ID: ${job.integration_id}`);
-
-    // 2. Claim the job (Update status to 'processing')
-    const { error: claimError } = await supabase
-      .from('integration_runs')
-      .update({ status: 'processing', started_at: new Date().toISOString() })
-      .eq('id', job.id)
-      .eq('status', 'pending'); // Ensure it's still pending
-
-    if (claimError) {
-      console.error(`Error claiming integration job ${job.id}:`, claimError);
-      job = null; // Reset job if claim failed
-      return; // Failed to claim, maybe another worker got it. Wait.
+    if (!claimedJobs || claimedJobs.length === 0) {
+      // console.log('No pending integration jobs found or claimed.'); // Can be noisy
+      return; // No job claimed, wait for the next poll interval
     }
 
-    console.log(`Integration job ${job.id} claimed successfully.`);
+    job = claimedJobs[0]; // Assign the first (and should be only) claimed job
+
+    // The job status is already 'processing' and started_at is set by the RPC function.
+    console.log(`Integration job ${job.id} claimed successfully via RPC. Integration ID: ${job.integration_id}`);
+    logStructured('info', 'JOB_CLAIMED', `Integration job ${job.id} claimed successfully via RPC.`);
 
     // Update last job time when a job is successfully claimed
     lastJobTime = Date.now();

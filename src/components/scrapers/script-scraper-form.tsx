@@ -57,15 +57,31 @@ export default function ScriptScraperForm({ // Renamed component
   useEffect(() => {
     const fetchCompetitorName = async () => {
       try {
+        if (!competitorId) {
+          console.warn("No competitor ID provided");
+          return;
+        }
+        
         const response = await fetch(`/api/competitors/${competitorId}`);
         if (response.ok) {
           const competitor = await response.json();
-          setCompetitorName(competitor.name);
+          if (competitor && competitor.name) {
+            setCompetitorName(competitor.name);
+          } else {
+            console.error("Competitor data missing name property", competitor);
+            // Set a fallback name to prevent UI issues
+            setCompetitorName("Unknown Competitor");
+          }
         } else {
-          console.error("Failed to fetch competitor name");
+          const errorText = await response.text().catch(() => "No response body");
+          console.error(`Failed to fetch competitor name: HTTP ${response.status}`, errorText);
+          // Set a fallback name to prevent UI issues
+          setCompetitorName("Unknown Competitor");
         }
       } catch (error) {
         console.error("Error fetching competitor name:", error);
+        // Set a fallback name to prevent UI issues
+        setCompetitorName("Unknown Competitor");
       }
     };
 

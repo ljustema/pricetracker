@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"; // Import hooks
 // import { Metadata } from "next"; // Removed as it's unused now
 import { useSession } from "next-auth/react"; // Use client-side session hook
-import { redirect } from "next/navigation";
+import { redirect, useRouter } from "next/navigation";
 import Link from "next/link";
 // import { ScraperService } from "@/lib/services/scraper-service"; // No longer needed directly
 import { ScraperConfig } from "@/lib/services/scraper-types"; // Import type directly
@@ -54,6 +54,9 @@ export default function ScrapersPage() {
   const [selectedScraperId, setSelectedScraperId] = useState<string | null>(null);
   const [activeRuns, setActiveRuns] = useState<{[key: string]: string}>({});
 
+  // Get the router to check for refresh parameter
+  const router = useRouter();
+
   // Function to check for active runs
   const checkActiveRuns = async () => {
     try {
@@ -78,31 +81,49 @@ export default function ScrapersPage() {
     }
   };
 
+  // Function to fetch scraper data
+  const fetchData = async () => {
+    setIsLoading(true);
+    try {
+      // Fetch combined scraper and competitor data from the new API route
+      const response = await fetch('/api/scrapers/list');
+      if (!response.ok) {
+        throw new Error(`Failed to fetch scrapers: ${response.statusText}`);
+      }
+      const data = await response.json();
+      // Sort the scrapers by name
+      const sortedData = [...data].sort((a, b) => a.name.localeCompare(b.name));
+      setScraperData(sortedData);
+
+      // Check for active runs
+      await checkActiveRuns();
+
+    } catch (error) {
+      console.error("Error fetching scraper data:", error);
+      // Handle error state if needed (e.g., show error message)
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Check for refresh parameter in URL
+  useEffect(() => {
+    // Get the current URL search params
+    const searchParams = new URLSearchParams(window.location.search);
+    const refreshParam = searchParams.get('refresh');
+
+    // If refresh parameter exists, fetch data and then remove the parameter
+    if (refreshParam) {
+      fetchData();
+
+      // Remove the refresh parameter from the URL without triggering a navigation
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, '', newUrl);
+    }
+  }, [router]);
+
   useEffect(() => {
     if (status === "authenticated" && session?.user?.id) {
-      const fetchData = async () => {
-        setIsLoading(true);
-        try {
-          // Fetch combined scraper and competitor data from the new API route
-          const response = await fetch('/api/scrapers/list');
-          if (!response.ok) {
-            throw new Error(`Failed to fetch scrapers: ${response.statusText}`);
-          }
-          const data = await response.json();
-          // Sort the scrapers by name
-          const sortedData = [...data].sort((a, b) => a.name.localeCompare(b.name));
-          setScraperData(sortedData);
-
-          // Check for active runs
-          await checkActiveRuns();
-
-        } catch (error) {
-          console.error("Error fetching scraper data:", error);
-          // Handle error state if needed (e.g., show error message)
-        } finally {
-          setIsLoading(false);
-        }
-      };
       fetchData();
 
       // Set up polling for active runs every 30 seconds
@@ -327,7 +348,7 @@ export default function ScrapersPage() {
                                 )}
                               </Link>
                             </DropdownMenuItem>
-                            {(scraper.scraper_type === 'python' || scraper.scraper_type === 'ai' || scraper.scraper_type === 'crawlee') && (
+                            {(scraper.scraper_type === 'python' || scraper.scraper_type === 'typescript') && (
                               <DropdownMenuItem asChild>
                                 <Link
                                   href={`/app-routes/scrapers/${scraper.id}/run-test`}

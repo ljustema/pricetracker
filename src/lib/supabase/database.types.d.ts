@@ -369,6 +369,7 @@ export type Database = {
                     status: string | null;
                     total_batches: number | null;
                     user_id: string;
+                    claimed_by_worker_at: string | null;
                 };
                 Insert: {
                     completed_at?: string | null;

@@ -208,7 +208,8 @@ def find_and_claim_job(conn):
                 claim_sql = """
                     UPDATE scraper_runs
                     SET status = 'running',
-                        started_at = NOW()
+                        started_at = NOW(),
+                        claimed_by_worker_at = NOW()
                     WHERE id = %s AND status IN ('pending', 'initializing')
                     RETURNING id;
                 """

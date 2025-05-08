@@ -17,6 +17,11 @@ const ScriptScraperForm = dynamic(() => import('./script-scraper-form'), {
   ssr: false
 }); // Updated to new unified script scraper form, old python-scraper-form removed
 
+const AiScraperValidation = dynamic(() => import('./ai-scraper-validation'), {
+  loading: () => <div>Loading...</div>,
+  ssr: false
+});
+
 const ScraperLogViewer = dynamic(() => import('./scraper-log-viewer'), {
   loading: () => <div>Loading...</div>,
   ssr: false
@@ -27,7 +32,7 @@ interface ScraperManagerProps {
   initialScrapers?: ScraperConfig[];
 }
 
-type Step = 'list' | 'select-type' | 'create-ai' | 'create-python' | 'create-typescript' | 'test' | 'view-logs'; // Support both Python and TypeScript creation steps
+type Step = 'list' | 'select-type' | 'create-ai' | 'create-python' | 'create-typescript' | 'validate-ai' | 'test' | 'view-logs'; // Added validate-ai step
 
 export default function ScraperManager({
   competitorId,
@@ -37,6 +42,7 @@ export default function ScraperManager({
   const [scrapers, setScrapers] = useState<ScraperConfig[]>(initialScrapers);
   const [selectedScraperId, setSelectedScraperId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [competitorName, setCompetitorName] = useState<string>("");
 
   // Memoize the filtered scrapers to avoid unnecessary re-renders
   const filteredScrapers = useMemo(() => {
@@ -50,7 +56,7 @@ export default function ScraperManager({
       setScrapers(initialScrapers);
       return;
     }
-    
+
     setIsLoading(true);
     try {
       const loadedScrapers = await ScraperClientService.getScrapersByUser('current');
@@ -61,6 +67,27 @@ export default function ScraperManager({
       setIsLoading(false);
     }
   }, [competitorId, initialScrapers]);
+
+  // Fetch competitor name
+  useEffect(() => {
+    const fetchCompetitorName = async () => {
+      try {
+        const response = await fetch(`/api/competitors/${competitorId}`);
+        if (response.ok) {
+          const competitor = await response.json();
+          setCompetitorName(competitor.name);
+        } else {
+          console.error("Failed to fetch competitor name");
+        }
+      } catch (error) {
+        console.error("Error fetching competitor name:", error);
+      }
+    };
+
+    if (competitorId) {
+      fetchCompetitorName();
+    }
+  }, [competitorId]);
 
   // Only load scrapers once on initial render
   useEffect(() => {
@@ -91,7 +118,7 @@ export default function ScraperManager({
       const scraper = await ScraperClientService.createAIScraper(url, competitorId);
       setScrapers([...scrapers, scraper]);
       setSelectedScraperId(scraper.id);
-      setStep('test');
+      setStep('validate-ai'); // Go to validation step instead of test
     } catch (error) {
       console.error("Error creating AI scraper:", error);
       alert(error instanceof Error ? error.message : "Failed to create AI scraper");
@@ -145,6 +172,14 @@ export default function ScraperManager({
     return scrapers.find(s => s.id === selectedScraperId);
   };
 
+  // Handle validation confirmation
+  const handleValidationConfirmed = () => {
+    // After validation is confirmed, go to the list view
+    setStep('list');
+    // Refresh the scrapers list
+    loadScrapers();
+  };
+
   // Render the appropriate component based on the current step
   const renderStep = () => {
     switch (step) {
@@ -165,16 +200,34 @@ export default function ScraperManager({
         );
       case 'create-ai':
         // For AI scrapers, we'll just use the URL to generate the scraper
-        // and then show the test panel
+        // and then show the validation panel
         return (
-          <div className="w-full max-w-3xl mx-auto rounded-lg border border-gray-200 bg-white shadow-sm">
+          <div className="w-full max-w-8xl mx-auto rounded-lg border border-gray-200 bg-white shadow-sm">
             <div className="border-b border-gray-200 px-6 py-4">
-              <h2 className="text-lg font-medium text-gray-900">Create AI Scraper</h2>
+              <h2 className="text-lg font-medium text-gray-900">Create AI-Generated Scraper</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Enter the URL of the competitor&apos;s website to generate a scraper
+                Let our AI analyze the website and generate a TypeScript Crawlee scraper for you. Ideal for standard e-commerce sites.
               </p>
             </div>
             <div className="px-6 py-4 space-y-6">
+              <div>
+                <label htmlFor="name" className="block text-sm font-medium text-gray-700">
+                  Scraper Name
+                </label>
+                <input
+                  id="name"
+                  type="text"
+                  value={`${competitorName ? `${competitorName} TypeScript Scraper X` : "Loading..."}`}
+                  disabled
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm bg-gray-100 text-gray-500 sm:text-sm"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Name is auto-generated following the pattern: [Competitor Name] TypeScript Scraper X
+                  <br />
+                  The X will be replaced with the next available number (1, 2, 3, etc.)
+                </p>
+              </div>
+
               <div>
                 <label htmlFor="url" className="block text-sm font-medium text-gray-700">
                   Website URL
@@ -187,8 +240,24 @@ export default function ScraperManager({
                     className="block w-full flex-1 rounded-md border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
                     placeholder="https://example.com/products"
                   />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const urlInput = document.getElementById('url') as HTMLInputElement;
+                      if (urlInput && urlInput.value) {
+                        handleCreateAIScraper(urlInput.value);
+                      } else {
+                        alert('Please enter a URL');
+                      }
+                    }}
+                    disabled={isLoading}
+                    className="ml-3 inline-flex items-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
+                  >
+                    Generate with AI
+                  </button>
                 </div>
               </div>
+
               <div className="flex justify-end space-x-3">
                 <button
                   type="button"
@@ -197,30 +266,36 @@ export default function ScraperManager({
                 >
                   Cancel
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const urlInput = document.getElementById('url') as HTMLInputElement;
-                    if (urlInput && urlInput.value) {
-                      handleCreateAIScraper(urlInput.value);
-                    } else {
-                      alert('Please enter a URL');
-                    }
-                  }}
-                  disabled={isLoading}
-                  className="rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
-                >
-                  {isLoading ? "Generating..." : "Generate Scraper"}
-                </button>
               </div>
             </div>
           </div>
         );
+      case 'validate-ai':
+        // Show the validation component for AI-generated scrapers
+        if (!selectedScraperId) {
+          return <div>No scraper selected</div>;
+        }
+        return (
+          <AiScraperValidation
+            scraperId={selectedScraperId}
+            onValidationConfirmed={handleValidationConfirmed}
+            onCancel={handleCancel}
+          />
+        );
       case 'create-python':
+        return (
+          <ScriptScraperForm
+            competitorId={competitorId}
+            scraperType="python"
+            onSuccess={handleScraperCreated}
+            onCancel={handleCancel}
+          />
+        );
       case 'create-typescript':
         return (
           <ScriptScraperForm
             competitorId={competitorId}
+            scraperType="typescript"
             onSuccess={handleScraperCreated}
             onCancel={handleCancel}
           />

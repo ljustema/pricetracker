@@ -5,10 +5,10 @@ import { CodeIcon, BrainCircuitIcon } from "lucide-react";
 
 interface ScraperTypeSelectorProps {
   onSelect: (type: 'ai' | 'python' | 'typescript') => void;
-} // Updated to support Python and TypeScript scraper types explicitly
+} // AI is used to generate TypeScript scrapers
 
 export default function ScraperTypeSelector({ onSelect }: ScraperTypeSelectorProps) {
-  const [selectedType, setSelectedType] = useState<'ai' | 'python' | 'typescript'>('ai'); // Updated to support Python and TypeScript
+  const [selectedType, setSelectedType] = useState<'ai' | 'python' | 'typescript'>('ai'); // Default to AI
 
   const handleContinue = () => {
     onSelect(selectedType);
@@ -24,7 +24,7 @@ export default function ScraperTypeSelector({ onSelect }: ScraperTypeSelectorPro
       </div>
       <div className="px-6 py-4">
         <div className="space-y-4">
-          <div 
+          <div
             className={`flex items-start space-x-4 p-4 border rounded-lg cursor-pointer ${
               selectedType === 'ai' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:bg-gray-50'
             }`}
@@ -42,15 +42,15 @@ export default function ScraperTypeSelector({ onSelect }: ScraperTypeSelectorPro
             <div className="flex-1">
               <div className="flex items-center">
                 <BrainCircuitIcon className="h-5 w-5 mr-2 text-indigo-600" />
-                <label htmlFor="ai" className="font-medium text-gray-900">AI-Generated Scraper (Coming soon)</label>
+                <label htmlFor="ai" className="font-medium text-gray-900">AI-Generated Scraper</label>
               </div>
               <p className="text-sm text-gray-500 mt-1">
-                Let our AI analyze the website and generate a scraper for you. Best for simple product listings.
+                Let our AI analyze the website and generate a TypeScript scraper for you. Best for standard e-commerce sites.
               </p>
             </div>
           </div>
 
-          <div 
+          <div
             className={`flex items-start space-x-4 p-4 border rounded-lg cursor-pointer ${
               selectedType === 'python' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:bg-gray-50'
             }`}

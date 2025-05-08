@@ -1,0 +1,106 @@
+-- Fix for premature failure issue where jobs are marked as failed before the worker can claim them
+-- This script adds a trigger to prevent jobs from being marked as failed with "Script execution failed with non-zero exit code 1"
+-- if they haven't been given enough time to be claimed by a worker
+
+-- 1. Create a function to prevent premature failures
+CREATE OR REPLACE FUNCTION prevent_premature_failure()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- If the job is being marked as failed with "Script execution failed with non-zero exit code 1"
+    -- but it has been created recently, prevent the update
+    IF NEW.status = 'failed' AND 
+       NEW.error_message = 'Script execution failed with non-zero exit code 1' AND
+       (NOW() - NEW.created_at) < INTERVAL '30 seconds'
+    THEN
+        -- Prevent the update by returning OLD
+        RAISE NOTICE 'Preventing premature failure of job % that was created at % (only % seconds ago)',
+                     OLD.id, OLD.created_at, EXTRACT(EPOCH FROM (NOW() - OLD.created_at));
+        RETURN OLD;
+    END IF;
+    
+    -- Otherwise, allow the update
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 2. Create a trigger to prevent premature failures
+DROP TRIGGER IF EXISTS prevent_premature_failure_trigger ON scraper_runs;
+CREATE TRIGGER prevent_premature_failure_trigger
+BEFORE UPDATE OF status ON scraper_runs
+FOR EACH ROW
+WHEN (NEW.status = 'failed' AND NEW.error_message = 'Script execution failed with non-zero exit code 1')
+EXECUTE FUNCTION prevent_premature_failure();
+
+-- 3. Grant execute permission for the prevent_premature_failure function
+GRANT EXECUTE ON FUNCTION prevent_premature_failure() TO authenticated;
+GRANT EXECUTE ON FUNCTION prevent_premature_failure() TO service_role;
+
+-- 4. Create a function to handle specific error types
+CREATE OR REPLACE FUNCTION handle_specific_error_types()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Only run this function if the status is changing to 'failed'
+    IF NEW.status = 'failed' AND OLD.status != 'failed' THEN
+        -- Check if the error message contains "Script execution failed with non-zero exit code 1"
+        -- and the job was created recently (within 30 seconds)
+        IF NEW.error_message = 'Script execution failed with non-zero exit code 1' AND
+           (NOW() - NEW.created_at) < INTERVAL '30 seconds' THEN
+            -- Change the status to 'pending' instead of 'failed'
+            -- This gives the worker more time to pick up the job
+            NEW.status := 'pending';
+            NEW.error_message := NULL;
+            RAISE NOTICE 'Changed status from failed to pending for job % that was created at % (only % seconds ago)',
+                         NEW.id, NEW.created_at, EXTRACT(EPOCH FROM (NOW() - NEW.created_at));
+        END IF;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 5. Drop and recreate the handle_specific_error_types_trigger
+DROP TRIGGER IF EXISTS handle_specific_error_types_trigger ON scraper_runs;
+CREATE TRIGGER handle_specific_error_types_trigger
+BEFORE UPDATE OF status ON scraper_runs
+FOR EACH ROW
+EXECUTE FUNCTION handle_specific_error_types();
+
+-- 6. Grant execute permission for the handle_specific_error_types function
+GRANT EXECUTE ON FUNCTION handle_specific_error_types() TO authenticated;
+GRANT EXECUTE ON FUNCTION handle_specific_error_types() TO service_role;
+
+-- 7. Create a function to check if a job is being updated by the main app
+CREATE OR REPLACE FUNCTION check_job_update_source()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- If the job is being marked as failed with "Script execution failed with non-zero exit code 1"
+    -- log the application_name and user to help identify the source
+    IF NEW.status = 'failed' AND 
+       NEW.error_message = 'Script execution failed with non-zero exit code 1'
+    THEN
+        RAISE NOTICE 'Job % being marked as failed by application_name=%, user=%',
+                     NEW.id, 
+                     current_setting('application_name', true),
+                     current_user;
+    END IF;
+    
+    -- Always allow the update
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 8. Create a trigger to log job update sources
+DROP TRIGGER IF EXISTS check_job_update_source_trigger ON scraper_runs;
+CREATE TRIGGER check_job_update_source_trigger
+BEFORE UPDATE OF status ON scraper_runs
+FOR EACH ROW
+WHEN (NEW.status = 'failed' AND NEW.error_message = 'Script execution failed with non-zero exit code 1')
+EXECUTE FUNCTION check_job_update_source();
+
+-- 9. Grant execute permission for the check_job_update_source function
+GRANT EXECUTE ON FUNCTION check_job_update_source() TO authenticated;
+GRANT EXECUTE ON FUNCTION check_job_update_source() TO service_role;
+
+COMMENT ON FUNCTION prevent_premature_failure() IS 'Prevents jobs from being marked as failed with "Script execution failed with non-zero exit code 1" if they have been created recently, giving the worker time to claim them.';
+COMMENT ON FUNCTION handle_specific_error_types() IS 'Handles specific error types and prevents jobs from being marked as failed if they have been created recently.';
+COMMENT ON FUNCTION check_job_update_source() IS 'Logs the application_name and user when a job is being marked as failed with "Script execution failed with non-zero exit code 1" to help identify the source.';

@@ -311,7 +311,22 @@ const argv = yargs(hideBin(process.argv))
              process.exit(1);
         }
         try {
-            const contextData: ScriptContext = JSON.parse(argv.context);
+            let contextData: ScriptContext;
+            const contextString = argv.context as string;
+
+            // First try to decode as Base64 (for TypeScript worker)
+            try {
+                const jsonContext = Buffer.from(contextString, 'base64').toString('utf-8');
+                contextData = JSON.parse(jsonContext) as ScriptContext;
+            } catch (_decodeError) {
+                // If Base64 decoding fails, try parsing directly as JSON (for validation)
+                try {
+                    contextData = JSON.parse(contextString) as ScriptContext;
+                } catch (_parseError) {
+                    throw new Error(`Failed to parse context: tried Base64 decoding and direct JSON parsing, both failed. Context starts with: ${contextString.substring(0, 20)}...`);
+                }
+            }
+
             await scrape(contextData);
             process.exit(0); // Explicitly exit with success code
         } catch (e) {

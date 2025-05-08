@@ -31,7 +31,7 @@ export default function ScraperForm({
   const [isLoading, setIsLoading] = useState(false);
   // Determine the scraper type from initialData or default to "ai"
   const defaultScraperType = initialData?.scraper_type || "ai";
-  
+
   const [formData, setFormData] = useState<Partial<ScraperConfig>>(
     initialData || {
       competitor_id: competitorId || (competitors.length > 0 ? competitors[0].id : ""),
@@ -60,14 +60,14 @@ export default function ScraperForm({
   ) => {
     const { name, value } = e.target;
     const type = (e.target as HTMLInputElement).type;
-    
+
     if (name.includes(".")) {
       // Handle nested properties (e.g., selectors.product)
       const [parent, child] = name.split(".");
       setFormData((prev: Partial<ScraperConfig>) => {
         // Ensure the parent property exists and is an object
         const parentObj = (prev[parent as keyof typeof prev] as Record<string, unknown>) || {};
-        
+
         return {
           ...prev,
           [parent]: {
@@ -92,7 +92,7 @@ export default function ScraperForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    
+
     try {
       await onSubmit(formData);
     } catch (error) {
@@ -105,7 +105,7 @@ export default function ScraperForm({
 
   const handleTest = async () => {
     if (!onTest) return;
-    
+
     setIsLoading(true);
     try {
       await onTest(formData);
@@ -119,7 +119,7 @@ export default function ScraperForm({
 
   const handleGenerateWithAI = async () => {
     if (!onGenerateWithAI || !formData.url) return;
-    
+
     setIsLoading(true);
     try {
       await onGenerateWithAI(formData.url);
@@ -163,7 +163,6 @@ export default function ScraperForm({
           >
             <option value="ai">AI Scraper</option>
             <option value="python">Python Scraper</option>
-            <option value="csv">CSV Scraper</option>
           </select>
         </div>
 
@@ -318,7 +317,7 @@ def get_metadata():
 def scrape():
     """
     Main scraping function. Implement your scraping logic here.
-    
+
     IMPORTANT: For large datasets, consider using memory-efficient techniques:
     1. Use generators or yield statements for processing large lists
     2. Process data in chunks rather than loading everything into memory
@@ -341,7 +340,7 @@ def scrape():
 def test():
     """
     Test function that will be called when validating the scraper.
-    
+
     IMPORTANT:
     1. This function must return a JSON array of products
     2. Limit the number of products returned (10 is recommended)
@@ -352,7 +351,7 @@ def test():
     try:
         # Get products from the main scrape function
         all_products = scrape()
-        
+
         # Return only the first 10 products for validation
         return all_products[:10]  # Must return a JSON-serializable array
     except Exception as e:
@@ -425,7 +424,7 @@ def test():
         >
           Cancel
         </button>
-        
+
         {onTest && (
           <button
             type="button"
@@ -436,7 +435,7 @@ def test():
             Test Scraper
           </button>
         )}
-        
+
         <button
           type="submit"
           disabled={isLoading}

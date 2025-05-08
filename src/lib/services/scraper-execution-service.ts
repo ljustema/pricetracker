@@ -131,8 +131,8 @@ export class ScraperExecutionService {
         }
 
         // --- Race condition mitigation: Wait for worker to pick up the job ---
-        const MAX_WAIT_MS = 45000; // Increased to 45 seconds max
-        const POLL_INTERVAL_MS = 2000; // Increased poll interval to 2 seconds
+        const MAX_WAIT_MS = 120000; // Increased to 120 seconds max (2 minutes)
+        const POLL_INTERVAL_MS = 10000; // Increased poll interval to 10 seconds
         let waited = 0;
         let runStatus = 'pending';
         for (; waited < MAX_WAIT_MS; waited += POLL_INTERVAL_MS) {
@@ -146,10 +146,34 @@ export class ScraperExecutionService {
             console.warn(`Run ${actualRunId}: Error polling run status: ${runError.message}`);
             break;
           }
-          if (run && run.status && run.status !== 'pending') {
-            runStatus = run.status;
-            console.log(`Run ${actualRunId}: Worker picked up job, status is now '${runStatus}' after waiting ${waited}ms.`);
-            break;
+          if (run && run.status) {
+            // Check for claimed_by_worker_at timestamp to determine if worker has claimed the job
+            const { data: runDetails, error: runDetailsError } = await supabaseAdmin
+              .from('scraper_runs')
+              .select('claimed_by_worker_at')
+              .eq('id', actualRunId)
+              .single();
+
+            if (runDetailsError) {
+              console.warn(`Run ${actualRunId}: Error fetching claimed_by_worker_at: ${runDetailsError.message}`);
+            } else if (runDetails && runDetails.claimed_by_worker_at) {
+              // If the worker has claimed the job, consider it running regardless of status
+              console.log(`Run ${actualRunId}: Worker claimed job at ${runDetails.claimed_by_worker_at}, current status is '${run.status}' after waiting ${waited}ms.`);
+              runStatus = 'running'; // Override status to running since worker has claimed it
+              break;
+            } else if (run.status !== 'pending') {
+              // If status has changed but no claim timestamp, check if it's a premature failure
+              if (run.status === 'failed' && run.error_message === 'Script execution failed with non-zero exit code 1') {
+                // This is likely a premature failure, log it but don't break the loop
+                console.log(`Run ${actualRunId}: Status changed to 'failed' with error 'Script execution failed with non-zero exit code 1' after waiting ${waited}ms, but no worker claim timestamp found. Continuing to wait...`);
+                // Don't break the loop, continue waiting
+              } else {
+                // For other status changes, use the status as reported
+                runStatus = run.status;
+                console.log(`Run ${actualRunId}: Status changed to '${runStatus}' after waiting ${waited}ms, but no worker claim timestamp found.`);
+                break;
+              }
+            }
           }
           // Log the status read on this poll attempt
           console.log(`Run ${actualRunId}: Polled status after ${waited + POLL_INTERVAL_MS}ms: ${run?.status ?? 'N/A'}`);
@@ -410,7 +434,6 @@ export class ScraperExecutionService {
     const MAX_PRODUCTS = 10;
     const MAX_URLS = 5; // Limit URL collection for validation speed
     const TIMEOUT_MS = 120000; // 120 seconds (2 minutes) timeout for the entire validation
-    const MEMORY_LIMIT_MB = 128; // Memory limit for the isolate
 
     const addLog = (lvl: ValidationLog['lvl'], phase: string, msg: string, data?: Record<string, unknown>) => {
       logs.push({ ts: new Date().toISOString(), lvl, phase, msg, data });
@@ -597,10 +620,528 @@ export class ScraperExecutionService {
       }
     }
 
-    // --- TypeScript Validation using isolated-vm ---
-    // TypeScript validation has been removed as we're no longer using isolated-vm
-    // If you need to validate TypeScript scrapers in the future, implement a new validation method
-    addLog('INFO', 'TYPESCRIPT_VALIDATION', 'TypeScript validation is not implemented in this version.');
-    return { valid: false, error: 'TypeScript validation is not supported in this version.', logs, products };
+    // --- TypeScript Validation using Node.js execSync ---
+    if (scraperType === 'typescript') {
+      addLog('INFO', 'TYPESCRIPT_VALIDATION', 'Starting TypeScript script validation via Node.js execSync.');
+
+      // --- Static validation: check for required patterns ---
+      const missingPatterns: string[] = [];
+
+      // Check for required function definitions and patterns
+      if (!scriptContent.includes('function getMetadata()')) {
+        missingPatterns.push('getMetadata() function');
+      }
+      if (!scriptContent.includes('async function scrape(')) {
+        missingPatterns.push('scrape() async function');
+      }
+      if (!scriptContent.includes('yargs(hideBin(process.argv))')) {
+        missingPatterns.push('command-line argument parsing with yargs');
+      }
+
+      if (missingPatterns.length > 0) {
+        addLog('ERROR', 'TYPESCRIPT_VALIDATION', `Script is missing required patterns: ${missingPatterns.join(', ')}`);
+        return {
+          valid: false,
+          error: `Invalid TypeScript script structure: Script must contain the following: ${missingPatterns.join(', ')}`,
+          logs,
+          products: []
+        };
+      }
+
+      const uuid = randomUUID();
+      const tempDir = path.join(tmpdir(), `validate-ts-${uuid}`);
+      const tempTsFilePath = path.join(tempDir, 'scraper.ts');
+      const tempJsFilePath = path.join(tempDir, 'scraper.js');
+
+      // Initialize variables that need to be accessible in the finally block
+      let extractedTargetUrl: string | undefined = undefined;
+      let scriptMetadata: Record<string, unknown> | undefined = undefined;
+
+      try {
+        // Create temporary directory
+        await fsPromises.mkdir(tempDir, { recursive: true });
+
+        // Write script content to a temporary TypeScript file
+        await fsPromises.writeFile(tempTsFilePath, scriptContent, 'utf-8');
+        addLog('DEBUG', 'TYPESCRIPT_VALIDATION', `Temporary TypeScript script written to ${tempTsFilePath}`);
+
+        // First, create package.json and install dependencies
+        try {
+          // Create a package.json file for dependencies
+          const packageJson = {
+            name: "temp-scraper-validation",
+            version: "1.0.0",
+            private: true,
+            dependencies: {
+              "crawlee": "^3.0.0",
+              "playwright": "^1.30.0",
+              "node-fetch": "^2.6.7",
+              "yargs": "^17.6.2",
+              "typescript": "^4.9.5",
+              "@types/node": "^18.15.0",
+              "@babel/cli": "^7.21.0",
+              "@babel/core": "^7.21.0",
+              "@babel/preset-typescript": "^7.21.0",
+              "@babel/preset-env": "^7.21.0"
+            }
+          };
+
+          const packageJsonPath = path.join(tempDir, 'package.json');
+          await fsPromises.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf-8');
+          addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Created package.json at ${packageJsonPath}`);
+
+          // Install dependencies first
+          addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Installing dependencies (this may take a moment)...');
+          try {
+            execSync('npm install --no-package-lock --no-save', {
+              encoding: 'utf-8',
+              timeout: TIMEOUT_MS / 2,
+              cwd: tempDir,
+              stdio: ['pipe', 'pipe', 'pipe']
+            });
+            addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Dependencies installed successfully');
+          } catch (npmError) {
+            const error = npmError as ExecSyncError;
+            addLog('WARN', 'TYPESCRIPT_COMPILATION', `npm install warning: ${error.message}`);
+
+            if (error.stderr) {
+              const stderr = error.stderr.toString();
+              addLog('WARN', 'TYPESCRIPT_COMPILATION', `npm install stderr: ${stderr.trim()}`);
+            }
+
+            // Continue even if npm install has warnings
+          }
+
+          // Create a tsconfig.json file with very permissive settings
+          const tsConfigContent = {
+            compilerOptions: {
+              target: "ES2020",
+              module: "CommonJS",
+              moduleResolution: "Node",
+              esModuleInterop: true,
+              skipLibCheck: true,
+              resolveJsonModule: true,
+              outDir: ".",
+              allowSyntheticDefaultImports: true,
+              noImplicitAny: false,
+              strictNullChecks: false,
+              allowJs: true,
+              noEmitOnError: false,
+              isolatedModules: true,
+              suppressImplicitAnyIndexErrors: true,
+              ignoreDeprecations: "5.0",
+              downlevelIteration: true
+            },
+            include: ["scraper.ts"],
+            exclude: ["node_modules"]
+          };
+
+          const tsConfigPath = path.join(tempDir, 'tsconfig.json');
+          await fsPromises.writeFile(tsConfigPath, JSON.stringify(tsConfigContent, null, 2), 'utf-8');
+          addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Created tsconfig.json at ${tsConfigPath}`);
+
+          // Now compile using tsc from node_modules
+          addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Compiling TypeScript using local tsc');
+
+          try {
+            // Try to find the tsc executable
+            let tscPath = path.join(tempDir, 'node_modules', '.bin', 'tsc');
+            let tscCommand = process.platform === 'win32' ? `"${tscPath}"` : tscPath;
+
+            // Check if the tsc executable exists
+            try {
+              await fsPromises.access(tscPath);
+              addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Found tsc at ${tscPath}`);
+            } catch (_accessError) {
+              // If not found in .bin, try the typescript/bin directory
+              addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `tsc not found at ${tscPath}, trying alternative location`);
+              tscPath = path.join(tempDir, 'node_modules', 'typescript', 'bin', 'tsc');
+              tscCommand = process.platform === 'win32' ? `"${tscPath}"` : tscPath;
+
+              try {
+                await fsPromises.access(tscPath);
+                addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Found tsc at ${tscPath}`);
+              } catch (_accessError2) {
+                // If still not found, try using npx
+                addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `tsc not found at ${tscPath}, falling back to npx`);
+                tscCommand = 'npx tsc';
+              }
+            }
+
+            // Execute the TypeScript compiler
+            addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Executing: ${tscCommand}`);
+
+            // We need to specify the input file explicitly
+            const fullCommand = `${tscCommand} scraper.ts`;
+            addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Full command: ${fullCommand}`);
+
+            execSync(fullCommand, {
+              encoding: 'utf-8',
+              timeout: TIMEOUT_MS / 2,
+              cwd: tempDir,
+              stdio: ['pipe', 'pipe', 'pipe']
+            });
+
+            addLog('INFO', 'TYPESCRIPT_COMPILATION', 'TypeScript compilation successful');
+          } catch (tscError) {
+            const error = tscError as ExecSyncError;
+            let errorMessage = error.message;
+            let stderrOutput = '';
+
+            // Try to extract the stderr output
+            if (error.stderr) {
+              stderrOutput = error.stderr.toString().trim();
+              addLog('ERROR', 'TYPESCRIPT_STDERR', `Compilation errors:\n${stderrOutput}`);
+              errorMessage = stderrOutput || errorMessage;
+            }
+
+            // If stderr is empty, just use the error message directly
+            if (!stderrOutput && error.message) {
+              errorMessage = error.message;
+              addLog('ERROR', 'TYPESCRIPT_STDERR', `Error message: ${errorMessage}`);
+            }
+
+            // No need to list directory contents - removed for cleaner output
+
+            // Try using Babel as a fallback
+            addLog('WARN', 'TYPESCRIPT_COMPILATION', `TypeScript compilation failed, trying Babel as fallback`);
+
+            try {
+              // Create a babel.config.json file
+              const babelConfig = {
+                presets: [
+                  "@babel/preset-env",
+                  "@babel/preset-typescript"
+                ]
+              };
+
+              const babelConfigPath = path.join(tempDir, 'babel.config.json');
+              await fsPromises.writeFile(babelConfigPath, JSON.stringify(babelConfig, null, 2), 'utf-8');
+              addLog('DEBUG', 'BABEL_COMPILATION', `Created babel.config.json at ${babelConfigPath}`);
+
+              // Try to find babel executable
+              const babelPath = path.join(tempDir, 'node_modules', '.bin', 'babel');
+              const babelCommand = process.platform === 'win32' ? `"${babelPath}"` : babelPath;
+
+              // Execute babel
+              const babelFullCommand = `${babelCommand} scraper.ts --out-file scraper.js --extensions ".ts"`;
+              addLog('DEBUG', 'BABEL_COMPILATION', `Executing: ${babelFullCommand}`);
+
+              execSync(babelFullCommand, {
+                encoding: 'utf-8',
+                timeout: TIMEOUT_MS / 2,
+                cwd: tempDir,
+                stdio: ['pipe', 'pipe', 'pipe']
+              });
+
+              addLog('INFO', 'BABEL_COMPILATION', 'Babel compilation successful');
+              // Continue with the compiled file - no need to return
+            } catch (babelError) {
+              const error = babelError as ExecSyncError;
+              // Log the Babel error
+              if (error.stderr) {
+                const stderr = error.stderr.toString().trim();
+                addLog('ERROR', 'BABEL_STDERR', `Babel compilation errors:\n${stderr}`);
+              } else {
+                addLog('ERROR', 'BABEL_STDERR', `Babel compilation error: ${error.message}`);
+              }
+
+              // If both TypeScript and Babel fail, throw the original TypeScript error
+              addLog('ERROR', 'TYPESCRIPT_COMPILATION', `Both TypeScript and Babel compilation failed: ${errorMessage}`);
+              throw new Error(`TypeScript compilation failed: ${errorMessage}`);
+            }
+          }
+        } catch (compileError) {
+          const error = compileError as ExecSyncError;
+          addLog('ERROR', 'TYPESCRIPT_COMPILATION', `TypeScript compilation failed: ${error.message}`);
+
+          // Log stderr if available
+          if (error.stderr) {
+            const stderr = error.stderr.toString();
+            addLog('ERROR', 'TYPESCRIPT_STDERR', `Compilation stderr:\n${stderr.trim()}`);
+
+            // Include the stderr in the error message for better visibility
+            return {
+              valid: false,
+              error: `TypeScript compilation failed: ${stderr.trim()}`,
+              logs,
+              products: []
+            };
+          }
+
+          return {
+            valid: false,
+            error: `TypeScript compilation failed: ${error.message}`,
+            logs,
+            products: []
+          };
+        }
+
+        // --- First, run the metadata command to extract target_url ---
+
+        try {
+          const metadataCommand = `node "${tempJsFilePath}" metadata`;
+          addLog('INFO', 'TYPESCRIPT_METADATA', `Executing metadata command: ${metadataCommand}`);
+
+          const metadataOutput = execSync(metadataCommand, {
+            encoding: 'utf-8',
+            timeout: TIMEOUT_MS / 2,
+            cwd: tempDir, // Run in the temp directory where dependencies are installed
+            stdio: ['pipe', 'pipe', 'pipe']
+          });
+
+          try {
+            scriptMetadata = JSON.parse(metadataOutput);
+            if (scriptMetadata && typeof scriptMetadata === 'object' && scriptMetadata.target_url) {
+              extractedTargetUrl = String(scriptMetadata.target_url);
+              addLog('INFO', 'TYPESCRIPT_METADATA', `Extracted target_url from metadata: ${extractedTargetUrl}`);
+            } else {
+              addLog('WARN', 'TYPESCRIPT_METADATA', 'No target_url found in metadata output.');
+            }
+          } catch (parseErr) {
+            addLog('ERROR', 'TYPESCRIPT_METADATA', `Failed to parse metadata JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
+          }
+        } catch (metadataErr) {
+          addLog('WARN', 'TYPESCRIPT_METADATA', `Failed to execute metadata command: ${metadataErr instanceof Error ? metadataErr.message : String(metadataErr)}`);
+        }
+
+        // --- Now run the scrape command with validation context ---
+        // Create a validation context with isValidation flag set to true
+        const validationContext = {
+          isValidation: true,
+          isTestRun: true,
+          filterByActiveBrands: false,
+          scrapeOnlyOwnProducts: false,
+          log: (level: string, message: string, data?: unknown) => {
+            addLog(level.toUpperCase() as ValidationLog['lvl'], 'SCRIPT_LOG', message, data as Record<string, unknown>);
+          }
+        };
+
+        // Properly escape the JSON string for command line
+        const contextJson = JSON.stringify(validationContext);
+
+        // On Windows, use double quotes outside and escaped double quotes for the JSON
+        // On other platforms, use single quotes outside and double quotes for the JSON
+        const escapedJson = process.platform === 'win32'
+          ? `"${contextJson.replace(/"/g, '\\"')}"`
+          : `'${contextJson}'`;
+
+        const scrapeCommand = `node "${tempJsFilePath}" scrape --context=${escapedJson}`;
+
+        addLog('INFO', 'TYPESCRIPT_VALIDATION', `Executing scrape command with validation context: ${scrapeCommand}`);
+
+        let scriptOutput: string;
+        try {
+          scriptOutput = execSync(scrapeCommand, {
+            encoding: 'utf-8',
+            timeout: TIMEOUT_MS,
+            cwd: tempDir, // Run in the temp directory where dependencies are installed
+            stdio: ['pipe', 'pipe', 'pipe']
+          });
+        } catch (execError) {
+          const error = execError as ExecSyncError;
+          addLog('ERROR', 'TYPESCRIPT_VALIDATION', `Failed to execute TypeScript script: ${error.message}`);
+
+          // Check if it was a timeout
+          if (error.signal === 'SIGTERM' || error.code === 'ETIMEDOUT' || /timed out/i.test(error.message)) {
+            return { valid: false, error: `Validation timed out (${TIMEOUT_MS}ms)`, logs, products: [] };
+          }
+
+          // Log stderr if available
+          if (error.stderr) {
+            const stderr = error.stderr.toString();
+            addLog('ERROR', 'TYPESCRIPT_STDERR', `Script stderr:\n${stderr.trim()}`);
+          }
+
+          return {
+            valid: false,
+            error: `Validation script execution failed: ${error.message}`,
+            logs,
+            products: [],
+            metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined
+          };
+        }
+
+        // Filter out progress and error messages from the output
+        const outputLines = scriptOutput.split('\n');
+        const productLines: string[] = [];
+        const progressLines: string[] = [];
+        const errorLines: string[] = [];
+
+        // Categorize output lines
+        for (const line of outputLines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine) continue;
+
+          // Handle known log message formats
+          if (trimmedLine.startsWith('PROGRESS:')) {
+            progressLines.push(trimmedLine);
+            addLog('INFO', 'SCRIPT_PROGRESS', trimmedLine);
+          } else if (trimmedLine.startsWith('ERROR:')) {
+            errorLines.push(trimmedLine);
+            addLog('ERROR', 'SCRIPT_ERROR', trimmedLine);
+          } else if (trimmedLine.startsWith('INFO ') || trimmedLine.startsWith('WARN ') || trimmedLine.startsWith('DEBUG ')) {
+            // Handle Crawlee log messages
+            progressLines.push(trimmedLine);
+
+            // Only log warnings at INFO level, everything else at DEBUG level
+            if (trimmedLine.startsWith('WARN ')) {
+              addLog('INFO', 'SCRIPT_WARNING', trimmedLine);
+            } else {
+              addLog('DEBUG', 'SCRIPT_LOG', trimmedLine);
+            }
+          } else {
+            // Try to determine if it's a valid JSON line
+            try {
+              // Just check if it parses as JSON without storing the result yet
+              JSON.parse(trimmedLine);
+              // If it parses successfully, add it to product lines
+              productLines.push(trimmedLine);
+            } catch (_e) {
+              // If it doesn't parse as JSON, treat it as a log message
+              progressLines.push(trimmedLine);
+
+              // Only log at DEBUG level to reduce terminal output
+              // These messages will still be available in the logs array if needed
+              addLog('DEBUG', 'SCRIPT_OUTPUT', trimmedLine);
+            }
+          }
+        }
+
+        // Log summary of output (only show product count at INFO level)
+        if (productLines.length > 0) {
+          addLog('INFO', 'TYPESCRIPT_VALIDATION', `Script output: ${productLines.length} product lines found`);
+        } else {
+          addLog('WARN', 'TYPESCRIPT_VALIDATION', 'No product lines found in script output');
+        }
+
+        // Log detailed counts at DEBUG level
+        addLog('DEBUG', 'TYPESCRIPT_VALIDATION', `Script output details: ${productLines.length} product lines, ${progressLines.length} progress messages, ${errorLines.length} error messages`);
+
+        // Parse the product lines as JSON
+        const parsedProducts: ValidationProduct[] = [];
+        let parseError = null;
+
+        for (const line of productLines) {
+          try {
+            const product = JSON.parse(line);
+            if (product && typeof product === 'object') {
+              parsedProducts.push(product as ValidationProduct);
+              addLog('DEBUG', 'PRODUCT_PARSED', `Parsed product: ${product.name || 'unnamed'}`);
+            }
+          } catch (err) {
+            parseError = err;
+            addLog('ERROR', 'TYPESCRIPT_VALIDATION', `Failed to parse product JSON line: ${line}`);
+          }
+        }
+
+        if (parseError) {
+          addLog('ERROR', 'TYPESCRIPT_VALIDATION', `At least one product line could not be parsed as JSON.`);
+          return {
+            valid: false,
+            error: 'Failed to parse one or more product lines as JSON.',
+            logs,
+            products: [],
+            metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined
+          };
+        }
+
+        // If no products were found but there were no parse errors, it might be a script issue
+        if (parsedProducts.length === 0) {
+          addLog('WARN', 'TYPESCRIPT_VALIDATION', 'No product data found in script output.');
+
+          // If there were error messages, include them in the response
+          if (errorLines.length > 0) {
+            const errorMessage = errorLines.join('\n');
+            return {
+              valid: false,
+              error: `Script execution completed but no products were returned. Errors: ${errorMessage}`,
+              logs,
+              products: [],
+              metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined
+            };
+          } else if (progressLines.length > 0) {
+            // If there were progress messages but no products, the script might have run successfully
+            // but didn't find any products
+
+            // Always report that no products were found - this is an error condition
+            return {
+              valid: false,
+              error: `Script execution completed successfully but no products were returned. The script may need to be modified to output product data.`,
+              logs,
+              products: [],
+              metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined
+            };
+          } else {
+            // No products, no progress messages, no error messages - something is wrong
+            return {
+              valid: false,
+              error: `Script execution completed but produced no output. The script may need to be modified to output product data.`,
+              logs,
+              products: [],
+              metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined
+            };
+          }
+        }
+
+        // Final check - if we somehow got here with no products, fail validation
+        if (parsedProducts.length === 0) {
+          addLog('ERROR', 'TYPESCRIPT_VALIDATION', 'No products found after processing all output.');
+          return {
+            valid: false,
+            error: 'No products were returned by the script.',
+            logs,
+            products: [],
+            metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined
+          };
+        }
+
+        addLog('INFO', 'TYPESCRIPT_VALIDATION', `Parsed ${parsedProducts.length} products from JSONL output.`);
+
+        // Validate that products have required fields
+        // (We already checked that parsedProducts.length > 0)
+        const invalidProducts = parsedProducts.filter(p => !p.name || p.price === undefined || p.price === null);
+        if (invalidProducts.length > 0) {
+          addLog('ERROR', 'TYPESCRIPT_VALIDATION', `${invalidProducts.length} products are missing required fields (name, price).`);
+          return {
+            valid: false,
+            error: 'Validation failed: Some products are missing required fields (name, price).',
+            logs,
+            products: parsedProducts,
+            metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined
+          };
+        }
+
+        // Success!
+        return {
+          valid: true,
+          error: null,
+          products: parsedProducts,
+          logs,
+          metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined
+        };
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        addLog('ERROR', 'TYPESCRIPT_VALIDATION', `Exception during validation: ${errorMsg}`);
+        return {
+          valid: false,
+          error: errorMsg,
+          logs,
+          products: [],
+          metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined
+        };
+      } finally {
+        try {
+          // Clean up temporary files
+          await fsPromises.rm(tempDir, { recursive: true, force: true });
+          addLog('DEBUG', 'TYPESCRIPT_VALIDATION', 'Temporary directory and compiled files deleted.');
+        } catch (cleanupErr) {
+          addLog('WARN', 'TYPESCRIPT_VALIDATION', `Failed to clean up temporary directory: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`);
+        }
+      }
+    }
+
+    // If we get here, the scraper type is not supported
+    return { valid: false, error: `Unsupported scraper type: ${scraperType}`, logs, products };
   }
 }

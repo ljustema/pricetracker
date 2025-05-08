@@ -31,6 +31,7 @@ export default function ScraperRunProgress({
     currentPhase?: number;
     elapsedTime: number;
     errorMessage: string | null;
+    errorDetails: string | null;
     progressMessages: string[];
     isComplete: boolean;
   } | null>(null);
@@ -259,7 +260,9 @@ export default function ScraperRunProgress({
       if (status.isComplete) {
         if (onComplete) {
           // Consider both 'success' and 'completed' as successful statuses
-          onComplete(status.status === 'success' || status.status === 'completed', status.productCount, status.errorMessage);
+          const isSuccess = status.status === 'success' || status.status === 'completed';
+          console.log(`[ScraperRunProgress] Run is complete with status: ${status.status}, isSuccess: ${isSuccess}, productCount: ${status.productCount}`);
+          onComplete(isSuccess, status.productCount, status.errorMessage);
         }
       }
     } catch (err) {
@@ -618,11 +621,74 @@ export default function ScraperRunProgress({
             <div className="flex-shrink-0">
               <XIcon className="h-5 w-5 text-red-400" />
             </div>
-            <div className="ml-3">
+            <div className="ml-3 w-full">
               <h3 className="text-sm font-medium text-red-800">Error</h3>
               <div className="mt-1 text-sm text-red-700">
                 <p>{progress.errorMessage}</p>
               </div>
+
+              {/* Show error details if available */}
+              {progress.errorDetails && (
+                <div className="mt-3">
+                  <h4 className="text-sm font-medium text-red-800">Error Details</h4>
+                  <div className="mt-1 bg-red-100 p-3 rounded-md text-xs font-mono overflow-y-auto max-h-48 border border-red-200">
+                    {/* Try to parse the error details as JSON for better display */}
+                    {(() => {
+                      try {
+                        // Check if it's a JSON string
+                        if (progress.errorDetails.trim().startsWith('{')) {
+                          const errorObj = JSON.parse(progress.errorDetails);
+                          return (
+                            <div>
+                              {errorObj.exitCode !== undefined && (
+                                <div className="mb-2">Exit Code: {errorObj.exitCode}</div>
+                              )}
+
+                              {errorObj.scriptErrors && errorObj.scriptErrors.length > 0 && (
+                                <div className="mb-2">
+                                  <div className="font-semibold">Script Errors:</div>
+                                  <ul className="list-disc pl-4">
+                                    {errorObj.scriptErrors.map((err: string, i: number) => (
+                                      <li key={i} className="mb-1">{err}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+
+                              {errorObj.stderr && errorObj.stderr.length > 0 && (
+                                <div className="mb-2">
+                                  <div className="font-semibold">Stderr Output:</div>
+                                  <div className="whitespace-pre-wrap">
+                                    {errorObj.stderr.slice(0, 10).map((line: string, i: number) => (
+                                      <div key={i} className="mb-1">{line}</div>
+                                    ))}
+                                    {errorObj.stderr.length > 10 && (
+                                      <div className="text-red-600">...and {errorObj.stderr.length - 10} more lines</div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {errorObj.command && (
+                                <div className="mb-2">
+                                  <div className="font-semibold">Command:</div>
+                                  <div className="whitespace-pre-wrap">{errorObj.command}</div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        // If not JSON, display as plain text
+                        return <pre className="whitespace-pre-wrap">{progress.errorDetails}</pre>;
+                      } catch (e) {
+                        // If JSON parsing fails, display as plain text
+                        return <pre className="whitespace-pre-wrap">{progress.errorDetails}</pre>;
+                      }
+                    })()}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

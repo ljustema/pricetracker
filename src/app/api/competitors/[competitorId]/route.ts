@@ -15,7 +15,19 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { competitorId } = await context.params;
+    // Safely extract competitorId with error handling
+    let competitorId;
+    try {
+      const params = await context.params;
+      competitorId = params?.competitorId;
+    } catch (error) {
+      console.error("Error parsing params:", error);
+      return NextResponse.json(
+        { error: "Invalid request parameters" },
+        { status: 400 }
+      );
+    }
+
     if (!competitorId) {
       return NextResponse.json(
         { error: "Missing competitor ID" },
@@ -73,8 +85,19 @@ export async function PUT(
       );
     }
 
-    // Get the competitor ID from the params - await the params
-    const { competitorId } = await params;
+    // Safely extract competitorId with error handling
+    let competitorId;
+    try {
+      const paramsData = await params;
+      competitorId = paramsData?.competitorId;
+    } catch (error) {
+      console.error("Error parsing params:", error);
+      return NextResponse.json(
+        { error: "Invalid request parameters" },
+        { status: 400 }
+      );
+    }
+
     if (!competitorId) {
       return NextResponse.json(
         { error: "Missing competitor ID" },
@@ -152,8 +175,19 @@ export async function DELETE(
       );
     }
 
-    // Get the competitor ID from the params - await the params
-    const { competitorId } = await params;
+    // Safely extract competitorId with error handling
+    let competitorId;
+    try {
+      const paramsData = await params;
+      competitorId = paramsData?.competitorId;
+    } catch (error) {
+      console.error("Error parsing params:", error);
+      return NextResponse.json(
+        { error: "Invalid request parameters" },
+        { status: 400 }
+      );
+    }
+
     if (!competitorId) {
       return NextResponse.json(
         { error: "Missing competitor ID" },
