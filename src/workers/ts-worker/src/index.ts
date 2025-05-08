@@ -539,7 +539,7 @@ async function fetchAndProcessJob() {
                     if (detailedErrorMessage) {
                         errorMessage = detailedErrorMessage;
                     } else {
-                        errorMessage = `Script execution failed with non-zero exit code ${code}.`;
+                        errorMessage = `Script execution failed with non-zero exit code TT ${code}.`;
                     }
 
                     // Create a structured error details object
@@ -547,7 +547,7 @@ async function fetchAndProcessJob() {
                         exitCode: code,
                         scriptErrors: scriptErrors,
                         fullStderr: stderrData.trim(),
-                        primaryError: detailedErrorMessage || `Script execution failed with non-zero exit code ${code}.`,
+                        primaryError: detailedErrorMessage || `Script execution failed with non-zero exit code RR ${code}.`,
                         command: `${command} ${args.join(' ')}`,
                         timestamp: new Date().toISOString(),
                         contextInfo: {
