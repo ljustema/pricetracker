@@ -6,7 +6,7 @@ import { ensureUUID } from '@/lib/utils/uuid';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { scraperId: string } }
+  { params }: { params: Promise<{ scraperId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -14,7 +14,8 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const userId = ensureUUID(session.user.id);
-    const { scraperId } = params;
+    // Await params to get scraperId (Next.js 15 requirement)
+    const { scraperId } = await params;
 
     if (!scraperId) {
       return NextResponse.json({ error: "Scraper ID is required" }, { status: 400 });
@@ -23,11 +24,11 @@ export async function GET(
     // Create a Supabase client with the service role key to bypass RLS
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    
+
     if (!supabaseUrl || !supabaseServiceRoleKey) {
       return NextResponse.json({ error: "Server configuration error" }, { status: 500 });
     }
-    
+
     const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
     // 1. First verify the scraper exists and belongs to the user

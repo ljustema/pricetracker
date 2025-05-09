@@ -1,23 +1,71 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+
+  // Check for confirmation or other status parameters
+  useEffect(() => {
+    const confirmed = searchParams?.get("confirmed");
+    if (confirmed === "true") {
+      setSuccessMessage("Your email has been confirmed! You can now sign in.");
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError("");
+    setSuccessMessage("");
 
     try {
+      // First try to sign in with Supabase to check if email is confirmed
+      const supabase = createClient();
+      const { error: supabaseError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (supabaseError) {
+        console.log("Supabase auth error details:", supabaseError);
+
+        // If it's an email confirmation error, show a specific message
+        if (supabaseError.message.includes("Email not confirmed") ||
+            supabaseError.message.includes("not confirmed")) {
+          setError("Please confirm your email before signing in. Check your inbox for the confirmation link.");
+
+          // Add a button to resend confirmation email
+          const { error: resendError } = await supabase.auth.resend({
+            type: "signup",
+            email,
+            options: {
+              emailRedirectTo: `${window.location.origin}/auth-routes/login`,
+            },
+          });
+
+          if (resendError) {
+            console.error("Error resending confirmation email:", resendError);
+          } else {
+            setSuccessMessage("A new confirmation email has been sent to your inbox.");
+          }
+
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      // Sign in with NextAuth
       const result = await signIn("credentials", {
         redirect: false,
         email,
@@ -86,6 +134,31 @@ export default function LoginPage() {
                 </div>
                 <div className="ml-3">
                   <h3 className="text-sm font-medium text-red-800">{error}</h3>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {successMessage && (
+            <div className="mb-4 rounded-md bg-green-50 p-4">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg
+                    className="h-5 w-5 text-green-400"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-green-800">{successMessage}</h3>
                 </div>
               </div>
             </div>

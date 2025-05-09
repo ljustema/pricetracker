@@ -24,10 +24,20 @@ export default function ApproveButton({
     setError(null);
     setSuccess(false);
     try {
+      console.log(`Approving scraper ${scraperId}...`);
       await ScraperClientService.approveScraper(scraperId);
+      console.log(`Scraper ${scraperId} approved successfully`);
+
+      // Add a small delay to ensure the database has updated
+      await new Promise(resolve => setTimeout(resolve, 500));
+
       setSuccess(true);
-      if (onApproved) onApproved();
+      if (onApproved) {
+        console.log("Calling onApproved callback");
+        onApproved();
+      }
     } catch (err) {
+      console.error("Error approving scraper:", err);
       setError((err as Error).message || "Failed to approve scraper");
     } finally {
       setLoading(false);

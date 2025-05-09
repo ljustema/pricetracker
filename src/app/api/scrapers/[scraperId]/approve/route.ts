@@ -18,7 +18,8 @@ export async function POST(req: NextRequest, { params }: ApproveScraperParams) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const userId = session.user.id;
-    const { scraperId } = params;
+    // Await params to get scraperId (Next.js 15 requirement)
+    const { scraperId } = await params;
 
     if (!scraperId) {
       return NextResponse.json({ error: "Scraper ID is required" }, { status: 400 });

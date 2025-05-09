@@ -20,7 +20,7 @@ function ensureUUID(id: string): string {
 // GET handler to fetch price history for a product
 export async function GET(
   request: NextRequest,
-  { params }: { params: { productId: string } }
+  { params }: { params: Promise<{ productId: string }> }
 ) {
   try {
     // Get the current user from the session
@@ -37,8 +37,8 @@ export async function GET(
     // Convert the NextAuth user ID to a UUID
     const userId = ensureUUID(session.user.id);
 
-    // Access productId directly from params
-    const productId = params.productId;
+    // Access productId from params - await it as required by Next.js 15
+    const { productId } = await params;
 
     // Create a Supabase client with the service role key to bypass RLS
     const supabase = createSupabaseAdminClient();

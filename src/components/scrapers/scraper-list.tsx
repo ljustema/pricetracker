@@ -45,13 +45,21 @@ export default function ScraperList({
     }
   }, [onRefresh]);
 
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+
   const handleApproveScraper = useCallback(async (scraperId: string) => {
     try {
+      setApprovingId(scraperId);
       await ScraperClientService.approveScraper(scraperId);
+      console.log(`Scraper ${scraperId} approved successfully, refreshing list...`);
+      // Force a small delay to ensure the database has updated
+      await new Promise(resolve => setTimeout(resolve, 500));
       onRefresh();
     } catch (error) {
       console.error("Error approving scraper:", error);
       alert(error instanceof Error ? error.message : "Failed to approve scraper");
+    } finally {
+      setApprovingId(null);
     }
   }, [onRefresh]);
 
@@ -227,10 +235,11 @@ export default function ScraperList({
                     <button
                       type="button"
                       onClick={() => handleApproveScraper(scraper.id!)}
-                      className="inline-flex items-center rounded-md border border-green-500 bg-green-50 px-3 py-2 text-sm font-medium text-green-700 shadow-sm hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+                      disabled={approvingId === scraper.id}
+                      className="inline-flex items-center rounded-md border border-green-500 bg-green-50 px-3 py-2 text-sm font-medium text-green-700 shadow-sm hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50"
                     >
                       <CheckCircleIcon className="h-4 w-4 mr-1" />
-                      Approve Scraper
+                      {approvingId === scraper.id ? "Approving..." : "Approve Scraper"}
                     </button>
                   )}
 

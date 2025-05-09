@@ -285,20 +285,58 @@ export class ScraperClientService {
   /**
    * Approve a scraper after testing
    */
-  static async approveScraper(scraperId: string) {
-    const response = await fetch(`/api/scrapers/${scraperId}/approve`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+  static async approveScraper(scraperId: string, maxRetries = 2) {
+    console.log(`[ScraperClientService] Approving scraper ${scraperId}`);
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to approve scraper');
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`[ScraperClientService] Sending approval request (attempt ${attempt}/${maxRetries})`);
+
+        const response = await fetch(`/api/scrapers/${scraperId}/approve`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          // Prevent caching issues
+          cache: 'no-store',
+        });
+
+        console.log(`[ScraperClientService] Approval response status: ${response.status}`);
+
+        if (!response.ok) {
+          let errorMessage = 'Failed to approve scraper';
+          try {
+            const error = await response.json();
+            errorMessage = error.error || errorMessage;
+            console.error(`[ScraperClientService] Error response:`, error);
+          } catch (e) {
+            // If response.json() fails, use the status text
+            errorMessage = `${errorMessage}: ${response.statusText}`;
+          }
+          throw new Error(errorMessage);
+        }
+
+        const result = await response.json();
+        console.log(`[ScraperClientService] Scraper approved successfully:`, result);
+        return result;
+      } catch (error) {
+        console.error(`[ScraperClientService] Error approving scraper (attempt ${attempt}/${maxRetries}):`, error);
+        lastError = error instanceof Error ? error : new Error(String(error));
+
+        // If this is not the last attempt, wait before retrying
+        if (attempt < maxRetries) {
+          const delayMs = 1000 * attempt; // Exponential backoff
+          console.log(`[ScraperClientService] Retrying in ${delayMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
     }
 
-    return response.json();
+    // If we get here, all retries failed
+    console.error(`[ScraperClientService] All ${maxRetries} attempts to approve scraper failed`);
+    throw lastError || new Error('Failed to approve scraper after multiple attempts');
   }
 
   /**

@@ -46,41 +46,69 @@ export default function RegisterPage() {
           data: {
             name,
           },
+          emailRedirectTo: `${window.location.origin}/auth-routes/login`,
         },
       });
 
       if (signUpError) {
+        console.error("Supabase signup error details:", signUpError);
         throw signUpError;
       }
 
       if (data?.user) {
-        // Sign in with NextAuth after successful registration
-        const result = await signIn("credentials", {
-          redirect: false,
-          email,
-          password,
-        });
-
-        if (result?.error) {
-          // If sign-in fails, redirect to login page
-          router.push("/auth-routes/login");
-          return;
+        // Check if email confirmation is required
+        if (data.user.identities && data.user.identities.length === 0) {
+          // This can happen when there's a conflict with an existing user
+          throw new Error("Email already in use. Please try a different email or sign in.");
         }
 
-        // Redirect to dashboard on successful login
-        router.push("/app-routes/dashboard");
-        router.refresh();
+        if (data.user.email_confirmed_at || data.user.confirmed_at) {
+          // Email already confirmed, proceed with sign in
+          const result = await signIn("credentials", {
+            redirect: false,
+            email,
+            password,
+          });
+
+          if (result?.error) {
+            // If sign-in fails, redirect to login page
+            router.push("/auth-routes/login");
+            return;
+          }
+
+          // Redirect to dashboard on successful login
+          router.push("/app-routes/dashboard");
+          router.refresh();
+        } else {
+          // Email confirmation required
+          router.push("/auth-routes/register/confirmation");
+        }
       } else {
-        // Email confirmation might be required
-        router.push("/auth-routes/register/confirmation");
+        // Something unexpected happened
+        throw new Error("Failed to create user account. Please try again.");
       }
     } catch (error) {
       console.error("Registration error:", error);
-      setError(
-        error instanceof Error
-          ? error.message
-          : "An error occurred during registration. Please try again."
-      );
+
+      // Provide more specific error messages
+      let errorMessage = "An error occurred during registration. Please try again.";
+
+      if (error instanceof Error) {
+        console.log("Registration error details:", error);
+
+        if (error.message.includes("Database error")) {
+          // This is likely the issue with the email_verified column
+          errorMessage = "There was a database error during registration. Please try again or contact support.";
+        } else if (error.message.includes("User already registered")) {
+          errorMessage = "This email is already registered. Please sign in instead.";
+        } else if (error.message.includes("Password should be at least")) {
+          errorMessage = error.message; // Use Supabase's password validation message
+        } else {
+          errorMessage = error.message;
+        }
+      }
+
+      setError(errorMessage);
       setIsLoading(false);
     }
   };

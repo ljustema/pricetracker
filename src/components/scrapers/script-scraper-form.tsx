@@ -29,7 +29,8 @@ export default function ScriptScraperForm({ // Renamed component
   const [competitorName, setCompetitorName] = useState("");
   const [scriptContent, setScriptContent] = useState(initialScript || ""); // Renamed state variable and setter
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  // Removed hardcoded scraperType state - it now comes from props
+  // Add state for template type selection
+  const [templateType, setTemplateType] = useState<'standard' | 'crawlee'>('standard');
   const [isValidating, setIsValidating] = useState(false);
   // Updated validation result state to match new API response
   const [validationResult, setValidationResult] = useState<{
@@ -61,7 +62,7 @@ export default function ScriptScraperForm({ // Renamed component
           console.warn("No competitor ID provided");
           return;
         }
-        
+
         const response = await fetch(`/api/competitors/${competitorId}`);
         if (response.ok) {
           const competitor = await response.json();
@@ -284,7 +285,7 @@ export default function ScriptScraperForm({ // Renamed component
           }
         </p>
       </div>
-      
+
       {/* Removed Test Results Modal */}
       {/* <TestResultsModal
         isOpen={isTestModalOpen}
@@ -325,14 +326,75 @@ export default function ScriptScraperForm({ // Renamed component
             <label className="block text-sm font-medium text-gray-700">
               Script Content ({scraperType === 'python' ? 'Python' : 'TypeScript'})
             </label>
+
+            {/* Template selection for TypeScript only */}
+            {scraperType === 'typescript' && (
+              <div className="mt-2 mb-3">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Template Type
+                </label>
+                <div className="flex space-x-4">
+                  <div className="flex items-center">
+                    <input
+                      id="standard-template"
+                      type="radio"
+                      name="template-type"
+                      value="standard"
+                      checked={templateType === 'standard'}
+                      onChange={() => setTemplateType('standard')}
+                      className="h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                    />
+                    <label htmlFor="standard-template" className="ml-2 block text-sm text-gray-900">
+                      Standard TypeScript
+                    </label>
+                  </div>
+                  <div className="flex items-center">
+                    <input
+                      id="crawlee-template"
+                      type="radio"
+                      name="template-type"
+                      value="crawlee"
+                      checked={templateType === 'crawlee'}
+                      onChange={() => setTemplateType('crawlee')}
+                      className="h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                    />
+                    <label htmlFor="crawlee-template" className="ml-2 block text-sm text-gray-900">
+                      Crawlee (Recommended)
+                    </label>
+                  </div>
+                </div>
+                <p className="mt-1 text-xs text-gray-500">
+                  Crawlee is a powerful web scraping library that makes it easier to build reliable scrapers with built-in features for handling rate limiting, proxies, and more.
+                </p>
+              </div>
+            )}
+
             <div className="mt-1 flex items-center space-x-2">
               <a
-                href={scraperType === 'python' ? "/api/scrapers/python/template" : "/api/scrapers/typescript/template"} // Dynamic href
-                download={scraperType === 'python' ? "pricetracker_scraper_template.py" : "pricetracker_scraper_template.ts"} // Dynamic download filename
+                href={
+                  scraperType === 'python'
+                    ? "/api/scrapers/python/template"
+                    : templateType === 'crawlee'
+                      ? "/api/scrapers/crawlee/template"
+                      : "/api/scrapers/typescript/template"
+                }
+                download={
+                  scraperType === 'python'
+                    ? "pricetracker_scraper_template.py"
+                    : templateType === 'crawlee'
+                      ? "pricetracker_crawlee_template.ts"
+                      : "pricetracker_scraper_template.ts"
+                }
                 className="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
               >
                 <UploadIcon className="h-4 w-4 mr-2" />
-                Download {scraperType === 'python' ? 'Python' : 'TS'} Template
+                Download {
+                  scraperType === 'python'
+                    ? 'Python'
+                    : templateType === 'crawlee'
+                      ? 'Crawlee'
+                      : 'TS'
+                } Template
               </a>
               <label
                 htmlFor="file-upload"
@@ -406,7 +468,7 @@ export default function ScriptScraperForm({ // Renamed component
               placeholder={`# Paste your ${scraperType === 'python' ? 'Python' : 'TypeScript'} scraper code here`}
             />
           </div>
-          
+
           {/* Removed Terminal Output Section - Use Validation Logs instead */}
 
         <> {/* Fragment start to wrap logs + products */}
@@ -448,7 +510,7 @@ export default function ScriptScraperForm({ // Renamed component
                 </div>
                 {/* Removed button container div */}
               </div>
-              
+
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">

@@ -1,7 +1,7 @@
 import { type NextAuthOptions } from 'next-auth';
 import GoogleProvider from 'next-auth/providers/google';
-// import EmailProvider from 'next-auth/providers/email'; // We'll use this structure but adapt for Supabase password auth
 import { SupabaseAdapter } from '@auth/supabase-adapter';
+import { createClient } from '@supabase/supabase-js';
 
 // Ensure environment variables are defined
 const googleClientId = process.env.GOOGLE_CLIENT_ID;
@@ -58,23 +58,52 @@ export const authOptions: NextAuthOptions = {
       },
     }),
     // Add a credentials provider for email/password login
-    // This will be used by the login form
-    // Note: This is just a placeholder and doesn't actually verify credentials
-    // The actual verification happens in the Supabase client in the login page
-    // We include it here so NextAuth knows about this sign-in method
+    // This provider works with Supabase Auth
     {
       id: "credentials",
       name: "Email & Password",
-      type: "credentials", // Add the required type property
+      type: "credentials",
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" }
       },
-      async authorize(_credentials) {
-        // This function is not actually used for verification
-        // since we're handling that directly with Supabase in the login page
-        // Return null to indicate that verification should be handled elsewhere
-        return null;
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.password) {
+          return null;
+        }
+
+        try {
+          // Create a Supabase client with the service role key
+          // This is safe because it only runs on the server
+          const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
+            auth: {
+              autoRefreshToken: false,
+              persistSession: false
+            }
+          });
+
+          // Sign in with Supabase
+          const { data, error } = await supabase.auth.signInWithPassword({
+            email: credentials.email,
+            password: credentials.password,
+          });
+
+          if (error || !data?.user) {
+            console.error("Supabase auth error:", error);
+            return null;
+          }
+
+          // Return the user object for NextAuth
+          return {
+            id: data.user.id,
+            email: data.user.email,
+            name: data.user.user_metadata?.name || data.user.email?.split('@')[0],
+            image: data.user.user_metadata?.avatar_url,
+          };
+        } catch (error) {
+          console.error("Error in authorize function:", error);
+          return null;
+        }
       }
     }
   ],
@@ -102,21 +131,27 @@ export const authOptions: NextAuthOptions = {
   },
   callbacks: {
     // Handle sign-in event
-    async signIn({ user: _user, account, profile }) {
+    async signIn({ user: _user, account, profile, credentials }) {
       // If it's a Google sign-in
       if (account?.provider === 'google' && profile?.email) {
         // The user object already contains the basic profile info from Google
         // We don't need to do anything special here since we're using JWT sessions
         // and not relying on the adapter to store user data
-        
+
         // Return true to allow sign in
         return true;
       }
-      
+
+      // If it's a credentials sign-in (email/password)
+      if (credentials) {
+        // The authorize function has already verified the credentials
+        return true;
+      }
+
       // For other providers or if email is missing, deny sign in
       return !!profile?.email;
     },
-    
+
     // Include user.id on session
     async session({ session, token }) {
       if (token?.sub && session.user) {
@@ -124,7 +159,7 @@ export const authOptions: NextAuthOptions = {
       }
       return session;
     },
-    
+
     // Include user.id on token
     async jwt({ token, user, account, profile: _profile }) {
       // Initial sign in
@@ -133,15 +168,15 @@ export const authOptions: NextAuthOptions = {
         // You can add additional profile info to the token if needed
         // e.g., token.picture = profile.picture;
       }
-      
+
       // On subsequent calls, user is undefined
       if (user?.id) {
         token.sub = user.id;
       }
-      
+
       return token;
     },
-    
+
     // Potentially redirect after sign-in
     async redirect({ baseUrl }) {
       // Always redirect to the app dashboard after successful sign-in
