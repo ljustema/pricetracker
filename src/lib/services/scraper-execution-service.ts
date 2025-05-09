@@ -673,7 +673,7 @@ export class ScraperExecutionService {
             version: "1.0.0",
             private: true,
             dependencies: {
-              "crawlee": "^3.0.0",
+              "crawlee": "^3.13.3",
               "playwright": "^1.30.0",
               "node-fetch": "^2.6.7",
               "yargs": "^17.6.2",
@@ -682,7 +682,8 @@ export class ScraperExecutionService {
               "@babel/cli": "^7.21.0",
               "@babel/core": "^7.21.0",
               "@babel/preset-typescript": "^7.21.0",
-              "@babel/preset-env": "^7.21.0"
+              "@babel/preset-env": "^7.21.0",
+              "fast-xml-parser": "^5.2.0"
             }
           };
 

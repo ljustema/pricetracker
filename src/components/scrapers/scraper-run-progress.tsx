@@ -37,7 +37,7 @@ export default function ScraperRunProgress({
   } | null>(null);
 
   const [error, setError] = useState<string | null>(null);
-  const [pollingInterval, setPollingInterval] = useState<number>(3000); // 3 seconds
+  const [pollingInterval, setPollingInterval] = useState<number>(5000); // 5 seconds - reduced frequency to lower database load
   const [consecutiveErrors, setConsecutiveErrors] = useState<number>(0);
   const [stoppedPollingOnError, setStoppedPollingOnError] = useState<boolean>(false); // Track if polling stopped due to errors
   const [isStopping, setIsStopping] = useState<boolean>(false); // Track if we're in the process of stopping

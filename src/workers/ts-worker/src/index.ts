@@ -84,7 +84,7 @@ const supabase = createClient<Database>(supabaseUrl, supabaseServiceRoleKey);
 
 const WORKER_TYPE = 'typescript'; // Define the type of scraper this worker handles
 const POLLING_INTERVAL_MS = 5000; // Poll every 5 seconds (adjust as needed)
-const SCRIPT_TIMEOUT_SECONDS = 1200; // Timeout for script execution (20 minutes)
+const SCRIPT_TIMEOUT_SECONDS = 7200; // Timeout for script execution (2 hours) - Matches Python worker
 const DB_BATCH_SIZE = 100; // How many products to buffer before saving to DB
 const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 
@@ -357,7 +357,7 @@ async function fetchAndProcessJob() {
         });
 
         // Handle stdout
-        childProcess.stdout?.on('data', (data: Buffer) => {
+        childProcess.stdout?.on('data', async (data: Buffer) => {
             stdoutData += data.toString();
             // Process line by line
             let newlineIndex;
@@ -365,11 +365,38 @@ async function fetchAndProcessJob() {
                 const line = stdoutData.substring(0, newlineIndex).trim();
                 stdoutData = stdoutData.substring(newlineIndex + 1);
                 if (line) {
+                    // Check if the line looks like a log message (not JSON)
+                    if (line.startsWith('INFO') || line.startsWith('DEBUG') || line.startsWith('WARN') ||
+                        line.startsWith('ERROR') || line.includes('CheerioCrawler:')) {
+                        // This is a log message, not a product - log it and continue
+                        logStructured(job.id, 'info', 'SCRIPT_LOG', `STDOUT: ${line}`);
+                        continue;
+                    }
+
                     try {
                         const product = JSON.parse(line);
                         if (typeof product === 'object' && product !== null && product.name && product.price !== undefined) {
                             productsBuffer.push(product as ScrapedProductData);
                             productCount++;
+
+                            // Update product count in database every 10 products
+                            if (productCount % 10 === 0) {
+                                try {
+                                    const updateResult = await supabase
+                                        .from('scraper_runs')
+                                        .update({ product_count: productCount })
+                                        .eq('id', job.id);
+
+                                    if (updateResult.error) {
+                                        logStructured(job.id, 'error', 'PRODUCT_COUNT_UPDATE', `Failed to update product count: ${updateResult.error.message}`);
+                                    } else {
+                                        logStructured(job.id, 'info', 'PRODUCT_COUNT_UPDATE', `Updated product count to ${productCount}`);
+                                    }
+                                } catch (err: any) {
+                                    logStructured(job.id, 'error', 'PRODUCT_COUNT_UPDATE', `Error updating product count: ${err.message}`);
+                                }
+                            }
+
                             if (productsBuffer.length >= DB_BATCH_SIZE) {
                                 const batchToSave = [...productsBuffer]; // Copy buffer
                                 productsBuffer.length = 0; // Clear buffer
@@ -383,7 +410,8 @@ async function fetchAndProcessJob() {
                             logStructured(job.id, 'warn', 'SCRIPT_STDOUT', `Skipping invalid product JSON structure: ${line.substring(0, 100)}...`);
                         }
                     } catch (e) {
-                        logStructured(job.id, 'warn', 'SCRIPT_STDOUT', `Failed to decode JSON from stdout: ${line.substring(0, 100)}...`);
+                        // Instead of warning about JSON decode failure, treat it as a log message
+                        logStructured(job.id, 'info', 'SCRIPT_LOG', `STDOUT: ${line}`);
                     }
                 }
             }
@@ -392,7 +420,7 @@ async function fetchAndProcessJob() {
         // Handle stderr with improved error capture
         childProcess.stderr?.on('data', (data: Buffer) => {
             const lines = data.toString().split('\n');
-            lines.forEach((line: string) => {
+            lines.forEach(async (line: string) => {
                 line = line.trim();
                 if (!line) return;
                 stderrData += line + '\n'; // Store for potential error details
@@ -404,7 +432,58 @@ async function fetchAndProcessJob() {
                 logToDatabase(job.id, `STDERR: ${line}`);
 
                 if (line.startsWith("PROGRESS:")) {
-                    logStructured(job.id, 'info', 'SCRIPT_LOG', line.substring(9).trim());
+                    const progressMessage = line.substring(9).trim();
+                    logStructured(job.id, 'info', 'SCRIPT_LOG', progressMessage);
+
+                    // Extract phase information from progress message
+                    const phaseMatch = progressMessage.match(/Phase (\d+):/);
+                    if (phaseMatch && phaseMatch[1]) {
+                        const phase = parseInt(phaseMatch[1], 10);
+                        if (!isNaN(phase) && phase > 0) {
+                            // Update the current_phase in the database
+                            try {
+                                const updateResult = await supabase
+                                    .from('scraper_runs')
+                                    .update({ current_phase: phase })
+                                    .eq('id', job.id);
+
+                                if (updateResult.error) {
+                                    logStructured(job.id, 'error', 'PHASE_UPDATE', `Failed to update phase: ${updateResult.error.message}`);
+                                } else {
+                                    logStructured(job.id, 'info', 'PHASE_UPDATE', `Updated current phase to ${phase}`);
+                                }
+                            } catch (err: any) {
+                                logStructured(job.id, 'error', 'PHASE_UPDATE', `Error updating phase: ${err.message}`);
+                            }
+                        }
+                    }
+
+                    // Extract batch information from progress message
+                    const batchMatch = progressMessage.match(/(\d+)\/(\d+)/);
+                    if (batchMatch && batchMatch[1] && batchMatch[2]) {
+                        const currentBatch = parseInt(batchMatch[1], 10);
+                        const totalBatches = parseInt(batchMatch[2], 10);
+                        if (!isNaN(currentBatch) && !isNaN(totalBatches)) {
+                            // Update the batch information in the database
+                            try {
+                                const updateResult = await supabase
+                                    .from('scraper_runs')
+                                    .update({
+                                        current_batch: currentBatch,
+                                        total_batches: totalBatches
+                                    })
+                                    .eq('id', job.id);
+
+                                if (updateResult.error) {
+                                    logStructured(job.id, 'error', 'BATCH_UPDATE', `Failed to update batch progress: ${updateResult.error.message}`);
+                                } else {
+                                    logStructured(job.id, 'info', 'BATCH_UPDATE', `Updated batch progress to ${currentBatch}/${totalBatches}`);
+                                }
+                            } catch (err: any) {
+                                logStructured(job.id, 'error', 'BATCH_UPDATE', `Error updating batch progress: ${err.message}`);
+                            }
+                        }
+                    }
                 } else if (line.startsWith("ERROR:")) {
                     const errorLine = line.substring(6).trim();
                     logStructured(job.id, 'error', 'SCRIPT_LOG', errorLine);
@@ -464,7 +543,7 @@ async function fetchAndProcessJob() {
                 reject(err);
             });
 
-            childProcess.on('close', (code: number | null) => {
+            childProcess.on('close', async (code: number | null) => {
                 clearTimeout(timeout);
                 logStructured(job.id, 'info', 'SUBPROCESS_EXEC', `Script finished with exit code: ${code}`);
 
@@ -573,6 +652,22 @@ async function fetchAndProcessJob() {
                     saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave)
                          .then(() => logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted final batch.`))
                          .catch(err => logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save final product batch: ${err.message}`));
+                }
+
+                // Final update of product count in database
+                try {
+                    const updateResult = await supabase
+                        .from('scraper_runs')
+                        .update({ product_count: productCount })
+                        .eq('id', job.id);
+
+                    if (updateResult.error) {
+                        logStructured(job.id, 'error', 'PRODUCT_COUNT_UPDATE', `Failed to update final product count: ${updateResult.error.message}`);
+                    } else {
+                        logStructured(job.id, 'info', 'PRODUCT_COUNT_UPDATE', `Updated final product count to ${productCount}`);
+                    }
+                } catch (err: any) {
+                    logStructured(job.id, 'error', 'PRODUCT_COUNT_UPDATE', `Error updating final product count: ${err.message}`);
                 }
 
                 if (code === 0) {
@@ -805,6 +900,89 @@ try {
     // Decide if worker should exit if logging to file is critical
 }
 
+// Message batching system to reduce database load
+interface LogBatch {
+    messages: any[];
+    lastFlushTime: number;
+    timer: NodeJS.Timeout | null;
+}
+
+const LOG_BATCHES: Record<string, LogBatch> = {};
+const BATCH_FLUSH_INTERVAL_MS = 5000; // Flush every 5 seconds
+const BATCH_SIZE_THRESHOLD = 10; // Or flush when we have 10+ messages
+const IMPORTANT_PHASES = ['ERROR', 'ERROR_DETAILS', 'COMPLETION', 'JOB_CLAIMED', 'PHASE_UPDATE']; // These phases get flushed immediately
+
+// Function to flush a batch of log messages to the database
+async function flushLogBatch(jobId: string) {
+    if (!LOG_BATCHES[jobId] || LOG_BATCHES[jobId].messages.length === 0) return;
+
+    const batch = LOG_BATCHES[jobId];
+    const messagesToSend = [...batch.messages]; // Copy the messages
+    batch.messages = []; // Clear the batch
+    batch.lastFlushTime = Date.now();
+
+    const logPrefix = `[Job ${jobId}]`;
+
+    try {
+        // Convert JSONB messages to strings for TEXT[] column
+        // The progress_messages column is TEXT[], not JSONB
+        const stringifiedMessages = messagesToSend.map(msg => JSON.stringify(msg));
+
+        // First get the current progress_messages
+        const { data: currentData, error: fetchError } = await supabase
+            .from('scraper_runs')
+            .select('progress_messages')
+            .eq('id', jobId)
+            .single();
+
+        if (fetchError) {
+            console.error(`${logPrefix} Failed to fetch current progress_messages: ${fetchError.message}`);
+            throw fetchError;
+        }
+
+        // Combine existing messages with new ones
+        const existingMessages = currentData?.progress_messages || [];
+        const updatedMessages = [...existingMessages, ...stringifiedMessages];
+
+        // Update with the combined array
+        const { error } = await supabase
+            .from('scraper_runs')
+            .update({
+                progress_messages: updatedMessages
+            })
+            .eq('id', jobId);
+
+        if (error) {
+            console.error(`${logPrefix} Failed to flush log batch: ${error.message}`);
+
+            // Fallback: Try to update the last few important messages to error_details
+            try {
+                const importantMessages = messagesToSend
+                    .filter(msg => msg.lvl === 'ERROR' || msg.phase === 'ERROR_DETAILS')
+                    .slice(-3); // Just the last 3 important messages
+
+                if (importantMessages.length > 0) {
+                    // Convert to string for storage in TEXT column
+                    const errorDetailsString = JSON.stringify({
+                        important_logs: importantMessages,
+                        timestamp: new Date().toISOString()
+                    });
+
+                    await supabase
+                        .from('scraper_runs')
+                        .update({
+                            error_details: errorDetailsString // Store as string in TEXT column
+                        })
+                        .eq('id', jobId);
+                }
+            } catch (fallbackError) {
+                console.error(`${logPrefix} Fallback log update failed:`, fallbackError);
+            }
+        }
+    } catch (error) {
+        console.error(`${logPrefix} Exception during batch flush:`, error);
+    }
+}
 
 function logStructured(jobId: string | null, level: string, phase: string, message: string, data?: any) { // Allow null jobId for worker-level logs
   const timestamp = new Date();
@@ -830,90 +1008,58 @@ function logStructured(jobId: string | null, level: string, phase: string, messa
       console.error(`${logPrefix} Failed to write to log file ${logFile}: ${err}`);
   });
 
+  // Only log to database if we have a job ID
+  if (!jobId) return;
 
-  // Append logEntry to scraper_runs.progress_messages array in DB (only if jobId is present)
-  // Use a separate async function to avoid blocking the log call itself
-  // Fire-and-forget approach for logging updates
-  if (jobId) {
-      (async () => {
-          try {
-              // Use direct update instead of RPC to avoid type issues
-              // First, get the current progress_messages
-              const { data: currentRun, error: fetchError } = await supabase
-                  .from('scraper_runs')
-                  .select('progress_messages')
-                  .eq('id', jobId)
-                  .single();
+  // Add to batch for database logging
+  if (!LOG_BATCHES[jobId]) {
+      LOG_BATCHES[jobId] = {
+          messages: [],
+          lastFlushTime: Date.now(),
+          timer: null
+      };
 
-              if (fetchError) {
-                  console.error(`${logPrefix} Failed to fetch current run: ${fetchError.message}`);
-                  return;
-              }
+      // Set up a timer to periodically flush this job's logs
+      LOG_BATCHES[jobId].timer = setInterval(() => {
+          if (Date.now() - LOG_BATCHES[jobId].lastFlushTime >= BATCH_FLUSH_INTERVAL_MS) {
+              flushLogBatch(jobId).catch(err =>
+                  console.error(`${logPrefix} Error in scheduled batch flush: ${err}`)
+              );
 
-              // Parse the current progress_messages or initialize as empty array
-              let progressMessages = [];
-              try {
-                  if (currentRun?.progress_messages) {
-                      progressMessages = typeof currentRun.progress_messages === 'string'
-                          ? JSON.parse(currentRun.progress_messages)
-                          : currentRun.progress_messages;
+              // If no messages for a while, clear the interval to avoid memory leaks
+              if (LOG_BATCHES[jobId].messages.length === 0 &&
+                  Date.now() - LOG_BATCHES[jobId].lastFlushTime > BATCH_FLUSH_INTERVAL_MS * 3) {
+                  if (LOG_BATCHES[jobId].timer) {
+                      clearInterval(LOG_BATCHES[jobId].timer);
+                      LOG_BATCHES[jobId].timer = null;
                   }
-              } catch (parseError) {
-                  const errorMessage = parseError instanceof Error ? parseError.message : String(parseError);
-                  console.error(`${logPrefix} Error parsing progress_messages: ${errorMessage}`);
-                  progressMessages = [];
+                  delete LOG_BATCHES[jobId];
               }
-
-              // Add the new log entry
-              progressMessages.push(logEntry);
-
-              // Update with the new array
-              const { error } = await supabase
-                  .from('scraper_runs')
-                  .update({
-                      progress_messages: progressMessages
-                  })
-                  .eq('id', jobId);
-
-              if (error) {
-                  // Avoid logging failure to append logs, as it could cause infinite loops
-                  console.error(`${logPrefix} Failed to append log to DB: ${error.message}`);
-
-                  // Try a fallback approach - update error_details with the latest log
-                  try {
-                      const { error: fallbackError } = await supabase
-                          .from('scraper_runs')
-                          .update({
-                              error_details: JSON.stringify({
-                                  last_log: logEntry,
-                                  timestamp: new Date().toISOString()
-                              })
-                          })
-                          .eq('id', jobId);
-
-                      if (fallbackError) {
-                          console.error(`${logPrefix} Failed fallback log update: ${fallbackError.message}`);
-                      }
-                  } catch (fallbackError) {
-                      console.error(`${logPrefix} Exception during fallback log update:`, fallbackError);
-                  }
-              }
-          } catch (dbError) {
-              console.error(`${logPrefix} Exception during log DB update:`, dbError);
           }
-      })();
+      }, BATCH_FLUSH_INTERVAL_MS);
+  }
+
+  // Add message to batch
+  LOG_BATCHES[jobId].messages.push(logEntry);
+
+  // Flush immediately for important messages or if batch is large enough
+  const isImportant = level.toUpperCase() === 'ERROR' || IMPORTANT_PHASES.includes(phase);
+  if (isImportant || LOG_BATCHES[jobId].messages.length >= BATCH_SIZE_THRESHOLD) {
+      flushLogBatch(jobId).catch(err =>
+          console.error(`${logPrefix} Error in immediate batch flush: ${err}`)
+      );
   }
 }
 
 /*
--- Recommended RPC function for atomicity (add to DB schema, e.g., 04_public_functions_triggers.sql):
-CREATE OR REPLACE FUNCTION append_log_to_scraper_run(p_run_id uuid, p_log_entry jsonb)
+-- Updated RPC function for TEXT[] type (add to DB schema, e.g., 04_public_functions_triggers.sql):
+CREATE OR REPLACE FUNCTION append_log_to_scraper_run(p_run_id uuid, p_log_entry text)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 BEGIN
   UPDATE scraper_runs
-  SET progress_messages = coalesce(progress_messages, '[]'::jsonb) || p_log_entry
+  SET progress_messages = COALESCE(progress_messages, ARRAY[]::text[]) || ARRAY[p_log_entry]
   WHERE id = p_run_id;
 END;
 $$;

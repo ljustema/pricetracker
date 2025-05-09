@@ -52,13 +52,14 @@ export async function compileTypeScriptScraper(
       version: "1.0.0",
       private: true,
       dependencies: {
-        "crawlee": "^3.0.0",
+        "crawlee": "^3.13.3",
         "playwright": "^1.30.0",
         "node-fetch": "^2.6.7",
         "jsdom": "^21.1.0",
         "yargs": "^17.6.2",
         "typescript": "^4.9.5",
-        "@types/node": "^18.15.0"
+        "@types/node": "^18.15.0",
+        "fast-xml-parser": "^5.2.0"
       }
     };
 
@@ -96,25 +97,41 @@ export async function compileTypeScriptScraper(
       throw new Error(`Failed to install dependencies: ${errorMessage}`);
     }
 
-    // Create a tsconfig.json file with permissive settings
+    // Create a tsconfig.json file with very permissive settings to effectively skip type checking
     const tsConfigContent = {
       compilerOptions: {
         target: "ES2020",
         module: "CommonJS",
         moduleResolution: "Node",
         esModuleInterop: true,
-        skipLibCheck: true,
+        skipLibCheck: true, // Skip type checking of declaration files
         resolveJsonModule: true,
         outDir: ".",
         allowSyntheticDefaultImports: true,
         noImplicitAny: false,
         strictNullChecks: false,
         allowJs: true,
-        noEmitOnError: false,
-        isolatedModules: true,
+        noEmitOnError: false, // Continue emitting output even if there are errors
+        isolatedModules: true, // Treat each file as a separate module (faster compilation)
         suppressImplicitAnyIndexErrors: true,
         ignoreDeprecations: "5.0",
-        downlevelIteration: true
+        downlevelIteration: true,
+        noEmit: false, // Ensure we emit JavaScript output
+        emitDeclarationOnly: false, // Ensure we emit JavaScript output, not just declarations
+        checkJs: false, // Don't type-check JavaScript files
+        strict: false, // Disable all strict type checking
+        noImplicitThis: false, // Disable 'this' type checking
+        noUnusedLocals: false, // Don't report unused locals
+        noUnusedParameters: false, // Don't report unused parameters
+        noFallthroughCasesInSwitch: false, // Don't report fallthrough cases in switch
+        allowUnreachableCode: true, // Allow unreachable code
+        allowUnusedLabels: true, // Allow unused labels
+        skipDefaultLibCheck: true, // Skip checking .d.ts files included with TypeScript
+        incremental: false, // Disable incremental compilation for faster one-time builds
+        composite: false, // Disable composite project features
+        declaration: false, // Don't generate declaration files
+        declarationMap: false, // Don't generate declaration source maps
+        sourceMap: false // Don't generate source maps for faster compilation
       },
       include: ["scraper.ts"],
       exclude: ["node_modules"]
@@ -156,6 +173,8 @@ export async function compileTypeScriptScraper(
       debugLog(`Executing: ${tscCommand}`);
 
       // We need to specify the input file explicitly
+      // Note: TypeScript compiler doesn't have a --transpileOnly flag (that's a ts-node feature)
+      // Instead, we rely on the tsconfig.json settings to effectively skip type checking
       const fullCommand = `${tscCommand} scraper.ts`;
       debugLog(`Full command: ${fullCommand}`);
 
@@ -198,13 +217,70 @@ export async function compileTypeScriptScraper(
           debugLog(`TypeScript compilation stdout: ${tscError.stdout}`);
         }
 
-        // Return failure
-        return {
-          success: false,
-          outputPath: null,
-          error: errorMessage,
-          tempDir
-        };
+        // Try using Babel as a fallback
+        debugLog('TypeScript compilation failed, trying Babel as fallback');
+
+        try {
+          // Create a babel.config.json file
+          const babelConfig = {
+            presets: [
+              "@babel/preset-env",
+              "@babel/preset-typescript"
+            ]
+          };
+
+          // Install Babel dependencies if not already in package.json
+          debugLog('Installing Babel dependencies');
+          execSync('npm install --no-package-lock --no-save @babel/cli @babel/core @babel/preset-env @babel/preset-typescript', {
+            cwd: tempDir,
+            stdio: 'pipe',
+            timeout: TIMEOUT_MS / 2
+          });
+
+          const babelConfigPath = path.join(tempDir, 'babel.config.json');
+          fs.writeFileSync(babelConfigPath, JSON.stringify(babelConfig, null, 2), 'utf-8');
+          debugLog(`Created babel.config.json at ${babelConfigPath}`);
+
+          // Try to find babel executable
+          const babelPath = path.join(tempDir, 'node_modules', '.bin', 'babel');
+          const babelCommand = process.platform === 'win32' ? `"${babelPath}"` : babelPath;
+
+          // Execute babel
+          const babelFullCommand = `${babelCommand} scraper.ts --out-file scraper.js --extensions ".ts"`;
+          debugLog(`Executing: ${babelFullCommand}`);
+
+          execSync(babelFullCommand, {
+            cwd: tempDir,
+            stdio: 'pipe',
+            timeout: TIMEOUT_MS / 2
+          });
+
+          debugLog('Babel compilation successful');
+
+          // Check if the compiled JavaScript file exists
+          const jsFilePath = path.join(tempDir, 'scraper.js');
+          if (!fs.existsSync(jsFilePath)) {
+            throw new Error('Babel compilation completed but output file not found');
+          }
+
+          // Return success with the JavaScript file path
+          return {
+            success: true,
+            outputPath: jsFilePath,
+            tempDir
+          };
+        } catch (babelError) {
+          const babelErrorMessage = babelError instanceof Error ? babelError.message : String(babelError);
+          debugLog(`Babel compilation failed: ${babelErrorMessage}`);
+
+          // If both TypeScript and Babel fail, return the original TypeScript error
+          return {
+            success: false,
+            outputPath: null,
+            error: errorMessage,
+            tempDir
+          };
+        }
       }
     } catch (tscError: any) {
       let errorMessage = tscError.message;

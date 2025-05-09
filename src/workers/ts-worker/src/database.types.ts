@@ -72,12 +72,13 @@ export type Database = {
         Relationships: []
       }
       // Other tables omitted for brevity
-      
+
       scraper_runs: {
         Row: {
           completed_at: string | null
           created_at: string | null
           current_batch: number | null
+          current_phase: number | null
           error_details: string | null
           error_message: string | null
           execution_time_ms: number | null
@@ -98,6 +99,7 @@ export type Database = {
           completed_at?: string | null
           created_at?: string | null
           current_batch?: number | null
+          current_phase?: number | null
           error_details?: string | null
           error_message?: string | null
           execution_time_ms?: number | null
@@ -118,6 +120,7 @@ export type Database = {
           completed_at?: string | null
           created_at?: string | null
           current_batch?: number | null
+          current_phase?: number | null
           error_details?: string | null
           error_message?: string | null
           execution_time_ms?: number | null
@@ -144,7 +147,7 @@ export type Database = {
           }
         ]
       }
-      
+
       // Other tables would go here...
     }
     // Other database objects would go here...

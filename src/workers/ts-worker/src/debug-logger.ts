@@ -66,14 +66,20 @@ export async function logToDatabase(runId: string, message: string, data: any = 
 
     // Skip the RPC call and use direct update instead
     // Update the error_details field with the latest log
+    // The error_details column is TEXT type, not JSONB, so we need to stringify the data
+    const logEntry = {
+      debug_message: message,
+      debug_data: data,
+      timestamp: new Date().toISOString()
+    };
+
+    // Convert to string for storage in TEXT column
+    const logEntryString = JSON.stringify(logEntry);
+
     const { error: updateError } = await supabase
       .from('scraper_runs')
       .update({
-        error_details: JSON.stringify({
-          debug_message: message,
-          debug_data: data,
-          timestamp: new Date().toISOString()
-        })
+        error_details: logEntryString // Store as string in TEXT column
       })
       .eq('id', runId);
 

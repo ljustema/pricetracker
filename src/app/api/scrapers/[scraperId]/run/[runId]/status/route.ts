@@ -7,49 +7,89 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * Get recent progress messages from the logs
+ * Get recent progress messages from the database
+ * This optimized version only gets messages from the progress_messages array in the scraper_runs table
+ * which is more efficient than querying separate logs or reading log files
  */
-async function getRecentProgressMessages(runId: string, limit: number = 10): Promise<string[]> {
+async function getRecentProgressMessages(runId: string, limit: number = 10, runData: any = null): Promise<string[]> {
   try {
-    // First try to get messages from the database
-    const supabaseAdmin = createSupabaseAdminClient();
-    const { data: logData } = await supabaseAdmin
-      .from('scraper_logs')
-      .select('message')
-      .eq('run_id', runId)
-      .eq('level', 'INFO')
-      .ilike('message', '%PROGRESS:%')
-      .order('created_at', { ascending: false })
-      .limit(limit);
+    // If we already have the run data with progress_messages, use that
+    if (runData && runData.progress_messages) {
+      let messages = runData.progress_messages;
 
-    if (logData && logData.length > 0) {
-      return logData.map(log => log.message.replace('PROGRESS:', '').trim());
-    }
-
-    // If no logs in database, try to read from log file
-    const today = new Date().toISOString().split('T')[0].replace(/-/g, '-');
-    const logFilePath = path.join(process.cwd(), 'logs', `py-worker-${today}.log`);
-
-    if (fs.existsSync(logFilePath)) {
-      const logContent = fs.readFileSync(logFilePath, 'utf-8');
-      const lines = logContent.split('\n').reverse();
-
-      const progressMessages: string[] = [];
-      for (const line of lines) {
-        if (line.includes(`"run_id": "${runId}"`) && line.includes('"phase": "SCRIPT_LOG"')) {
-          try {
-            const logEntry = JSON.parse(line);
-            if (logEntry.msg) {
-              progressMessages.push(logEntry.msg);
-              if (progressMessages.length >= limit) break;
-            }
-          } catch (_e) {
-            // Skip invalid JSON
-          }
+      // Parse if it's a string
+      if (typeof messages === 'string') {
+        try {
+          messages = JSON.parse(messages);
+        } catch (e) {
+          console.error(`[Status API] Failed to parse progress_messages JSON: ${e}`);
+          return [];
         }
       }
 
-      return progressMessages;
+      // If it's an array, extract the messages
+      if (Array.isArray(messages)) {
+        // Get the most recent messages first (reverse order)
+        const recentMessages = [...messages].reverse().slice(0, limit);
+
+        // Extract just the message text from each entry
+        return recentMessages.map(entry => {
+          if (typeof entry === 'string') {
+            try {
+              const parsed = JSON.parse(entry);
+              return parsed.msg || entry;
+            } catch {
+              return entry;
+            }
+          } else if (typeof entry === 'object' && entry !== null) {
+            return entry.msg || JSON.stringify(entry);
+          }
+          return String(entry);
+        });
+      }
+    }
+
+    // Fallback: Query the database directly if we don't have the data
+    const supabaseAdmin = createSupabaseAdminClient();
+    const { data: runDataFromDb } = await supabaseAdmin
+      .from('scraper_runs')
+      .select('progress_messages')
+      .eq('id', runId)
+      .maybeSingle();
+
+    if (runDataFromDb && runDataFromDb.progress_messages) {
+      let messages = runDataFromDb.progress_messages;
+
+      // Parse if it's a string
+      if (typeof messages === 'string') {
+        try {
+          messages = JSON.parse(messages);
+        } catch (e) {
+          console.error(`[Status API] Failed to parse progress_messages JSON: ${e}`);
+          return [];
+        }
+      }
+
+      // If it's an array, extract the messages
+      if (Array.isArray(messages)) {
+        // Get the most recent messages first (reverse order)
+        const recentMessages = [...messages].reverse().slice(0, limit);
+
+        // Extract just the message text from each entry
+        return recentMessages.map(entry => {
+          if (typeof entry === 'string') {
+            try {
+              const parsed = JSON.parse(entry);
+              return parsed.msg || entry;
+            } catch {
+              return entry;
+            }
+          } else if (typeof entry === 'object' && entry !== null) {
+            return entry.msg || JSON.stringify(entry);
+          }
+          return String(entry);
+        });
+      }
     }
 
     return [];
@@ -60,8 +100,9 @@ async function getRecentProgressMessages(runId: string, limit: number = 10): Pro
 }
 // import { revalidatePath } from 'next/cache'; // Not needed when using 'force-dynamic'
 
-// Force dynamic execution, disable caching for this route
-export const dynamic = 'force-dynamic';
+// Enable caching for this route with a short revalidation time
+// This helps reduce database load while still keeping data relatively fresh
+export const revalidate = 3; // Revalidate every 3 seconds
 
 // Remove separate Params interface
 
@@ -93,20 +134,42 @@ export async function GET(
     const maxRetries = 5;
     const retryDelayMs = 500;
 
-    console.log(`[Status API] Querying database for run ${runId}`);
+    // Reduced logging to minimize overhead
+    // Only log on first attempt to reduce noise
+    if (retries === 0) {
+      console.log(`[Status API] Querying database for run ${runId}`);
+    }
 
     while (retries < maxRetries) {
+      // Only select the fields we actually need to reduce data transfer
       const res = await supabaseAdmin
         .from('scraper_runs')
-        .select('*, claimed_by_worker_at') // Explicitly include claimed_by_worker_at
+        .select(`
+          id,
+          scraper_id,
+          status,
+          started_at,
+          completed_at,
+          product_count,
+          current_batch,
+          total_batches,
+          error_message,
+          error_details,
+          current_phase,
+          claimed_by_worker_at,
+          progress_messages
+        `)
         .eq('id', runId)
-        .single();
+        .maybeSingle(); // Use maybeSingle instead of single to avoid errors
       runData = res.data;
       error = res.error;
 
-      console.log(`[Status API] Query attempt ${retries+1}/${maxRetries}: Found data: ${!!runData}, Error: ${!!error}`);
-      if (runData) {
-        console.log(`[Status API] Run data for ${runId}: status=${runData.status}, product_count=${runData.product_count}, current_batch=${runData.current_batch}, total_batches=${runData.total_batches}`);
+      // Only log errors or final success to reduce noise
+      if (error && retries === maxRetries - 1) {
+        console.log(`[Status API] Final query attempt failed: ${error.message}`);
+      } else if (runData) {
+        // Only log basic info on success
+        console.log(`[Status API] Found run ${runId}: status=${runData.status}`);
         break;
       }
       await new Promise(res => setTimeout(res, retryDelayMs));
@@ -158,18 +221,25 @@ export async function GET(
       }
     }
 
-    // Extract phase information from progress messages
-    const progressMessages = await getRecentProgressMessages(runId, 10);
+    // Extract phase information from database or progress messages
+    // Pass the runData to avoid an extra database query
+    const progressMessages = await getRecentProgressMessages(runId, 10, runData);
     let currentPhase = 1;
 
-    // Try to determine the current phase from progress messages
-    for (const msg of progressMessages) {
-      const phaseMatch = msg.match(/Phase (\d+):/i);
-      if (phaseMatch && phaseMatch[1]) {
-        const phase = parseInt(phaseMatch[1], 10);
-        if (!isNaN(phase) && phase > 0) {
-          currentPhase = phase;
-          break; // Use the first phase we find (most recent)
+    // First check if current_phase is available in the database
+    if (runData.current_phase !== null && runData.current_phase !== undefined) {
+      currentPhase = runData.current_phase;
+      // Reduced logging
+    } else {
+      // Fall back to extracting phase from progress messages
+      for (const msg of progressMessages) {
+        const phaseMatch = msg.match(/Phase (\d+):/i);
+        if (phaseMatch && phaseMatch[1]) {
+          const phase = parseInt(phaseMatch[1], 10);
+          if (!isNaN(phase) && phase > 0) {
+            currentPhase = phase;
+            break; // Use the first phase we find (most recent)
+          }
         }
       }
     }
@@ -205,24 +275,16 @@ export async function GET(
       errorDetails: null // Initialize errorDetails
     };
 
-    // Log the phase information for debugging
-    console.log(`[Status API] Run ${runId} phase info: Phase ${currentPhase}, Batch ${responseData.currentBatch}/${responseData.totalBatches}`);
-
-    // Log more detailed information if the run failed or completed
+    // Only log detailed information for failed runs to reduce noise
     if (runData.status === 'failed') {
       console.log(`[Status API] Run ${runId} failed with error: ${runData.error_message || 'No error message provided'}`);
 
-      // Log additional details that might help diagnose the issue
-      console.log(`[Status API] Run details: Test run: ${runData.is_test_run}, Started at: ${runData.started_at}, Completed at: ${runData.completed_at || 'Not completed'}`);
-
       // First check if error_details field exists in the database record
       if (runData.error_details) {
-        console.log(`[Status API] Found error_details in database for run ${runId}`);
         responseData.errorDetails = runData.error_details;
       }
       // If no error_details in the database, try to extract from progress_messages
       else if (runData.progress_messages) {
-        console.log(`[Status API] Checking progress_messages for error details for run ${runId}`);
 
         // Check if progress_messages is an array or a JSON string
         let messagesArray = runData.progress_messages;
@@ -251,7 +313,6 @@ export async function GET(
                 : errorDetailsEntry;
 
               if (entry.data && entry.data.error_details) {
-                console.log(`[Status API] Found error details in ERROR_DETAILS entry for run ${runId}`);
                 responseData.errorDetails = entry.data.error_details;
               }
             } catch (e) {
@@ -266,7 +327,6 @@ export async function GET(
             );
 
             if (errorEntries.length > 0) {
-              console.log(`[Status API] Found ${errorEntries.length} error entries in progress_messages for run ${runId}`);
               // Combine error messages
               const errorMessages = errorEntries.map((entry: any) => {
                 try {
@@ -278,22 +338,13 @@ export async function GET(
               });
 
               responseData.errorDetails = errorMessages.join('\n');
-            } else {
-              console.log(`[Status API] No error entries found in progress_messages for run ${runId}`);
             }
           }
-        } else {
-          console.log(`[Status API] progress_messages is not an array for run ${runId}`);
         }
-      } else {
-        console.log(`[Status API] No progress_messages found for failed run ${runId}.`);
       }
-    } else if (runData.status === 'completed' || runData.status === 'success') {
-      console.log(`[Status API] Run ${runId} completed successfully with ${runData.product_count || 0} products`);
-      console.log(`[Status API] Run details: Test run: ${runData.is_test_run}, Started at: ${runData.started_at}, Completed at: ${runData.completed_at || 'Not completed'}`);
     }
 
-    console.log(`[Status API] Returning status for runId ${runId}: Status=${responseData.status}, isComplete=${responseData.isComplete}`); // Log return data
+    // Minimal logging to reduce overhead
     return NextResponse.json(responseData);
   } catch (error) {
     console.error("Error getting run status:", error);
