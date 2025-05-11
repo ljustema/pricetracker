@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/use-toast';
 import { formatPercentage, formatNumber } from '@/lib/utils/format';
 import {
@@ -130,7 +129,7 @@ const CompetitorAnalysisTab: React.FC = () => {
   const [brandFocusData, setBrandFocusData] = useState<BrandFocusData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeSubTab, setActiveSubTab] = useState('price-comparison');
+
   const { toast } = useToast();
 
   // Fetch competitor analysis data
@@ -217,34 +216,161 @@ const CompetitorAnalysisTab: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <Tabs defaultValue={activeSubTab} value={activeSubTab} onValueChange={setActiveSubTab} className="w-full">
-        <TabsList className="mb-6 grid w-full grid-cols-5">
-          <TabsTrigger value="price-comparison">Price Comparison</TabsTrigger>
-          <TabsTrigger value="change-frequency">Change Frequency</TabsTrigger>
-          <TabsTrigger value="change-days">Change Days</TabsTrigger>
-          <TabsTrigger value="market-coverage">Market Coverage</TabsTrigger>
-          <TabsTrigger value="brand-focus">Brand Focus</TabsTrigger>
-        </TabsList>
+      <div className="grid grid-cols-1 gap-6">
+        {/* Price Comparison Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Competitor Price Comparison</CardTitle>
+            <CardDescription>
+              Average price difference between your prices and competitor prices
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {priceComparisonData.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No price comparison data available</p>
+              </div>
+            ) : (
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={priceComparisonData.sort((a, b) => a.avg_diff_percentage - b.avg_diff_percentage)}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="competitor_name"
+                      angle={-45}
+                      textAnchor="end"
+                      height={70}
+                    />
+                    <YAxis
+                      tickFormatter={(value) => `${value}%`}
+                      domain={['auto', 'auto']}
+                    />
+                    <Tooltip content={<PriceComparisonTooltip />} />
+                    <Legend />
+                    <Bar
+                      dataKey="avg_diff_percentage"
+                      name="Avg. Price Difference (%)"
+                      fill={(data) => data.avg_diff_percentage > 0 ? '#ef4444' : '#10b981'}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-        {/* Price Comparison Tab */}
-        <TabsContent value="price-comparison">
-          <Card>
-            <CardHeader>
-              <CardTitle>Competitor Price Comparison</CardTitle>
-              <CardDescription>
-                Average price difference between your prices and competitor prices
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {priceComparisonData.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No price comparison data available</p>
-                </div>
-              ) : (
+        {/* Change Frequency Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Price Change Frequency</CardTitle>
+            <CardDescription>
+              Number of price changes per competitor in the last {changeFrequencyData?.days || 30} days
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!changeFrequencyData || changeFrequencyData.data.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No change frequency data available</p>
+              </div>
+            ) : (
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={changeFrequencyData.data.sort((a, b) => b.count - a.count)}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="competitor_name"
+                      angle={-45}
+                      textAnchor="end"
+                      height={70}
+                    />
+                    <YAxis />
+                    <Tooltip content={<ChangeFrequencyTooltip />} />
+                    <Legend />
+                    <Bar
+                      dataKey="count"
+                      name="Price Changes"
+                      fill="#8884d8"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Change Days Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Price Change Days</CardTitle>
+            <CardDescription>
+              Distribution of price changes by day of the week
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {changeDaysData.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No change days data available</p>
+              </div>
+            ) : (
+              <div className="space-y-8">
+                {changeDaysData.map((competitor, index) => (
+                  <div key={competitor.competitor_id} className="space-y-2">
+                    <h3 className="font-medium">{competitor.competitor_name}</h3>
+                    <div className="h-60">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={competitor.days}
+                          margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" />
+                          <YAxis />
+                          <Tooltip />
+                          <Bar
+                            dataKey="count"
+                            name="Price Changes"
+                            fill={COLORS[index % COLORS.length]}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Market Coverage Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Market Coverage</CardTitle>
+            <CardDescription>
+              Percentage of your products covered by each competitor
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!marketCoverageData || marketCoverageData.competitors.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No market coverage data available</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div className="h-80">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
-                      data={priceComparisonData.sort((a, b) => a.avg_diff_percentage - b.avg_diff_percentage)}
+                      data={marketCoverageData.competitors
+                        .sort((a, b) => b.coverage_percentage - a.coverage_percentage)
+                        .map(competitor => ({
+                          ...competitor,
+                          total_products: marketCoverageData.total_products
+                        }))}
                       margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" />
@@ -256,232 +382,87 @@ const CompetitorAnalysisTab: React.FC = () => {
                       />
                       <YAxis
                         tickFormatter={(value) => `${value}%`}
-                        domain={['auto', 'auto']}
+                        domain={[0, 100]}
                       />
-                      <Tooltip content={<PriceComparisonTooltip />} />
+                      <Tooltip content={<MarketCoverageTooltip />} />
                       <Legend />
                       <Bar
-                        dataKey="avg_diff_percentage"
-                        name="Avg. Price Difference (%)"
-                        fill={(data) => data.avg_diff_percentage > 0 ? '#ef4444' : '#10b981'}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Change Frequency Tab */}
-        <TabsContent value="change-frequency">
-          <Card>
-            <CardHeader>
-              <CardTitle>Price Change Frequency</CardTitle>
-              <CardDescription>
-                Number of price changes per competitor in the last {changeFrequencyData?.days || 30} days
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!changeFrequencyData || changeFrequencyData.data.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No change frequency data available</p>
-                </div>
-              ) : (
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={changeFrequencyData.data.sort((a, b) => b.count - a.count)}
-                      margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis
-                        dataKey="competitor_name"
-                        angle={-45}
-                        textAnchor="end"
-                        height={70}
-                      />
-                      <YAxis />
-                      <Tooltip content={<ChangeFrequencyTooltip />} />
-                      <Legend />
-                      <Bar
-                        dataKey="count"
-                        name="Price Changes"
+                        dataKey="coverage_percentage"
+                        name="Coverage (%)"
                         fill="#8884d8"
                       />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Change Days Tab */}
-        <TabsContent value="change-days">
-          <Card>
-            <CardHeader>
-              <CardTitle>Price Change Days</CardTitle>
-              <CardDescription>
-                Distribution of price changes by day of the week
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {changeDaysData.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No change days data available</p>
-                </div>
-              ) : (
-                <div className="space-y-8">
-                  {changeDaysData.map((competitor, index) => (
-                    <div key={competitor.competitor_id} className="space-y-2">
-                      <h3 className="font-medium">{competitor.competitor_name}</h3>
-                      <div className="h-60">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart
-                            data={competitor.days}
-                            margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
-                          >
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="day" />
-                            <YAxis />
-                            <Tooltip />
-                            <Bar
-                              dataKey="count"
-                              name="Price Changes"
-                              fill={COLORS[index % COLORS.length]}
-                            />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Market Coverage Tab */}
-        <TabsContent value="market-coverage">
-          <Card>
-            <CardHeader>
-              <CardTitle>Market Coverage</CardTitle>
-              <CardDescription>
-                Percentage of your products covered by each competitor
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!marketCoverageData || marketCoverageData.competitors.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No market coverage data available</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={marketCoverageData.competitors
-                          .sort((a, b) => b.coverage_percentage - a.coverage_percentage)
-                          .map(competitor => ({
-                            ...competitor,
-                            total_products: marketCoverageData.total_products
-                          }))}
-                        margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                <div className="h-80">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={marketCoveragePieData}
+                        cx="50%"
+                        cy="50%"
+                        labelLine={false}
+                        outerRadius={80}
+                        fill="#8884d8"
+                        dataKey="value"
+                        nameKey="name"
+                        label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
                       >
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis
-                          dataKey="competitor_name"
-                          angle={-45}
-                          textAnchor="end"
-                          height={70}
-                        />
-                        <YAxis
-                          tickFormatter={(value) => `${value}%`}
-                          domain={[0, 100]}
-                        />
-                        <Tooltip content={<MarketCoverageTooltip />} />
-                        <Legend />
-                        <Bar
-                          dataKey="coverage_percentage"
-                          name="Coverage (%)"
-                          fill="#8884d8"
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={marketCoveragePieData}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
-                          nameKey="name"
-                          label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                        >
-                          {marketCoveragePieData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
+                        {marketCoveragePieData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip />
+                    </PieChart>
+                  </ResponsiveContainer>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-        {/* Brand Focus Tab */}
-        <TabsContent value="brand-focus">
-          <Card>
-            <CardHeader>
-              <CardTitle>Brand Focus</CardTitle>
-              <CardDescription>
-                Top brands for each competitor based on product count
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {brandFocusData.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No brand focus data available</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {brandFocusData.map((competitor) => (
-                    <div
-                      key={competitor.competitor_id}
-                      className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
-                    >
-                      <h3 className="font-medium text-gray-900 mb-2">{competitor.competitor_name}</h3>
-                      {competitor.top_brand ? (
-                        <div className="space-y-2 text-sm">
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Top Brand:</span>
-                            <span className="font-medium">{competitor.top_brand.brand_name}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Product Count:</span>
-                            <span className="font-medium">{competitor.top_brand.product_count}</span>
-                          </div>
+        {/* Brand Focus Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Brand Focus</CardTitle>
+            <CardDescription>
+              Top brands for each competitor based on product count
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {brandFocusData.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No brand focus data available</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {brandFocusData.map((competitor) => (
+                  <div
+                    key={competitor.competitor_id}
+                    className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow bg-white"
+                  >
+                    <h3 className="font-medium text-gray-900 mb-3 border-b pb-2">{competitor.competitor_name}</h3>
+                    {competitor.top_brand ? (
+                      <div className="space-y-3 text-sm">
+                        <div className="flex justify-between items-center">
+                          <span className="text-gray-600 font-medium">Top Brand:</span>
+                          <span className="font-semibold text-indigo-600">{competitor.top_brand.brand_name || 'Unknown'}</span>
                         </div>
-                      ) : (
-                        <p className="text-sm text-gray-500">No brand data available</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+                        <div className="flex justify-between items-center">
+                          <span className="text-gray-600 font-medium">Product Count:</span>
+                          <span className="font-semibold text-indigo-600">{competitor.top_brand.product_count || 0}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500 py-2">No brand data available</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 };

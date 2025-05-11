@@ -6,6 +6,8 @@ import Image from "next/image";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import crypto from 'crypto';
+import BrandStatisticsServer from "@/components/brands/BrandStatisticsServer";
+import { Database } from "@/lib/supabase/database.types";
 
 // Helper function to ensure user ID is a valid UUID
 // This converts non-UUID IDs (like Google's numeric IDs) to a deterministic UUID
@@ -50,11 +52,12 @@ export default async function DashboardPage() {
     .select("*", { count: "exact", head: true })
     .eq("user_id", userId);
 
-  // Get product count - using the correct field name from the SQL schema
+  // Get product count - only count products with our_price
   const { count: productCount, error: productError } = await supabase
     .from("products")
     .select("*", { count: "exact", head: true })
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .not("our_price", "is", null);
 
   // Get recent price changes (last 7 days)
   const sevenDaysAgo = new Date();
@@ -82,8 +85,18 @@ export default async function DashboardPage() {
     competitors?: {
       name: string;
     };
+    integrations?: {
+      name: string;
+    };
     integration_id?: string;
     source_type?: 'competitor' | 'integration';
+  };
+
+  // Define type for brand data
+  type Brand = Database['public']['Tables']['brands']['Row'] & {
+    product_count?: number;
+    competitor_count?: number;
+    aliases?: string[];
   };
 
   // Get top price drops
@@ -113,19 +126,75 @@ export default async function DashboardPage() {
     .order("price_change_percentage", { ascending: true }) // Biggest drops first
     .limit(5) as { data: PriceChange[] | null; error: Error | null };
 
+  // Get brands with analytics data using the RPC function
+  const { data: brandsData, error: brandsError } = await supabase.rpc(
+    'get_brand_analytics',
+    {
+      p_user_id: userId,
+      p_brand_id: null
+    }
+  ) as { data: Brand[] | null; error: Error | null };
+
+  // Get top competitors for the dashboard
+  const { data: competitorsData, error: _competitorsStatsError } = await supabase
+    .from("competitors")
+    .select(`
+      id,
+      name
+    `)
+    .eq("user_id", userId)
+    .order("name");
+
+  // Get competitor product counts
+  const topCompetitors = await Promise.all(
+    (competitorsData || []).map(async (competitor) => {
+      // Get total products for this competitor
+      const { count: totalCount, error: totalError } = await supabase
+        .from('price_changes')
+        .select('product_id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('competitor_id', competitor.id);
+
+      if (totalError) {
+        console.error(`Error fetching product count for competitor ${competitor.id}:`, totalError);
+        return {
+          ...competitor,
+          totalProducts: 0
+        };
+      }
+
+      return {
+        ...competitor,
+        totalProducts: totalCount || 0
+      };
+    })
+  );
+
+  // Sort by product count and get top 5
+  const top5Competitors = topCompetitors
+    .sort((a, b) => b.totalProducts - a.totalProducts)
+    .slice(0, 5);
+
   // Handle any errors
-  if (competitorError || productError || priceChangesError || topPriceDropsError) {
+  if (competitorError || productError || priceChangesError || topPriceDropsError || brandsError) {
     console.error("Dashboard data fetch errors:", {
       competitorError,
       productError,
       priceChangesError,
       topPriceDropsError,
+      brandsError,
     });
   }
 
   return (
     <div className="container mx-auto px-4 py-8">
       <h1 className="mb-8 text-3xl font-bold">Dashboard</h1>
+
+      {/* Brand Statistics */}
+      <BrandStatisticsServer
+        brands={brandsData || []}
+        topCompetitors={top5Competitors}
+      />
 
       {/* Stats overview */}
       <div className="mb-8 grid gap-6 md:grid-cols-3">
@@ -179,16 +248,16 @@ export default async function DashboardPage() {
               </svg>
             </div>
             <div className="ml-4">
-              <h2 className="text-lg font-medium text-gray-900">Products</h2>
+              <h2 className="text-lg font-medium text-gray-900">Our Products</h2>
               <p className="text-3xl font-semibold text-indigo-600">{productCount || 0}</p>
             </div>
           </div>
           <div className="mt-4">
             <Link
-              href="/app-routes/products"
+              href="/app-routes/products?sort=created_at&sortOrder=desc&has_price=true"
               className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
             >
-              View all products →
+              View our products →
             </Link>
           </div>
         </div>
@@ -218,7 +287,7 @@ export default async function DashboardPage() {
           </div>
           <div className="mt-4">
             <Link
-              href="/app-routes/insights/price-changes"
+              href="/app-routes/insights"
               className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
             >
               View insights →
@@ -317,29 +386,6 @@ export default async function DashboardPage() {
             </div>
             <h3 className="mb-1 text-base font-medium text-gray-900">Add Competitor</h3>
             <p className="text-center text-sm text-gray-500">Track a new competitor</p>
-          </Link>
-
-          <Link
-            href="/app-routes/products/import"
-            className="flex flex-col items-center rounded-lg bg-white p-6 shadow-sm transition-all hover:shadow-md"
-          >
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 text-indigo-600">
-              <svg
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                />
-              </svg>
-            </div>
-            <h3 className="mb-1 text-base font-medium text-gray-900">Import Products</h3>
-            <p className="text-center text-sm text-gray-500">Upload product data</p>
           </Link>
 
           <Link

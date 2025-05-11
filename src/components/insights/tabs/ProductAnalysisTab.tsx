@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/use-toast';
 import { formatCurrency, formatPercentage, formatNumber, formatDate } from '@/lib/utils/format';
 import {
@@ -118,7 +117,7 @@ const ProductAnalysisTab: React.FC = () => {
   const [matchingStatusData, setMatchingStatusData] = useState<ProductMatchingStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeSubTab, setActiveSubTab] = useState('trends');
+
   const { toast } = useToast();
 
   // Fetch product analysis data
@@ -185,209 +184,197 @@ const ProductAnalysisTab: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <Tabs defaultValue={activeSubTab} value={activeSubTab} onValueChange={setActiveSubTab} className="w-full">
-        <TabsList className="mb-6 grid w-full grid-cols-3">
-          <TabsTrigger value="trends">Price Trends</TabsTrigger>
-          <TabsTrigger value="sensitivity">Price Sensitivity</TabsTrigger>
-          <TabsTrigger value="matching">Matching Status</TabsTrigger>
-        </TabsList>
+      <div className="grid grid-cols-1 gap-6">
+        {/* Price Trends Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Product Price Trends</CardTitle>
+            <CardDescription>
+              Products with the most significant price changes in the last {trendsData?.days || 30} days
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!trendsData || trendsData.trends.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No price trends data available</p>
+              </div>
+            ) : (
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={trendsData.trends}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="product_name"
+                      angle={-45}
+                      textAnchor="end"
+                      height={70}
+                    />
+                    <YAxis
+                      tickFormatter={(value) => `${value}%`}
+                      domain={['auto', 'auto']}
+                    />
+                    <Tooltip content={<TrendsTooltip />} />
+                    <Legend />
+                    <Bar
+                      dataKey="overall_change_percentage"
+                      name="Overall Price Change (%)"
+                      fill={(data) => data.overall_change_percentage > 0 ? '#ef4444' : '#10b981'}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-        {/* Price Trends Tab */}
-        <TabsContent value="trends">
-          <Card>
-            <CardHeader>
-              <CardTitle>Product Price Trends</CardTitle>
-              <CardDescription>
-                Products with the most significant price changes in the last {trendsData?.days || 30} days
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!trendsData || trendsData.trends.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No price trends data available</p>
-                </div>
-              ) : (
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={trendsData.trends}
-                      margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis
-                        dataKey="product_name"
-                        angle={-45}
-                        textAnchor="end"
-                        height={70}
-                      />
-                      <YAxis
-                        tickFormatter={(value) => `${value}%`}
-                        domain={['auto', 'auto']}
-                      />
-                      <Tooltip content={<TrendsTooltip />} />
-                      <Legend />
-                      <Bar
-                        dataKey="overall_change_percentage"
-                        name="Overall Price Change (%)"
-                        fill={(data) => data.overall_change_percentage > 0 ? '#ef4444' : '#10b981'}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
+        {/* Price Sensitivity Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Product Price Sensitivity</CardTitle>
+            <CardDescription>
+              Products with the most frequent price changes in the last {sensitivityData?.days || 30} days
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!sensitivityData || sensitivityData.products.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No price sensitivity data available</p>
+              </div>
+            ) : (
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={sensitivityData.products}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="product_name"
+                      angle={-45}
+                      textAnchor="end"
+                      height={70}
+                    />
+                    <YAxis />
+                    <Tooltip content={<SensitivityTooltip />} />
+                    <Legend />
+                    <Bar
+                      dataKey="count"
+                      name="Price Changes"
+                      fill="#8884d8"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-        {/* Price Sensitivity Tab */}
-        <TabsContent value="sensitivity">
-          <Card>
-            <CardHeader>
-              <CardTitle>Product Price Sensitivity</CardTitle>
-              <CardDescription>
-                Products with the most frequent price changes in the last {sensitivityData?.days || 30} days
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!sensitivityData || sensitivityData.products.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No price sensitivity data available</p>
+        {/* Matching Status Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Product Matching Status</CardTitle>
+            <CardDescription>
+              Overview of matched vs. unmatched products across your catalog
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!matchingStatusData ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No matching status data available</p>
+              </div>
+            ) : (
+              <div className="space-y-8">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">Total Products</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold">{formatNumber(matchingStatusData.total_products)}</div>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">Matched Products</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold text-green-600">{formatNumber(matchingStatusData.matched_products)}</div>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">Unmatched Products</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold text-red-600">{formatNumber(matchingStatusData.unmatched_products)}</div>
+                    </CardContent>
+                  </Card>
                 </div>
-              ) : (
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={sensitivityData.products}
-                      margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis
-                        dataKey="product_name"
-                        angle={-45}
-                        textAnchor="end"
-                        height={70}
-                      />
-                      <YAxis />
-                      <Tooltip content={<SensitivityTooltip />} />
-                      <Legend />
-                      <Bar
-                        dataKey="count"
-                        name="Price Changes"
-                        fill="#8884d8"
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
 
-        {/* Matching Status Tab */}
-        <TabsContent value="matching">
-          <Card>
-            <CardHeader>
-              <CardTitle>Product Matching Status</CardTitle>
-              <CardDescription>
-                Overview of matched vs. unmatched products across your catalog
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!matchingStatusData ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No matching status data available</p>
-                </div>
-              ) : (
-                <div className="space-y-8">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <Card>
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium">Total Products</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="text-2xl font-bold">{formatNumber(matchingStatusData.total_products)}</div>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium">Matched Products</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="text-2xl font-bold text-green-600">{formatNumber(matchingStatusData.matched_products)}</div>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium">Unmatched Products</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="text-2xl font-bold text-red-600">{formatNumber(matchingStatusData.unmatched_products)}</div>
-                      </CardContent>
-                    </Card>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    <div className="h-80">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={matchingStatusPieData}
-                            cx="50%"
-                            cy="50%"
-                            labelLine={false}
-                            outerRadius={80}
-                            fill="#8884d8"
-                            dataKey="value"
-                            nameKey="name"
-                            label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                          >
-                            {matchingStatusPieData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={MATCHING_COLORS[index % MATCHING_COLORS.length]} />
-                            ))}
-                          </Pie>
-                          <Tooltip />
-                          <Legend />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </div>
-
-                    <div className="h-80">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart
-                          data={matchingStatusData.brand_matching
-                            .filter(brand => brand.total_products >= 3) // Only show brands with at least 3 products
-                            .sort((a, b) => b.matching_percentage - a.matching_percentage)
-                            .slice(0, 10)} // Show top 10 brands
-                          margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={matchingStatusPieData}
+                          cx="50%"
+                          cy="50%"
+                          labelLine={false}
+                          outerRadius={80}
+                          fill="#8884d8"
+                          dataKey="value"
+                          nameKey="name"
+                          label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
                         >
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis
-                            dataKey="brand_name"
-                            angle={-45}
-                            textAnchor="end"
-                            height={70}
-                          />
-                          <YAxis
-                            tickFormatter={(value) => `${value}%`}
-                            domain={[0, 100]}
-                          />
-                          <Tooltip />
-                          <Legend />
-                          <Bar
-                            dataKey="matching_percentage"
-                            name="Matching %"
-                            fill="#8884d8"
-                          />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
+                          {matchingStatusPieData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={MATCHING_COLORS[index % MATCHING_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={matchingStatusData.brand_matching
+                          .filter(brand => brand.total_products >= 3) // Only show brands with at least 3 products
+                          .sort((a, b) => b.matching_percentage - a.matching_percentage)
+                          .slice(0, 10)} // Show top 10 brands
+                        margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis
+                          dataKey="brand_name"
+                          angle={-45}
+                          textAnchor="end"
+                          height={70}
+                        />
+                        <YAxis
+                          tickFormatter={(value) => `${value}%`}
+                          domain={[0, 100]}
+                        />
+                        <Tooltip />
+                        <Legend />
+                        <Bar
+                          dataKey="matching_percentage"
+                          name="Matching %"
+                          fill="#8884d8"
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
                   </div>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 };

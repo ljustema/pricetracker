@@ -79,8 +79,8 @@ export default function NewScraperPage() {
         throw new Error(responseData.error || 'Failed to create scraper');
       }
 
-      // Redirect to the scrapers page
-      router.push(`/app-routes/competitors/${competitorId}/scrapers`);
+      // Redirect to the main scrapers page
+      router.push(`/app-routes/scrapers`);
     } catch (err) {
       console.error("Error creating scraper:", err);
       setError(err instanceof Error ? err.message : "An unknown error occurred");
@@ -166,12 +166,12 @@ export default function NewScraperPage() {
   };
 
   const handleScriptScraperCreated = async (_scraperId: string) => { // Renamed handler
-    router.push(`/app-routes/competitors/${competitorId}/scrapers`);
+    router.push(`/app-routes/scrapers`);
   };
 
   const handleValidationConfirmed = () => {
-    // After validation is confirmed, redirect to the scrapers page
-    router.push(`/app-routes/competitors/${competitorId}/scrapers`);
+    // After validation is confirmed, redirect to the main scrapers page
+    router.push(`/app-routes/scrapers`);
   };
 
   // Render the appropriate component based on the current step
@@ -186,8 +186,8 @@ export default function NewScraperPage() {
           <AiScraperWizard
             competitorId={competitorId}
             onComplete={(scraperId) => {
-              // Navigate to the scrapers list page after completion
-              router.push(`/app-routes/competitors/${competitorId}/scrapers`);
+              // Navigate to the main scrapers list page after completion
+              router.push(`/app-routes/scrapers`);
             }}
             onCancel={handleCancel}
           />

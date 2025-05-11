@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/use-toast';
 import { formatPercentage, formatNumber } from '@/lib/utils/format';
 import {
@@ -157,7 +156,7 @@ const BrandAnalysisTab: React.FC = () => {
   const [changeActivityData, setChangeActivityData] = useState<BrandChangeActivity | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeSubTab, setActiveSubTab] = useState('competition');
+
   const { toast } = useToast();
 
   // Fetch brand analysis data
@@ -247,81 +246,120 @@ const BrandAnalysisTab: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <Tabs defaultValue={activeSubTab} value={activeSubTab} onValueChange={setActiveSubTab} className="w-full">
-        <TabsList className="mb-6 grid w-full grid-cols-4">
-          <TabsTrigger value="competition">Brand Competition</TabsTrigger>
-          <TabsTrigger value="uniqueness">Brand Uniqueness</TabsTrigger>
-          <TabsTrigger value="price-positioning">Price Positioning</TabsTrigger>
-          <TabsTrigger value="change-activity">Change Activity</TabsTrigger>
-        </TabsList>
+      <div className="grid grid-cols-1 gap-6">
+        {/* Brand Competition Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Brand Competition</CardTitle>
+            <CardDescription>
+              Number of competitors per brand
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {competitionData.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No brand competition data available</p>
+              </div>
+            ) : (
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={competitionData
+                      .sort((a, b) => b.competitor_count - a.competitor_count)
+                      .slice(0, 15)} // Show top 15 brands
+                    margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="brand_name"
+                      angle={-45}
+                      textAnchor="end"
+                      height={70}
+                    />
+                    <YAxis />
+                    <Tooltip content={<CompetitionTooltip />} />
+                    <Legend />
+                    <Bar
+                      dataKey="competitor_count"
+                      name="Competitors"
+                      fill="#8884d8"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-        {/* Brand Competition Tab */}
-        <TabsContent value="competition">
-          <Card>
-            <CardHeader>
-              <CardTitle>Brand Competition</CardTitle>
-              <CardDescription>
-                Number of competitors per brand
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {competitionData.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No brand competition data available</p>
-                </div>
-              ) : (
+        {/* Brand Uniqueness Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Brand Uniqueness</CardTitle>
+            <CardDescription>
+              Percentage of products that are unique (only you or a single competitor has them)
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {uniquenessData.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No brand uniqueness data available</p>
+              </div>
+            ) : (
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={uniquenessData
+                      .filter(brand => brand.total_products >= 3) // Only show brands with at least 3 products
+                      .sort((a, b) => b.uniqueness_percentage - a.uniqueness_percentage)
+                      .slice(0, 15)} // Show top 15 brands
+                    margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="brand_name"
+                      angle={-45}
+                      textAnchor="end"
+                      height={70}
+                    />
+                    <YAxis
+                      tickFormatter={(value) => `${value}%`}
+                      domain={[0, 100]}
+                    />
+                    <Tooltip content={<UniquenessTooltip />} />
+                    <Legend />
+                    <Bar
+                      dataKey="uniqueness_percentage"
+                      name="Uniqueness %"
+                      fill="#82ca9d"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Price Positioning Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Price Positioning</CardTitle>
+            <CardDescription>
+              Average price position per brand compared to competitors
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {pricePositioningData.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No price positioning data available</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div className="h-80">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
-                      data={competitionData
-                        .sort((a, b) => b.competitor_count - a.competitor_count)
-                        .slice(0, 15)} // Show top 15 brands
-                      margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis
-                        dataKey="brand_name"
-                        angle={-45}
-                        textAnchor="end"
-                        height={70}
-                      />
-                      <YAxis />
-                      <Tooltip content={<CompetitionTooltip />} />
-                      <Legend />
-                      <Bar
-                        dataKey="competitor_count"
-                        name="Competitors"
-                        fill="#8884d8"
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Brand Uniqueness Tab */}
-        <TabsContent value="uniqueness">
-          <Card>
-            <CardHeader>
-              <CardTitle>Brand Uniqueness</CardTitle>
-              <CardDescription>
-                Percentage of products that are unique (only you or a single competitor has them)
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {uniquenessData.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No brand uniqueness data available</p>
-                </div>
-              ) : (
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={uniquenessData
+                      data={pricePositioningData
                         .filter(brand => brand.total_products >= 3) // Only show brands with at least 3 products
-                        .sort((a, b) => b.uniqueness_percentage - a.uniqueness_percentage)
+                        .sort((a, b) => a.avg_price_difference - b.avg_price_difference)
                         .slice(0, 15)} // Show top 15 brands
                       margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
                     >
@@ -334,145 +372,91 @@ const BrandAnalysisTab: React.FC = () => {
                       />
                       <YAxis
                         tickFormatter={(value) => `${value}%`}
-                        domain={[0, 100]}
+                        domain={['auto', 'auto']}
                       />
-                      <Tooltip content={<UniquenessTooltip />} />
+                      <Tooltip content={<PricePositioningTooltip />} />
                       <Legend />
                       <Bar
-                        dataKey="uniqueness_percentage"
-                        name="Uniqueness %"
-                        fill="#82ca9d"
+                        dataKey="avg_price_difference"
+                        name="Avg. Price Difference (%)"
+                        fill={(data) => data.avg_price_difference > 0 ? '#ef4444' : '#10b981'}
                       />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Price Positioning Tab */}
-        <TabsContent value="price-positioning">
-          <Card>
-            <CardHeader>
-              <CardTitle>Price Positioning</CardTitle>
-              <CardDescription>
-                Average price position per brand compared to competitors
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {pricePositioningData.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No price positioning data available</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={pricePositioningData
-                          .filter(brand => brand.total_products >= 3) // Only show brands with at least 3 products
-                          .sort((a, b) => a.avg_price_difference - b.avg_price_difference)
-                          .slice(0, 15)} // Show top 15 brands
-                        margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis
-                          dataKey="brand_name"
-                          angle={-45}
-                          textAnchor="end"
-                          height={70}
-                        />
-                        <YAxis
-                          tickFormatter={(value) => `${value}%`}
-                          domain={['auto', 'auto']}
-                        />
-                        <Tooltip content={<PricePositioningTooltip />} />
-                        <Legend />
-                        <Bar
-                          dataKey="avg_price_difference"
-                          name="Avg. Price Difference (%)"
-                          fill={(data) => data.avg_price_difference > 0 ? '#ef4444' : '#10b981'}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={pricePositioningPieData}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
-                          nameKey="name"
-                          label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                        >
-                          {pricePositioningPieData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={PRICE_POSITION_COLORS[index % PRICE_POSITION_COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                        <Legend />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Change Activity Tab */}
-        <TabsContent value="change-activity">
-          <Card>
-            <CardHeader>
-              <CardTitle>Change Activity</CardTitle>
-              <CardDescription>
-                Price change frequency per brand in the last {changeActivityData?.days || 30} days
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!changeActivityData || changeActivityData.brands.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No change activity data available</p>
-                </div>
-              ) : (
                 <div className="h-80">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={changeActivityData.brands
-                        .filter(brand => brand.total_products >= 3) // Only show brands with at least 3 products
-                        .sort((a, b) => b.changes_per_product - a.changes_per_product)
-                        .slice(0, 15)} // Show top 15 brands
-                      margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis
-                        dataKey="brand_name"
-                        angle={-45}
-                        textAnchor="end"
-                        height={70}
-                      />
-                      <YAxis />
-                      <Tooltip content={<ChangeActivityTooltip />} />
+                    <PieChart>
+                      <Pie
+                        data={pricePositioningPieData}
+                        cx="50%"
+                        cy="50%"
+                        labelLine={false}
+                        outerRadius={80}
+                        fill="#8884d8"
+                        dataKey="value"
+                        nameKey="name"
+                        label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                      >
+                        {pricePositioningPieData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={PRICE_POSITION_COLORS[index % PRICE_POSITION_COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip />
                       <Legend />
-                      <Bar
-                        dataKey="changes_per_product"
-                        name="Changes per Product"
-                        fill="#ff8042"
-                      />
-                    </BarChart>
+                    </PieChart>
                   </ResponsiveContainer>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Change Activity Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Change Activity</CardTitle>
+            <CardDescription>
+              Price change frequency per brand in the last {changeActivityData?.days || 30} days
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!changeActivityData || changeActivityData.brands.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No change activity data available</p>
+              </div>
+            ) : (
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={changeActivityData.brands
+                      .filter(brand => brand.total_products >= 3) // Only show brands with at least 3 products
+                      .sort((a, b) => b.changes_per_product - a.changes_per_product)
+                      .slice(0, 15)} // Show top 15 brands
+                    margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="brand_name"
+                      angle={-45}
+                      textAnchor="end"
+                      height={70}
+                    />
+                    <YAxis />
+                    <Tooltip content={<ChangeActivityTooltip />} />
+                    <Legend />
+                    <Bar
+                      dataKey="changes_per_product"
+                      name="Changes per Product"
+                      fill="#ff8042"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 };
