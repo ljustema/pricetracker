@@ -114,55 +114,56 @@ const BrandsTable: React.FC<BrandsTableProps> = ({
     );
   };
 
-  // TODO: Replace with actual Table component implementation
+  // Table with sticky header and fixed height
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full divide-y divide-gray-200">
-        <thead className="bg-gray-50">
-          <tr>
+    <div className="overflow-x-auto border rounded-md shadow-md">
+      <div style={{ height: '1000px' }} className="h-[1000px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
+        <table className="min-w-full divide-y divide-gray-200 table-fixed">
+          <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
+            <tr>
+              <th
+                scope="col"
+                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 bg-gray-50"
+                onClick={() => handleSort('name')}
+              >
+                Name{renderSortIndicator('name')}
+              </th>
             <th
               scope="col"
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-              onClick={() => handleSort('name')}
-            >
-              Name{renderSortIndicator('name')}
-            </th>
-            <th
-              scope="col"
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 bg-gray-50"
               onClick={() => handleSort('is_active')}
             >
               Active{renderSortIndicator('is_active')}
             </th>
             <th
               scope="col"
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 bg-gray-50"
               onClick={() => handleSort('needs_review')}
             >
               Needs Review{renderSortIndicator('needs_review')}
             </th>
             <th
               scope="col"
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 bg-gray-50"
               onClick={() => handleSort('product_count')}
             >
               Product Count{renderSortIndicator('product_count')}
             </th>
             <th
               scope="col"
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 bg-gray-50"
               onClick={() => handleSort('competitor_count')}
             >
               Competitor Count{renderSortIndicator('competitor_count')}
             </th>
             <th
               scope="col"
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 bg-gray-50"
               onClick={() => handleSort('aliases')}
             >
               Aliases{renderSortIndicator('aliases')}
             </th>
-            <th scope="col" className="relative px-6 py-3">
+            <th scope="col" className="relative px-6 py-3 bg-gray-50">
               <span className="sr-only">Actions</span>
             </th>
           </tr>
@@ -236,6 +237,7 @@ const BrandsTable: React.FC<BrandsTableProps> = ({
           ))}
         </tbody>
       </table>
+      </div>
       {/* TODO: Add Pagination controls */}
     </div>
   );

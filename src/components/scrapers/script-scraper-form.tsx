@@ -29,8 +29,8 @@ export default function ScriptScraperForm({ // Renamed component
   const [competitorName, setCompetitorName] = useState("");
   const [scriptContent, setScriptContent] = useState(initialScript || ""); // Renamed state variable and setter
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  // Add state for template type selection
-  const [templateType, setTemplateType] = useState<'standard' | 'crawlee'>('standard');
+  // Add state for template type selection with Crawlee as default
+  const [templateType, setTemplateType] = useState<'standard' | 'crawlee'>('crawlee');
   const [isValidating, setIsValidating] = useState(false);
   // Updated validation result state to match new API response
   const [validationResult, setValidationResult] = useState<{
@@ -336,20 +336,6 @@ export default function ScriptScraperForm({ // Renamed component
                 <div className="flex space-x-4">
                   <div className="flex items-center">
                     <input
-                      id="standard-template"
-                      type="radio"
-                      name="template-type"
-                      value="standard"
-                      checked={templateType === 'standard'}
-                      onChange={() => setTemplateType('standard')}
-                      className="h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
-                    />
-                    <label htmlFor="standard-template" className="ml-2 block text-sm text-gray-900">
-                      Standard TypeScript
-                    </label>
-                  </div>
-                  <div className="flex items-center">
-                    <input
                       id="crawlee-template"
                       type="radio"
                       name="template-type"
@@ -362,9 +348,25 @@ export default function ScriptScraperForm({ // Renamed component
                       Crawlee (Recommended)
                     </label>
                   </div>
+                  <div className="flex items-center">
+                    <input
+                      id="standard-template"
+                      type="radio"
+                      name="template-type"
+                      value="standard"
+                      checked={templateType === 'standard'}
+                      onChange={() => setTemplateType('standard')}
+                      className="h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                    />
+                    <label htmlFor="standard-template" className="ml-2 block text-sm text-gray-900">
+                      Standard TypeScript
+                    </label>
+                  </div>
                 </div>
                 <p className="mt-1 text-xs text-gray-500">
-                  Crawlee is a powerful web scraping library that makes it easier to build reliable scrapers with built-in features for handling rate limiting, proxies, and more.
+                  {templateType === 'crawlee'
+                    ? "Crawlee is a powerful web scraping library that makes it easier to build reliable scrapers with built-in features for handling rate limiting, proxies, and more."
+                    : "Standard TypeScript allows for custom implementation using native fetch or other HTTP libraries. Best for simple sites or when you need complete control over the scraping logic."}
                 </p>
               </div>
             )}
@@ -633,8 +635,8 @@ export default function ScriptScraperForm({ // Renamed component
              </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4"> {/* Keep as single column after removing time input */}
-            <div>
+          <div className="flex items-end justify-between gap-4">
+            <div className="w-64"> {/* Set a specific width for the dropdown */}
               <label htmlFor="schedule.frequency" className="block text-sm font-medium text-gray-700">
                 Frequency
               </label>
@@ -650,33 +652,31 @@ export default function ScriptScraperForm({ // Renamed component
               </select>
             </div>
 
-            {/* Removed Time Input */}
+            <div className="flex space-x-3">
+              <button
+                type="button"
+                onClick={onCancel}
+                className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                // Disable if submitting, or if validation hasn't run, or if structure validation failed, or if test hasn't been approved
+                // Updated disabled logic: Disable if submitting, validation hasn't run, validation failed,
+                // OR if validation succeeded but requires approval (has products) and isn't approved.
+                disabled={
+                  isSubmitting ||
+                  validationResult === null || // Disable if validation hasn't run
+                  !validationResult.success || // Disable if validation failed
+                  !isValidationApproved       // Disable if validation succeeded but wasn't approved
+                }
+                className="rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
+              >
+                {isSubmitting ? (isUpdate ? "Updating..." : "Creating...") : (isUpdate ? "Update Scraper" : "Create Scraper")}
+              </button>
+            </div>
           </div>
-        </div>
-
-        <div className="flex justify-end space-x-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            // Disable if submitting, or if validation hasn't run, or if structure validation failed, or if test hasn't been approved
-            // Updated disabled logic: Disable if submitting, validation hasn't run, validation failed,
-            // OR if validation succeeded but requires approval (has products) and isn't approved.
-            disabled={
-              isSubmitting ||
-              validationResult === null || // Disable if validation hasn't run
-              !validationResult.success || // Disable if validation failed
-              !isValidationApproved       // Disable if validation succeeded but wasn't approved
-            }
-            className="rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
-          >
-            {isSubmitting ? (isUpdate ? "Updating..." : "Creating...") : (isUpdate ? "Update Scraper" : "Create Scraper")}
-          </button>
         </div>
       </form>
     </div>

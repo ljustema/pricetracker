@@ -11,9 +11,10 @@ import ScriptScraperForm from "@/components/scrapers/script-scraper-form";
 import TestResultsModal from "@/components/scrapers/test-results-modal";
 import AiScraperValidation from "@/components/scrapers/ai-scraper-validation";
 import AiScraperWizard from "@/components/scrapers/ai-scraper-wizard";
+import ProfessionalScraperForm from "@/components/scrapers/professional-scraper-form";
 import { useSession } from "next-auth/react";
 
-type Step = 'select-type' | 'create-ai' | 'create-script' | 'validate-ai' | 'ai-wizard'; // Added ai-wizard step
+type Step = 'select-type' | 'create-ai' | 'create-script' | 'validate-ai' | 'ai-wizard' | 'professional-service'; // Added professional-service step
 
 export default function NewScraperPage() {
   const params = useParams();
@@ -42,13 +43,17 @@ export default function NewScraperPage() {
     );
   }
 
-  const handleScraperTypeSelect = (type: 'ai' | 'python' | 'typescript') => {
+  const handleScraperTypeSelect = (type: 'ai' | 'python' | 'typescript' | 'professional') => {
     if (type === 'ai') {
       // Use the multi-phase AI wizard
       setStep('ai-wizard');
       setSelectedScriptType(null); // Reset script type if AI is chosen
+    } else if (type === 'professional') {
+      // Go to the professional scraper service form
+      setStep('professional-service');
+      setSelectedScriptType(null);
     } else {
-      setSelectedScriptType(type); // Store the selected script type
+      setSelectedScriptType(type as 'python' | 'typescript'); // Store the selected script type
       setStep('create-script'); // Use the simplified step
     }
   };
@@ -292,6 +297,13 @@ export default function NewScraperPage() {
             competitorId={competitorId}
             scraperType={selectedScriptType} // Pass the selected type as a prop
             onSuccess={handleScriptScraperCreated} // Use renamed handler
+            onCancel={handleCancel}
+          />
+        );
+      case 'professional-service':
+        return (
+          <ProfessionalScraperForm
+            competitorId={competitorId}
             onCancel={handleCancel}
           />
         );
