@@ -179,16 +179,36 @@ const BrandStandardizationUI: React.FC<BrandStandardizationUIProps> = ({
     }
 
     try {
+      // Immediately update the UI by removing this group from the display
+      // This provides instant visual feedback even before the API call completes
+      const groupElement = document.getElementById(`group-${groupKey}`);
+      if (groupElement) {
+        groupElement.style.opacity = '0.5';
+        groupElement.style.pointerEvents = 'none';
+      }
+
+      // Call the merge function from the parent component
       await onMerge(primaryId, idsToMerge);
+
       // Clear selection for this group after successful merge
       setSelectedBrands(prev => ({ ...prev, [groupKey]: [] }));
       setPrimaryBrand(prev => ({ ...prev, [groupKey]: '' }));
 
-      // Navigate back to the brands page
-      router.push('/app-routes/brands');
+      // Force Next.js to revalidate the page data
+      router.refresh();
+
+      // Navigate back to the brands page with cache busting parameter
+      router.push(`/app-routes/brands?refresh=${Date.now()}`);
     } catch (err: unknown) {
-       console.error("Error merging brands:", err);
-       setError(err instanceof Error ? err.message : 'Failed to merge brands.');
+      console.error("Error merging brands:", err);
+      setError(err instanceof Error ? err.message : 'Failed to merge brands.');
+
+      // Restore the UI if there was an error
+      const groupElement = document.getElementById(`group-${groupKey}`);
+      if (groupElement) {
+        groupElement.style.opacity = '1';
+        groupElement.style.pointerEvents = 'auto';
+      }
     }
   };
 
@@ -210,11 +230,37 @@ const BrandStandardizationUI: React.FC<BrandStandardizationUIProps> = ({
     }
 
     try {
+      // Immediately update the UI by fading out this group
+      // This provides instant visual feedback even before the API call completes
+      const groupElement = document.getElementById(`group-${groupKey}`);
+      if (groupElement) {
+        groupElement.style.opacity = '0.5';
+        groupElement.style.pointerEvents = 'none';
+      }
+
+      // Call the dismiss function from the parent component
       await onDismissDuplicates(groupKey, brandIds);
-      // Parent component should refetch data to update the UI
+
+      // Force Next.js to revalidate the page data
+      router.refresh();
+
+      // Wait a moment to ensure the server has processed the dismissal
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // If the group element still exists, remove it completely
+      if (groupElement && groupElement.parentNode) {
+        groupElement.parentNode.removeChild(groupElement);
+      }
     } catch (err: unknown) {
       console.error("Error dismissing duplicates:", err);
       setError(err instanceof Error ? err.message : 'Failed to dismiss duplicates.');
+
+      // Restore the UI if there was an error
+      const groupElement = document.getElementById(`group-${groupKey}`);
+      if (groupElement) {
+        groupElement.style.opacity = '1';
+        groupElement.style.pointerEvents = 'auto';
+      }
     }
   };
 

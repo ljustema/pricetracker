@@ -79,12 +79,18 @@ const BrandDirectMergeModal: React.FC<BrandDirectMergeModalProps> = ({
         throw new Error(errorData.details || errorData.error || 'Failed to merge brands');
       }
 
-      // Success
+      // Force Next.js to revalidate the page data
+      router.refresh();
+
+      // Success - call the callback to refresh data in the parent component
       onMergeComplete();
       onClose();
 
-      // Navigate back to the brands page
-      router.push('/app-routes/brands');
+      // Wait a moment to ensure the server has processed the merge
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Navigate back to the brands page with cache busting parameter
+      router.push(`/app-routes/brands?refresh=${Date.now()}`);
     } catch (err) {
       console.error('Error merging brands:', err);
       setError(err instanceof Error ? err.message : 'An unknown error occurred');

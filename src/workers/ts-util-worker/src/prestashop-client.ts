@@ -335,6 +335,239 @@ private async getDefaultCurrency(): Promise<string> {
   }
 
   /**
+   * Fetch products in batches and process them immediately
+   * This is more efficient for large catalogs as it doesn't wait for all products to be fetched
+   */
+  async fetchProductsInBatches(options: {
+    batchSize?: number;
+    activeOnly?: boolean;
+    onProgress?: (current: number, total: number) => void;
+    onBatchReceived?: (batch: PrestashopProduct[], currentPage: number, totalPages: number) => Promise<void>;
+  } = {}): Promise<void> {
+    const { onProgress, activeOnly = true, batchSize = 100, onBatchReceived } = options;
+    console.log(`Starting product fetch in batches (activeOnly: ${activeOnly}, batchSize: ${batchSize})`);
+
+    try {
+      // Force version detection before starting
+      const version = await this.detectVersion();
+      console.log(`Using PrestaShop version: ${version} for fetching products in batches`);
+
+      // Get product IDs with version-compatible approach
+      const productIds = await this.getProductIds();
+
+      // Handle empty product list
+      if (productIds.length === 0) {
+        console.warn('No product IDs retrieved, using fallback approach');
+        // Use a fallback approach to estimate products
+        const totalProducts = 100;  // Fallback estimate
+        const maxProductId = 5000;  // Fallback estimate
+        console.log(`Using fallback values: Total products: ${totalProducts}, Max ID: ${maxProductId}`);
+
+        // Continue with chunked approach using estimated values
+        await this.fetchProductsByChunksWithCallback([], totalProducts, maxProductId, activeOnly, batchSize, onProgress, onBatchReceived);
+        return;
+      }
+
+      // Find the max product ID
+      const maxProductId = Math.max(...productIds);
+      const totalProducts = productIds.length;
+      console.log(`Total products: ${totalProducts}, Max ID: ${maxProductId}`);
+
+      // Fetch products by chunks with callback
+      await this.fetchProductsByChunksWithCallback(productIds, totalProducts, maxProductId, activeOnly, batchSize, onProgress, onBatchReceived);
+    } catch (error) {
+      console.error('Error fetching products in batches:', error);
+    }
+  }
+
+  /**
+   * Fetch products by chunks and process each batch immediately via callback
+   */
+  private async fetchProductsByChunksWithCallback(
+    productIds: number[],
+    _totalProducts: number,
+    maxProductId: number,
+    activeOnly: boolean,
+    batchSize: number,
+    onProgress?: (current: number, total: number) => void,
+    onBatchReceived?: (batch: PrestashopProduct[], currentPage: number, totalPages: number) => Promise<void>
+  ): Promise<void> {
+    // Define the chunk size for ID ranges
+    const chunkSize = 1000;
+    const version = await this.detectVersion();
+
+    // If we have actual product IDs, use those directly
+    if (productIds.length > 0) {
+      console.log(`Using ${productIds.length} actual product IDs`);
+
+      // Sort the IDs for better organization
+      productIds.sort((a, b) => a - b);
+
+      // Split the IDs into chunks
+      const chunks: number[][] = [];
+      for (let i = 0; i < productIds.length; i += chunkSize) {
+        chunks.push(productIds.slice(i, i + chunkSize));
+      }
+
+      console.log(`Split product IDs into ${chunks.length} chunks`);
+
+      // Process each chunk
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        if (onProgress) {
+          onProgress(i + 1, chunks.length);
+        }
+
+        // Get min and max ID in this chunk
+        const minId = Math.min(...chunk);
+        const maxId = Math.max(...chunk);
+
+        console.log(`Fetching products with ID range [${minId},${maxId}] (chunk ${i + 1}/${chunks.length})...`);
+
+        // Build a filter string compatible with the PS version
+        let endpoint;
+        let response;
+
+        if (version.startsWith('8')) {
+          // For PrestaShop 8.x, use range filter
+          endpoint = `products?display=full&filter[id]=[${minId},${maxId}]`;
+          response = await this.makeRequest(endpoint);
+        } else if (version.startsWith('1.7.6')) {
+          // For PrestaShop 1.7.6.x, the range filter doesn't work properly
+          // Instead, fetch products in smaller batches using individual IDs
+          console.log(`Using individual ID approach for PrestaShop 1.7.6.x with ${chunk.length} IDs`);
+
+          // Create batches of 50 IDs for individual fetching
+          const idBatchSize = 50;
+          const idBatches = [];
+          for (let j = 0; j < chunk.length; j += idBatchSize) {
+            idBatches.push(chunk.slice(j, j + idBatchSize));
+          }
+
+          console.log(`Split chunk into ${idBatches.length} ID batches of max ${idBatchSize} IDs each`);
+
+          // Process each batch of IDs
+          for (let batchIndex = 0; batchIndex < idBatches.length; batchIndex++) {
+            const idBatch = idBatches[batchIndex];
+            console.log(`Processing ID batch ${batchIndex + 1}/${idBatches.length} with ${idBatch.length} IDs`);
+
+            // Fetch each product individually and combine results
+            const batchProducts: PrestashopProduct[] = [];
+            for (const productId of idBatch) {
+              try {
+                const productResponse = await this.makeRequest(`products/${productId}`);
+                const productArray = await this.parseProducts(productResponse);
+                if (productArray.length > 0) {
+                  batchProducts.push(productArray[0]);
+                }
+              } catch (error) {
+                console.error(`Error fetching product ID ${productId}:`, error);
+                // Continue with next product
+              }
+            }
+
+            console.log(`Fetched ${batchProducts.length} products from ID batch ${batchIndex + 1}`);
+
+            // Filter active products if requested
+            let filteredBatchProducts = batchProducts;
+            if (activeOnly && filteredBatchProducts.length > 0) {
+              filteredBatchProducts = filteredBatchProducts.filter((product: PrestashopProduct) => {
+                return product.active === true;
+              });
+            }
+
+            // Process this batch immediately via callback
+            if (onBatchReceived && filteredBatchProducts.length > 0) {
+              await onBatchReceived(filteredBatchProducts, batchIndex + 1, idBatches.length);
+            }
+          }
+
+          // Skip the rest of this chunk processing since we've already processed all batches
+          continue;
+        } else {
+          // For other 1.7.x versions, try the pipe syntax
+          endpoint = `products?display=full&filter[id]=[${minId}|${maxId}]`;
+          response = await this.makeRequest(endpoint);
+        }
+
+        // Parse the products from the response
+        const products = await this.parseProducts(response);
+        console.log(`Fetched ${products.length} products from ID range [${minId},${maxId}]`);
+
+        // Filter active products if requested
+        let filteredProducts = products;
+        if (activeOnly && filteredProducts.length > 0) {
+          filteredProducts = filteredProducts.filter((product: PrestashopProduct) => {
+            return product.active === true;
+          });
+        }
+
+        // Process products in smaller batches for better memory management
+        if (onBatchReceived && filteredProducts.length > 0) {
+          // Split into smaller batches for processing
+          for (let j = 0; j < filteredProducts.length; j += batchSize) {
+            const productBatch = filteredProducts.slice(j, j + batchSize);
+            if (productBatch.length > 0) {
+              await onBatchReceived(productBatch, i + 1, chunks.length);
+            }
+          }
+        }
+      }
+    } else {
+      // If we don't have actual IDs, use estimated ranges
+      console.log(`Using estimated ID ranges up to ${maxProductId}`);
+
+      // Calculate the number of chunks
+      const numChunks = Math.ceil(maxProductId / chunkSize);
+
+      // Process each chunk
+      for (let i = 0; i < numChunks; i++) {
+        if (onProgress) {
+          onProgress(i + 1, numChunks);
+        }
+
+        const startId = i * chunkSize + 1;
+        const endId = Math.min((i + 1) * chunkSize, maxProductId);
+
+        console.log(`Fetching products with ID range [${startId},${endId}] (chunk ${i + 1}/${numChunks})...`);
+
+        // Build a filter string compatible with the PS version
+        let endpoint;
+        if (version.startsWith('8')) {
+          endpoint = `products?display=full&filter[id]=[${startId},${endId}]`;
+        } else {
+          // For 1.7.x, use a different filter syntax
+          endpoint = `products?display=full&filter[id]=[${startId}|${endId}]`;
+        }
+
+        const response = await this.makeRequest(endpoint);
+        const products = await this.parseProducts(response);
+
+        console.log(`Fetched ${products.length} products from ID range [${startId},${endId}]`);
+
+        // Filter active products if requested
+        let filteredProducts = products;
+        if (activeOnly && filteredProducts.length > 0) {
+          filteredProducts = filteredProducts.filter((product: PrestashopProduct) => {
+            return product.active === true;
+          });
+        }
+
+        // Process products in smaller batches for better memory management
+        if (onBatchReceived && filteredProducts.length > 0) {
+          // Split into smaller batches for processing
+          for (let j = 0; j < filteredProducts.length; j += batchSize) {
+            const productBatch = filteredProducts.slice(j, j + batchSize);
+            if (productBatch.length > 0) {
+              await onBatchReceived(productBatch, i + 1, numChunks);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
    * Fetch products from the Prestashop API using ID range filtering
    */
   async fetchProducts(options: {

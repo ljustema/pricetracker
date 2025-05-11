@@ -82,11 +82,14 @@ export default function BrandsPage() {
         }
       }
 
+      // Add cache-busting timestamp to ensure fresh data after operations
+      const cacheBuster = `_t=${Date.now()}`;
+
       // Fetch all brands with analytics, duplicates, and those needing review in parallel
       const [analyticsRes, duplicatesRes, reviewRes] = await Promise.all([
-        fetch('/api/brands/analytics'),
-        fetch('/api/brands/duplicates'),
-        fetch('/api/brands/review')
+        fetch(`/api/brands/analytics?${cacheBuster}`),
+        fetch(`/api/brands/duplicates?${cacheBuster}`),
+        fetch(`/api/brands/review?${cacheBuster}`)
       ]);
 
       if (!analyticsRes.ok) throw new Error(`Failed to fetch brands with analytics: ${analyticsRes.statusText}`);
@@ -299,6 +302,14 @@ export default function BrandsPage() {
   const handleMergeBrands = async (primaryBrandId: string, brandIdsToMerge: string[]) => {
       setIsMerging(true); // Indicate merging is in progress
       setError(null);
+
+      // Immediately update the UI by removing the merged brands from the duplicates list
+      // This provides instant visual feedback even before the API call completes
+      const updatedDuplicates = duplicates.filter(brand =>
+          !brandIdsToMerge.includes(brand.id) || brand.id === primaryBrandId
+      );
+      setDuplicates(updatedDuplicates);
+
       try {
           const res = await fetch('/api/brands/merge', {
               method: 'POST',
@@ -313,7 +324,13 @@ export default function BrandsPage() {
              throw new Error(errorBody.details || `Failed to merge brands: ${res.statusText}`);
           }
 
-          // Refetch data to update the lists (duplicates, needsReview, all brands)
+          // Force Next.js to revalidate the page data
+          router.refresh();
+
+          // Wait a moment to ensure the server has processed the merge
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          // Refetch data with cache busting to ensure fresh data
           await fetchBrandData();
 
           // Close any open forms or modals
@@ -324,11 +341,14 @@ export default function BrandsPage() {
           setEditingBrand(null);
           setBrandToMerge(null);
 
-          // Redirect to the brands list page
-          router.push('/app-routes/brands');
+          // Redirect to the brands list page with cache busting parameter
+          router.push(`/app-routes/brands?refresh=${Date.now()}`);
       } catch (err: unknown) {
           console.error("Error merging brands:", err);
           setError(err instanceof Error ? err.message : 'Failed to merge brands.');
+
+          // Restore the original duplicates list if there was an error
+          await fetchBrandData();
       } finally {
           setIsMerging(false);
       }

@@ -120,100 +120,51 @@ export class IntegrationSyncService {
     }
     this.log('info', 'API_CONNECTION', 'API connection successful');
 
-    // Fetch products from Prestashop
-    this.log('info', 'FETCH_PRODUCTS', 'Fetching products from Prestashop');
+    // Fetch and process products from Prestashop in batches
+    this.log('info', 'FETCH_PRODUCTS', 'Fetching and processing products from Prestashop in batches');
 
     // Check if we should only import active products
     const activeOnly = integration.configuration?.activeOnly !== false; // Default to true if not specified
     this.log('info', 'FETCH_CONFIG', `Only importing active products: ${activeOnly}`);
 
-    const products = await client.fetchProducts({
+    // Define batch size for processing
+    const batchSize = 100;
+    let totalProductsProcessed = 0;
+    let batchNumber = 0;
+    let totalBatches = 0; // This will be updated when we know the total count
+
+    // Use the fetchProductsInBatches method instead of fetchProducts
+    await client.fetchProductsInBatches({
+      batchSize,
+      onBatchReceived: async (productBatch, currentPage, totalPages) => {
+        // Update total batches estimate if this is the first batch
+        if (batchNumber === 0 && totalPages > 0) {
+          // Rough estimate of total batches based on pages and average batch size
+          totalBatches = totalPages;
+          this.log('info', 'FETCH_ESTIMATE', `Estimated total batches: ~${totalBatches} (based on ${totalPages} pages)`);
+        }
+
+        batchNumber++;
+        this.log('info', 'BATCH_RECEIVED', `Received batch ${batchNumber} with ${productBatch.length} products (page ${currentPage}/${totalPages})`);
+
+        // Process this batch immediately
+        await this.processProductBatch(productBatch, batchNumber, totalBatches || '?');
+
+        totalProductsProcessed += productBatch.length;
+
+        // Update the run status with progress
+        await this.updateRunStatus('processing', { productsProcessed: totalProductsProcessed });
+      },
       onProgress: (current, total) => {
         this.log('info', 'FETCH_PROGRESS', `Fetching page ${current} of ${total}`);
       },
-      activeOnly: activeOnly, // Pass the activeOnly parameter to the client
+      activeOnly: activeOnly,
     });
 
-    this.log('info', 'FETCH_COMPLETE', `Fetched ${products.length} products from Prestashop`);
+    this.log('info', 'FETCH_COMPLETE', `Fetched and processed ${totalProductsProcessed} products in ${batchNumber} batches`);
 
-    // Stage the products in the staged_integration_products table
-    this.log('info', 'STAGING', 'Staging products for processing');
-
-    // Process products in batches to avoid large inserts
-    const batchSize = 100;
-    const batches = [];
-
-    for (let i = 0; i < products.length; i += batchSize) {
-      batches.push(products.slice(i, i + batchSize));
-    }
-
-    this.log('info', 'BATCHING', `Created ${batches.length} batches of products for staging`);
-
-    // Process each batch
-    for (let i = 0; i < batches.length; i++) {
-      const batch = batches[i];
-      this.log('info', 'BATCH_PROCESSING', `Processing batch ${i + 1}/${batches.length} (${batch.length} products)`);
-
-      // Prepare the batch for insertion
-      const stagedProducts = batch.map(product => {
-        // Log the first product in detail to debug
-        if (batch.indexOf(product) === 0) {
-          console.log('First product raw data:', JSON.stringify(product, null, 2));
-        }
-
-        // Make sure we handle empty strings properly
-        const sku = product.reference && product.reference !== '' ? product.reference : null;
-        const ean = product.ean13 && product.ean13 !== '' ? product.ean13 : null;
-        const brand = product.manufacturer_name && product.manufacturer_name !== '' ? product.manufacturer_name : null;
-        const imageUrl = product.image_url && product.image_url !== '' ? product.image_url : null;
-
-        return {
-          integration_run_id: this.runId,
-          integration_id: this.integrationId,
-          user_id: this.userId,
-          prestashop_product_id: product.id,
-          name: product.name,
-          sku: sku,
-          ean: ean,
-          brand: brand,
-          price: product.price,
-          wholesale_price: product.wholesale_price || null,
-          image_url: imageUrl,
-          raw_data: product, // Store the raw product data for reference
-          status: 'pending',
-          created_at: new Date().toISOString()
-        };
-      });
-
-      // Insert the batch into the staged_integration_products table
-      console.log(`Inserting ${stagedProducts.length} products into staged_integration_products table`);
-      console.log('First product in batch:', JSON.stringify(stagedProducts[0], null, 2));
-
-      const { data: insertData, error: insertError } = await this.supabase
-        .from('staged_integration_products')
-        .insert(stagedProducts)
-        .select();
-
-      console.log(`Insert response: ${insertError ? 'ERROR' : 'SUCCESS'}`);
-      if (insertData) {
-        console.log(`Inserted ${insertData.length} rows`);
-      }
-
-      if (insertError) {
-        this.log('error', 'STAGING_ERROR', `Error staging batch ${i + 1}: ${insertError.message}`);
-        throw new Error(`Failed to stage products: ${insertError.message}`);
-      }
-
-      productsProcessed += batch.length;
-      this.log('info', 'BATCH_STAGED', `Staged batch ${i + 1}/${batches.length} (${batch.length} products)`);
-
-      // Update the run status with progress
-      await this.updateRunStatus('processing', { productsProcessed });
-    }
-
-    // With the trigger-based approach, we don't need to call a function to process the products
-    // The database trigger will automatically process each product as it's inserted
-    this.log('info', 'DB_PROCESSING', 'Products will be processed automatically by database triggers');
+    // Make sure all products are processed by calling the process function one final time
+    this.log('info', 'FINAL_PROCESSING', 'Ensuring all products are processed');
 
     // Check if the staged_integration_products table has any records for this run
     const { data: stagedCount, error: countError } = await this.supabase
@@ -230,8 +181,24 @@ export class IntegrationSyncService {
       productsProcessed = stagedCount?.length || 0;
     }
 
-    // Wait a moment for triggers to process
-    this.log('info', 'DB_PROCESSING_WAIT', 'Waiting for database triggers to process products...');
+    // Call the process_pending_integration_products function one final time to ensure all products are processed
+    try {
+      this.log('info', 'FINAL_PROCESSING_TRIGGER', 'Triggering final processing for all pending products');
+
+      const { data: finalProcessResult, error: finalProcessError } = await this.supabase
+        .rpc('process_pending_integration_products', { run_id: this.runId });
+
+      if (finalProcessError) {
+        this.log('error', 'FINAL_PROCESSING_ERROR', `Error in final processing: ${finalProcessError.message}`);
+      } else {
+        this.log('info', 'FINAL_PROCESSING_COMPLETE', `Final processing complete: ${JSON.stringify(finalProcessResult)}`);
+      }
+    } catch (error) {
+      this.log('error', 'FINAL_PROCESSING_EXCEPTION', `Exception in final processing: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+
+    // Wait a moment for any remaining processing to complete
+    this.log('info', 'DB_PROCESSING_WAIT', 'Waiting for processing to complete...');
     await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
 
     // Get statistics on processed products
@@ -270,6 +237,82 @@ export class IntegrationSyncService {
       productsCreated,
       logDetails: this.logs,
     };
+  }
+
+  /**
+   * Process a batch of products
+   */
+  private async processProductBatch(batch: any[], batchNumber: number, totalBatches: number | string): Promise<void> {
+    this.log('info', 'BATCH_PROCESSING', `Processing batch ${batchNumber}/${totalBatches} (${batch.length} products)`);
+
+    // Prepare the batch for insertion
+    const stagedProducts = batch.map(product => {
+      // Log the first product in detail to debug
+      if (batch.indexOf(product) === 0) {
+        console.log('First product raw data:', JSON.stringify(product, null, 2));
+      }
+
+      // Make sure we handle empty strings properly
+      const sku = product.reference && product.reference !== '' ? product.reference : null;
+      const ean = product.ean13 && product.ean13 !== '' ? product.ean13 : null;
+      const brand = product.manufacturer_name && product.manufacturer_name !== '' ? product.manufacturer_name : null;
+      const imageUrl = product.image_url && product.image_url !== '' ? product.image_url : null;
+
+      return {
+        integration_run_id: this.runId,
+        integration_id: this.integrationId,
+        user_id: this.userId,
+        prestashop_product_id: product.id,
+        name: product.name,
+        sku: sku,
+        ean: ean,
+        brand: brand,
+        price: product.price,
+        wholesale_price: product.wholesale_price || null,
+        image_url: imageUrl,
+        raw_data: product, // Store the raw product data for reference
+        status: 'pending',
+        created_at: new Date().toISOString()
+      };
+    });
+
+    // Insert the batch into the staged_integration_products table
+    console.log(`Inserting ${stagedProducts.length} products into staged_integration_products table`);
+    console.log('First product in batch:', JSON.stringify(stagedProducts[0], null, 2));
+
+    const { data: insertData, error: insertError } = await this.supabase
+      .from('staged_integration_products')
+      .insert(stagedProducts)
+      .select();
+
+    console.log(`Insert response: ${insertError ? 'ERROR' : 'SUCCESS'}`);
+    if (insertData) {
+      console.log(`Inserted ${insertData.length} rows`);
+    }
+
+    if (insertError) {
+      this.log('error', 'STAGING_ERROR', `Error staging batch ${batchNumber}: ${insertError.message}`);
+      throw new Error(`Failed to stage products: ${insertError.message}`);
+    }
+
+    this.log('info', 'BATCH_STAGED', `Staged batch ${batchNumber}/${totalBatches} (${batch.length} products)`);
+
+    // Process this batch immediately by calling the database function
+    try {
+      this.log('info', 'BATCH_PROCESSING_TRIGGER', `Triggering processing for batch ${batchNumber}/${totalBatches}`);
+
+      // Call the process_pending_integration_products function to process this batch
+      const { data: processResult, error: processError } = await this.supabase
+        .rpc('process_pending_integration_products', { run_id: this.runId });
+
+      if (processError) {
+        this.log('error', 'BATCH_PROCESSING_ERROR', `Error processing batch ${batchNumber}: ${processError.message}`);
+      } else {
+        this.log('info', 'BATCH_PROCESSED', `Processed batch ${batchNumber}/${totalBatches}: ${JSON.stringify(processResult)}`);
+      }
+    } catch (error) {
+      this.log('error', 'BATCH_PROCESSING_EXCEPTION', `Exception processing batch ${batchNumber}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   /**
