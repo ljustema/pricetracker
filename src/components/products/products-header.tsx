@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { UploadIcon, PlusIcon } from "lucide-react";
+import { UploadIcon, PlusIcon, GitMergeIcon } from "lucide-react";
 import CSVUploadForm from "./csv-upload-form";
 
 export default function ProductsHeader() {
@@ -17,9 +17,9 @@ export default function ProductsHeader() {
   return (
     <div className="mb-8">
       {showCSVUploadForm ? (
-        <CSVUploadForm 
-          onSuccess={handleCSVUploadSuccess} 
-          onCancel={() => setShowCSVUploadForm(false)} 
+        <CSVUploadForm
+          onSuccess={handleCSVUploadSuccess}
+          onCancel={() => setShowCSVUploadForm(false)}
         />
       ) : (
         <div className="flex items-center justify-between">
@@ -32,6 +32,13 @@ export default function ProductsHeader() {
               <UploadIcon className="h-4 w-4 mr-2" />
               Upload CSV
             </button>
+            <Link
+              href="/app-routes/products/duplicates"
+              className="flex items-center rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+            >
+              <GitMergeIcon className="h-4 w-4 mr-2" />
+              Merge Duplicates
+            </Link>
             <Link
               href="/app-routes/products/new"
               className="flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"

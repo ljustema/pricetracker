@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 
@@ -41,9 +41,10 @@ export default function LinkCompetitorsPage({ params }: LinkCompetitorsPageProps
   const [product, setProduct] = useState<Product | null>(null);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [selectedCompetitors, setSelectedCompetitors] = useState<string[]>([]);
-  
-  // Extract productId directly
-  const productId = params.productId;
+
+  // Use the useParams hook to get the productId from the URL
+  const routeParams = useParams();
+  const productId = routeParams.productId as string;
 
   useEffect(() => {
     const fetchData = async () => {
@@ -52,30 +53,30 @@ export default function LinkCompetitorsPage({ params }: LinkCompetitorsPageProps
       try {
         // Fetch product details
         const productResponse = await fetch(`/api/products/${productId}`);
-        
+
         if (!productResponse.ok) {
           throw new Error("Failed to fetch product");
         }
-        
+
         const productData = await productResponse.json();
         setProduct(productData);
 
         // Fetch all competitors
         const competitorsResponse = await fetch('/api/competitors');
-        
+
         if (!competitorsResponse.ok) {
           throw new Error("Failed to fetch competitors");
         }
-        
+
         const competitorsData = await competitorsResponse.json();
         setCompetitors(competitorsData);
 
         // Fetch existing links (scraped products)
         const scrapedProductsResponse = await fetch(`/api/scraped-products?productId=${productId}`);
-        
+
         if (scrapedProductsResponse.ok) {
           const scrapedProductsData = await scrapedProductsResponse.json();
-          
+
           // Set selected competitors based on existing links
           const linkedCompetitorIds = scrapedProductsData
             .map((sp: ScrapedProduct) => sp.competitor_id)
@@ -180,7 +181,7 @@ export default function LinkCompetitorsPage({ params }: LinkCompetitorsPageProps
             <div className="space-y-6">
               <div className="rounded-lg border border-gray-200 p-4">
                 <h3 className="mb-4 text-lg font-medium">Available Competitors</h3>
-                
+
                 <div className="space-y-3">
                   {competitors.map((competitor) => (
                     <div key={competitor.id} className="flex items-center">

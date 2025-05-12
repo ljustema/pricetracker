@@ -115,22 +115,7 @@ type ToastProps = React.ComponentPropsWithoutRef<typeof Toast>;
 
 type ToastActionElement = React.ReactElement<typeof ToastAction>;
 
-// Simplified useToast hook implementation
-// A real implementation would likely involve context
-let toastNotifier: (props: ToastProps & { title?: React.ReactNode; description?: React.ReactNode; action?: ToastActionElement }) => void = () => {};
-
-const setToastNotifier = (notifier: typeof toastNotifier) => {
-  toastNotifier = notifier;
-};
-
-const useToast = () => {
-  return {
-    toast: toastNotifier,
-    // Add dismiss function if needed
-  };
-};
-
-// You would typically have a Toaster component that uses setToastNotifier
+// The useToast hook is implemented in use-toast.ts
 // For now, this basic structure provides the hook.
 
 export {
@@ -143,6 +128,4 @@ export {
   ToastDescription,
   ToastClose,
   ToastAction,
-  useToast,
-  setToastNotifier, // Export this if needed for a Toaster component
 };

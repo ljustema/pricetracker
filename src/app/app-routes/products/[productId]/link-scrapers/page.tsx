@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 
@@ -48,9 +48,10 @@ export default function LinkScrapersPage({ params }: LinkScrapersPageProps) {
   const [scrapers, setScrapers] = useState<Scraper[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [selectedScrapers, setSelectedScrapers] = useState<string[]>([]);
-  
-  // Extract productId directly
-  const productId = params.productId;
+
+  // Use the useParams hook to get the productId from the URL
+  const routeParams = useParams();
+  const productId = routeParams.productId as string;
 
   useEffect(() => {
     const fetchData = async () => {
@@ -59,40 +60,40 @@ export default function LinkScrapersPage({ params }: LinkScrapersPageProps) {
       try {
         // Fetch product details
         const productResponse = await fetch(`/api/products/${productId}`);
-        
+
         if (!productResponse.ok) {
           throw new Error("Failed to fetch product");
         }
-        
+
         const productData = await productResponse.json();
         setProduct(productData);
 
         // Fetch all scrapers
         const scrapersResponse = await fetch('/api/scrapers');
-        
+
         if (!scrapersResponse.ok) {
           throw new Error("Failed to fetch scrapers");
         }
-        
+
         const scrapersData = await scrapersResponse.json();
         setScrapers(scrapersData);
 
         // Fetch all competitors
         const competitorsResponse = await fetch('/api/competitors');
-        
+
         if (!competitorsResponse.ok) {
           throw new Error("Failed to fetch competitors");
         }
-        
+
         const competitorsData = await competitorsResponse.json();
         setCompetitors(competitorsData);
 
         // Fetch existing links (scraped products)
         const scrapedProductsResponse = await fetch(`/api/scraped-products?productId=${productId}`);
-        
+
         if (scrapedProductsResponse.ok) {
           const scrapedProductsData = await scrapedProductsResponse.json();
-          
+
           // Set selected scrapers based on existing links
           const linkedScraperIds = scrapedProductsData.map((sp: ScrapedProduct) => sp.scraper_id);
           setSelectedScrapers(linkedScraperIds);
@@ -156,7 +157,7 @@ export default function LinkScrapersPage({ params }: LinkScrapersPageProps) {
     } catch (err) {
       console.error("Error linking scrapers:", err);
       setError(err instanceof Error ? err.message : "An unknown error occurred");
-      
+
       // Since we don't have the actual API endpoint yet, we'll simulate success
       // Remove this in the real implementation
       setTimeout(() => {
@@ -210,7 +211,7 @@ export default function LinkScrapersPage({ params }: LinkScrapersPageProps) {
                 return (
                   <div key={competitor.id} className="rounded-lg border border-gray-200 p-4">
                     <h3 className="mb-4 text-lg font-medium">{competitor.name}</h3>
-                    
+
                     <div className="space-y-3">
                       {competitorScrapers.map((scraper) => (
                         <div key={scraper.id} className="flex items-center">
