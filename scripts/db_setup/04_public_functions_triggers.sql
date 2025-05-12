@@ -509,9 +509,10 @@ BEGIN
     END IF;
 
     -- Add grouping, sorting and pagination to the subquery selecting product IDs
+    -- Add id as a secondary sort to ensure consistent ordering
     _query := _query || format('
             GROUP BY p.id -- Ensure unique product IDs before sorting/limiting
-            ORDER BY p.%I %s
+            ORDER BY p.%I %s, p.id ASC
             LIMIT %L OFFSET %L
         ),
         -- CTEs for fetching and aggregating latest prices from competitors and integrations
@@ -570,7 +571,7 @@ BEGIN
         JOIN FilteredProductsBase fp ON p.id = fp.id -- Join with the filtered product IDs
         LEFT JOIN AggregatedSourcePrices asp ON p.id = asp.product_id
         LEFT JOIN AggregatedCompetitorPrices acp ON p.id = acp.product_id
-        ORDER BY p.%I %s', -- Apply final sorting based on the main product table fields
+        ORDER BY p.%I %s, p.id ASC', -- Apply final sorting based on the main product table fields with id as secondary sort
         _safe_sort_by, _sort_direction, _limit, _offset, -- Parameters for LIMIT/OFFSET
         p_user_id, -- For LatestCompetitorPrices CTE
         p_user_id, -- For LatestIntegrationPrices CTE

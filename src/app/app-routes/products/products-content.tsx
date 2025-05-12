@@ -62,6 +62,8 @@ export default function ProductsContent({
   const showInactive = complexFilters.inactive;
   const sourceFilter = complexFilters.competitor || undefined; // Using competitor filter for both competitors and integrations
   const hasPriceFilter = complexFilters.has_price;
+  const priceLowerThanCompetitors = complexFilters.price_lower_than_competitors;
+  const priceHigherThanCompetitors = complexFilters.price_higher_than_competitors;
 
   useEffect(() => {
     // Function to fetch products based on current searchParams
@@ -96,6 +98,8 @@ export default function ProductsContent({
           isActive: isActive, // Send boolean based on filter state
           sourceId: sourceId, // Use sourceId parameter
           has_price: has_price, // Send boolean based on filter state
+          price_lower_than_competitors: priceLowerThanCompetitors, // Add new price comparison filter
+          price_higher_than_competitors: priceHigherThanCompetitors, // Add new price comparison filter
         };
 
         // Use the cookieHeader passed down from the parent Server Component
@@ -175,6 +179,8 @@ export default function ProductsContent({
       showInactive,
       sourceFilter,
       hasPriceFilter,
+      priceLowerThanCompetitors, // Add new price comparison filter
+      priceHigherThanCompetitors, // Add new price comparison filter
       cookieHeader // Keep cookieHeader dependency
     ]);
 

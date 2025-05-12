@@ -267,37 +267,56 @@ export default function ProductsFilter({
           </select>
         </div>
 
-        <div className="flex flex-col space-y-2">
-          <label className="flex items-center">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-              checked={currentFilters.inactive} // Controlled by prop
-              onChange={(e) => {
-                const newInactiveValue = e.target.checked;
-                // # Reason: Update the complex filter state in the parent.
-                onComplexFilterChange({ inactive: newInactiveValue });
-                // # Reason: The URL update will be handled by the useEffect in ProductsClientWrapper,
-                // which reacts to changes in complexFilters.
-              }}
-            />
-            <span className="ml-2 text-sm text-gray-700">Show Inactive Products</span>
+        <div>
+          <label htmlFor="filter" className="block text-sm font-medium text-gray-700">
+            Filter
           </label>
-          <label className="flex items-center">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-              checked={currentFilters.has_price} // Controlled by prop
-              onChange={(e) => {
-                const newHasPriceValue = e.target.checked;
-                // # Reason: Update the complex filter state in the parent.
-                onComplexFilterChange({ has_price: newHasPriceValue });
-                // # Reason: The URL update will be handled by the useEffect in ProductsClientWrapper,
-                // which reacts to changes in complexFilters.
-              }}
-            />
-            <span className="ml-2 text-sm text-gray-700">Only show products with our price</span>
-          </label>
+          <select
+            id="filter"
+            className="mt-1 block w-full rounded-md border-gray-300 py-2 pl-3 pr-10 text-base focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+            value={
+              currentFilters.inactive ? "inactive" :
+              currentFilters.has_price ? "our_products" :
+              currentFilters.price_lower_than_competitors ? "price_lower" :
+              currentFilters.price_higher_than_competitors ? "price_higher" :
+              "all"
+            }
+            onChange={(e) => {
+              const value = e.target.value;
+              // Reset all filters first
+              const resetFilters = {
+                inactive: false,
+                has_price: false,
+                price_lower_than_competitors: false,
+                price_higher_than_competitors: false
+              };
+
+              // Set the selected filter
+              switch (value) {
+                case "inactive":
+                  onComplexFilterChange({ ...resetFilters, inactive: true });
+                  break;
+                case "our_products":
+                  onComplexFilterChange({ ...resetFilters, has_price: true });
+                  break;
+                case "price_lower":
+                  onComplexFilterChange({ ...resetFilters, price_lower_than_competitors: true });
+                  break;
+                case "price_higher":
+                  onComplexFilterChange({ ...resetFilters, price_higher_than_competitors: true });
+                  break;
+                default:
+                  onComplexFilterChange(resetFilters);
+                  break;
+              }
+            }}
+          >
+            <option value="all">All Products</option>
+            <option value="inactive">Inactive Products</option>
+            <option value="our_products">Our Products</option>
+            <option value="price_lower">Price lower than competitor</option>
+            <option value="price_higher">Price higher than competitor</option>
+          </select>
         </div>
       </div>
     </div>

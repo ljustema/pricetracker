@@ -79,7 +79,10 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       p_competitor_id: body.sourceId || body.competitor || null, // Use sourceId if available, fall back to competitor
       // Convert has_price: Frontend sends true or undefined
       // Function expects true or null
-      p_has_price: body.has_price === true ? true : null
+      p_has_price: body.has_price === true ? true : null,
+      // Add new price comparison filters
+      p_price_lower_than_competitors: body.price_lower_than_competitors === true ? true : null,
+      p_price_higher_than_competitors: body.price_higher_than_competitors === true ? true : null
     };
 
     // Try to execute the RPC call, but fall back to a direct query if it fails
@@ -214,6 +217,20 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
               const productIdSet = new Set(productIds.map(item => item.product_id));
               const filteredProducts = allProducts.filter(product => productIdSet.has(product.id));
 
+              // Sort the filtered products consistently
+              filteredProducts.sort((a, b) => {
+                // First sort by the specified sort field
+                const sortField = rpcParams.p_sort_by || 'created_at';
+                const sortOrder = rpcParams.p_sort_order === 'asc' ? 1 : -1;
+
+                // Compare the primary sort field
+                if (a[sortField] < b[sortField]) return -1 * sortOrder;
+                if (a[sortField] > b[sortField]) return 1 * sortOrder;
+
+                // If primary sort field is equal, sort by id as secondary sort
+                return a.id.localeCompare(b.id);
+              });
+
               // Calculate pagination
               const start = (rpcParams.p_page - 1) * rpcParams.p_page_size;
               const end = start + rpcParams.p_page_size;
@@ -235,8 +252,10 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       }
 
       // Apply sorting and pagination
+      // Add id as a secondary sort to ensure consistent ordering
       query = query
         .order(rpcParams.p_sort_by, { ascending: rpcParams.p_sort_order === 'asc' })
+        .order('id', { ascending: true }) // Add secondary sort by id to ensure consistent ordering
         .range(
           (rpcParams.p_page - 1) * rpcParams.p_page_size,
           rpcParams.p_page * rpcParams.p_page_size - 1

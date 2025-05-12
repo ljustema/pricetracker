@@ -15,6 +15,9 @@ export interface ComplexFiltersState {
   // # Reason: Add sort properties to ComplexFiltersState to manage sort state centrally.
   sortBy: string;
   sortOrder: 'asc' | 'desc';
+  // New price comparison filters
+  price_lower_than_competitors: boolean;
+  price_higher_than_competitors: boolean;
 }
 
 // Define props for this client wrapper
@@ -54,6 +57,9 @@ export default function ProductsClientWrapper({
     // # Reason: Initialize sort properties from initialSearchParams.
     sortBy: typeof initialSearchParams.sort === 'string' ? initialSearchParams.sort : 'created_at',
     sortOrder: typeof initialSearchParams.sortOrder === 'string' && (initialSearchParams.sortOrder === 'asc' || initialSearchParams.sortOrder === 'desc') ? initialSearchParams.sortOrder : 'desc',
+    // Initialize new price comparison filters
+    price_lower_than_competitors: initialSearchParams.price_lower_than_competitors === "true",
+    price_higher_than_competitors: initialSearchParams.price_higher_than_competitors === "true",
   });
 
   const router = useRouter();
@@ -99,6 +105,17 @@ export default function ProductsClientWrapper({
       params.set("has_price", "true");
     } else {
       params.delete("has_price");
+    }
+    // Add price comparison filters to URL
+    if (complexFilters.price_lower_than_competitors) {
+      params.set("price_lower_than_competitors", "true");
+    } else {
+      params.delete("price_lower_than_competitors");
+    }
+    if (complexFilters.price_higher_than_competitors) {
+      params.set("price_higher_than_competitors", "true");
+    } else {
+      params.delete("price_higher_than_competitors");
     }
     // # Reason: Add sort parameters to the URL based on the state.
     if (complexFilters.sortBy) {
