@@ -27,6 +27,7 @@ export interface PrestashopProduct {
   image_url: string;
   active?: boolean;
   currency_code: string; // Added currency code field
+  product_url: string; // URL to the product on the Prestashop site
 }
 
 export class PrestashopClient {
@@ -1104,6 +1105,44 @@ private async getDefaultCurrency(): Promise<string> {
           }
         }
 
+        // Generate product URL
+        let productUrl = '';
+
+        // Get the link_rewrite value for the product (SEO-friendly URL name)
+        let linkRewrite = '';
+        if (product.link_rewrite) {
+          if (typeof product.link_rewrite === 'string') {
+            linkRewrite = product.link_rewrite.trim();
+          } else if (product.link_rewrite.language && product.link_rewrite.language.length > 0) {
+            // Try to get the first language value
+            linkRewrite = this.getStringValue(product.link_rewrite.language[0]);
+          } else if (product.link_rewrite.language) {
+            // If it's a single language object
+            linkRewrite = this.getStringValue(product.link_rewrite.language);
+          }
+        }
+
+        // Get the category ID if available
+        let categoryId = '';
+        if (product.id_category_default) {
+          categoryId = this.getStringValue(product.id_category_default);
+        }
+
+        // Construct the product URL
+        const baseUrl = this.apiUrl.replace(/\/api\/?$/, '');
+        const baseUrlWithoutTrailingSlash = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+
+        // If we have both category ID and link_rewrite, construct a full SEO URL
+        if (categoryId && linkRewrite) {
+          productUrl = `${baseUrlWithoutTrailingSlash}/${categoryId}-${linkRewrite}/${id}-${linkRewrite}.html`;
+        }
+        // Fallback to a simpler URL format
+        else {
+          productUrl = `${baseUrlWithoutTrailingSlash}/index.php?id_product=${id}`;
+        }
+
+        console.log(`Product ${id}: Generated product URL: ${productUrl}`);
+
         // Create parsed product with the fields we want
         const parsedProduct: PrestashopProduct = {
           id,
@@ -1115,7 +1154,8 @@ private async getDefaultCurrency(): Promise<string> {
           manufacturer_name: manufacturerName,
           image_url: imageUrl,
           active,
-          currency_code: defaultCurrency // Added currency_code
+          currency_code: defaultCurrency, // Added currency_code
+          product_url: productUrl // Add the product URL
         };
 
         // In test mode, log detailed info; in full sync mode, be quiet

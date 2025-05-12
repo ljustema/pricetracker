@@ -257,6 +257,8 @@ export class IntegrationSyncService {
       const ean = product.ean13 && product.ean13 !== '' ? product.ean13 : null;
       const brand = product.manufacturer_name && product.manufacturer_name !== '' ? product.manufacturer_name : null;
       const imageUrl = product.image_url && product.image_url !== '' ? product.image_url : null;
+      const productUrl = product.product_url && product.product_url !== '' ? product.product_url : null;
+      const currencyCode = product.currency_code || 'SEK'; // Default to SEK if not provided
 
       return {
         integration_run_id: this.runId,
@@ -270,6 +272,8 @@ export class IntegrationSyncService {
         price: product.price,
         wholesale_price: product.wholesale_price || null,
         image_url: imageUrl,
+        url: productUrl, // Add the product URL to the staged product
+        currency_code: currencyCode, // Add the currency code
         raw_data: product, // Store the raw product data for reference
         status: 'pending',
         created_at: new Date().toISOString()

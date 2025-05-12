@@ -62,6 +62,8 @@ export interface PriceChange {
   new_price: number;
   price_change_percentage: number;
   changed_at: string;
+  url?: string; // URL to the product on the competitor's website
+  currency_code?: string;
   competitors?: {
     id?: string;
     name: string;

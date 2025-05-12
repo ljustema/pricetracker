@@ -199,6 +199,7 @@ export async function PUT(
         category: body.category || null,
         description: body.description || null,
         image_url: body.image_url || null,
+        url: body.url || null, // Add URL field
         our_price: body.our_price || null,
         wholesale_price: body.wholesale_price || null,
         is_active: body.is_active !== undefined ? body.is_active : true,

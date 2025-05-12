@@ -27,6 +27,7 @@ export default function ProductEditPage() {
     category: "",
     description: "",
     image_url: "",
+    url: "", // Add URL field
     our_price: "",
     wholesale_price: "",
     is_active: true,
@@ -91,6 +92,7 @@ export default function ProductEditPage() {
           category: product.category || "",
           description: product.description || "",
           image_url: product.image_url || "",
+          url: product.url || "", // Include the URL from the product
           our_price: product.our_price ? product.our_price.toString() : "",
           wholesale_price: product.wholesale_price ? product.wholesale_price.toString() : "",
           is_active: product.is_active !== undefined ? product.is_active : true,
@@ -164,8 +166,8 @@ export default function ProductEditPage() {
         throw new Error(data.error || 'Failed to update product');
       }
 
-      // Redirect to the products page
-      router.push("/app-routes/products");
+      // Redirect back to the product detail page
+      router.push(`/app-routes/products/${productId}`);
     } catch (err) {
       console.error("Error updating product:", err);
       setError(err instanceof Error ? err.message : "An unknown error occurred");
@@ -307,6 +309,21 @@ export default function ProductEditPage() {
                 onChange={handleChange}
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
                 placeholder="https://example.com/image.jpg"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="url" className="block text-sm font-medium">
+                Product URL
+              </label>
+              <input
+                id="url"
+                name="url"
+                type="url"
+                value={formData.url}
+                onChange={handleChange}
+                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+                placeholder="https://example.com/product"
               />
             </div>
 

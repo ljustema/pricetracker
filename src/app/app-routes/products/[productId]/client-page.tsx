@@ -19,6 +19,7 @@ interface Product {
   wholesale_price: number | null;
   is_active: boolean | null;
   ean: string | null;
+  url: string | null;
 }
 
 interface ClientProductPageProps {
@@ -32,6 +33,18 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
 
   return (
     <div className="container mx-auto px-4 py-8">
+      <div className="mb-4">
+        <Link
+          href="/app-routes/products"
+          className="inline-flex items-center rounded-md bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          </svg>
+          Back to Products
+        </Link>
+      </div>
+
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">{product.name}</h1>
@@ -117,6 +130,20 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
                     {product.is_active ? "Active" : "Inactive"}
                   </span>
                 </div>
+
+                {product.url && (
+                  <div className="col-span-2 mt-2">
+                    <h3 className="text-sm font-medium text-gray-500">Product URL</h3>
+                    <a
+                      href={product.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-indigo-600 hover:text-indigo-900 hover:underline text-sm"
+                    >
+                      {product.url}
+                    </a>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -169,6 +196,7 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
                       const sourceName = priceChange.source_name || priceChange.competitors?.name || "Unknown";
                       const sourceWebsite = priceChange.source?.website || priceChange.competitors?.website;
                       const sourceType = priceChange.source_type || "competitor";
+                      const productUrl = priceChange.url;
 
                       const priceDiff = product.our_price
                         ? ((priceChange.new_price - product.our_price) / product.our_price) * 100
@@ -178,7 +206,18 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
                         <tr key={priceChange.id}>
                           <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm sm:pl-6">
                             <div className="font-medium text-gray-900">
-                              {sourceName}
+                              {productUrl ? (
+                                <a
+                                  href={productUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-indigo-600 hover:text-indigo-900 hover:underline"
+                                >
+                                  {sourceName}
+                                </a>
+                              ) : (
+                                <span>{sourceName}</span>
+                              )}
                               {sourceType === "integration" && (
                                 <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
                                   Integration

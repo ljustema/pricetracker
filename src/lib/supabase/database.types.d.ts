@@ -142,6 +142,9 @@ export type Database = {
                     price_change_percentage: number;
                     product_id: string;
                     user_id: string;
+                    url: string | null;
+                    currency_code: string | null;
+                    integration_id: string | null;
                 };
                 Insert: {
                     changed_at?: string | null;
@@ -152,6 +155,9 @@ export type Database = {
                     price_change_percentage: number;
                     product_id: string;
                     user_id: string;
+                    url?: string | null;
+                    currency_code?: string | null;
+                    integration_id?: string | null;
                 };
                 Update: {
                     changed_at?: string | null;
@@ -162,6 +168,9 @@ export type Database = {
                     price_change_percentage?: number;
                     product_id?: string;
                     user_id?: string;
+                    url?: string | null;
+                    currency_code?: string | null;
+                    integration_id?: string | null;
                 };
                 Relationships: [
                     {
