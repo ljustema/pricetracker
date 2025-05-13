@@ -20,6 +20,7 @@ export const metadata: Metadata = {
   title: "PriceTracker | Monitor Competitor Prices",
   description: "Track and analyze competitor prices to stay competitive in the market",
   keywords: ["price tracking", "competitor analysis", "price monitoring", "ecommerce"],
+  viewport: "width=device-width, initial-scale=1.0, maximum-scale=1.0",
 };
 
 export default function RootLayout({

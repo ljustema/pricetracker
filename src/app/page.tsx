@@ -2,7 +2,10 @@ import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import Link from "next/link";
+import Image from "next/image";
 import { Metadata } from "next";
+import DashboardPreviewWrapper from "../components/marketing/DashboardPreviewWrapper";
+import MobileMenu from "../components/layout/mobile-menu";
 
 export const metadata: Metadata = {
   title: "PriceTracker | Monitor Competitor Prices",
@@ -46,18 +49,8 @@ function LandingPageContent() {
               </Link>
             </div>
           </div>
-          {/* Mobile menu button */}
-          <div className="flex lg:hidden">
-            <button
-              type="button"
-              className="-m-2.5 inline-flex items-center justify-center rounded-md p-2.5 text-gray-700"
-            >
-              <span className="sr-only">Open main menu</span>
-              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-              </svg>
-            </button>
-          </div>
+          {/* Mobile menu */}
+          <MobileMenu />
         </nav>
       </header>
 
@@ -65,105 +58,49 @@ function LandingPageContent() {
       <div className="bg-white">
         {/* Hero section */}
         <div className="relative isolate overflow-hidden bg-gradient-to-b from-indigo-100/20">
-           <div className="mx-auto max-w-7xl pb-24 pt-10 sm:pb-32 lg:grid lg:grid-cols-2 lg:gap-x-8 lg:px-8 lg:py-40">
-              <div className="px-6 lg:px-0 lg:pt-4">
-                <div className="mx-auto max-w-2xl">
-                  <div className="max-w-lg">
-                    <h1 className="mt-10 text-4xl font-bold tracking-tight text-gray-900 sm:text-6xl">
-                      Monitor competitor prices automatically
-                    </h1>
-                    <p className="mt-6 text-lg leading-8 text-gray-600">
-                      PriceTracker helps you stay competitive by automatically monitoring your competitors&amp;apos; prices, alerting you to changes, and providing actionable insights.
-                    </p>
-                    <div className="mt-10 flex items-center gap-x-6">
-                      <Link
-                        href="/auth-routes/register"
-                        className="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-                      >
-                        Get started for free
-                      </Link>
-                      <Link href="/marketing-routes/pricing" className="text-sm font-semibold leading-6 text-gray-900">
-                        View pricing <span aria-hidden="true">→</span>
-                      </Link>
-                    </div>
-                  </div>
-                </div>
+          <div className="mx-auto max-w-7xl pb-24 pt-10 sm:pb-32 px-4 sm:px-6 lg:px-8 lg:py-20">
+            {/* Text content - centered on all screen sizes */}
+            <div className="mx-auto max-w-3xl text-center mb-8 sm:mb-12">
+              <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-gray-900 sm:text-6xl">
+                Monitor competitor prices automatically
+              </h1>
+              <p className="mt-4 sm:mt-6 text-base sm:text-lg leading-7 sm:leading-8 text-gray-600">
+                PriceTracker helps you stay competitive by automatically monitoring your competitors&apos; prices, alerting you to changes, and providing actionable insights.
+              </p>
+              <div className="mt-8 sm:mt-10 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-x-6">
+                <Link
+                  href="/auth-routes/register"
+                  className="w-full sm:w-auto rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                >
+                  Get started for free
+                </Link>
+                <Link href="/marketing-routes/pricing" className="w-full sm:w-auto text-center sm:text-left text-sm font-semibold leading-6 text-gray-900">
+                  View pricing <span aria-hidden="true">→</span>
+                </Link>
               </div>
-              <div className="mt-20 sm:mt-24 md:mx-auto md:max-w-2xl lg:mx-0 lg:mt-0 lg:w-screen">
-                 <div
-                  className="absolute inset-y-0 right-1/2 -z-10 -mr-10 w-[200%] skew-x-[-30deg] bg-white shadow-xl shadow-indigo-600/10 ring-1 ring-indigo-50 md:-mr-20 lg:-mr-36"
-                  aria-hidden="true"
-                />
-                <div className="shadow-lg md:rounded-3xl">
-                  <div className="bg-indigo-500 [clip-path:inset(0)] md:[clip-path:inset(0_round_theme(borderRadius.3xl))]">
+            </div>
+
+            {/* Dashboard preview - wider on desktop, contained on mobile */}
+            <div className="mx-auto w-full max-w-[100%] sm:max-w-5xl mt-8 overflow-hidden">
+              <div className="shadow-lg md:rounded-3xl">
+                <div className="bg-indigo-500 [clip-path:inset(0)] md:[clip-path:inset(0_round_theme(borderRadius.3xl))]">
+                  <div
+                    className="absolute -inset-y-px left-1/2 -z-10 ml-10 w-[200%] skew-x-[-30deg] bg-indigo-100 opacity-20 ring-1 ring-inset ring-white md:ml-20 lg:ml-36"
+                    aria-hidden="true"
+                  />
+                  <div className="relative px-2 sm:px-6 pt-8 sm:pt-10 md:px-10">
+                    <div className="mx-auto md:mx-0">
+                      <DashboardPreviewWrapper />
+                    </div>
                     <div
-                      className="absolute -inset-y-px left-1/2 -z-10 ml-10 w-[200%] skew-x-[-30deg] bg-indigo-100 opacity-20 ring-1 ring-inset ring-white md:ml-20 lg:ml-36"
+                      className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-black/10 md:rounded-3xl"
                       aria-hidden="true"
                     />
-                    <div className="relative px-6 pt-8 sm:pt-16 md:pl-16 md:pr-0">
-                      <div className="mx-auto max-w-2xl md:mx-0 md:max-w-none">
-                        <div className="w-screen overflow-hidden rounded-tl-xl bg-gray-900">
-                          <div className="flex bg-gray-800/40 ring-1 ring-white/5">
-                            <div className="-mb-px flex text-sm font-medium leading-6 text-gray-400">
-                              <div className="border-b border-r border-b-white/20 border-r-white/10 bg-white/5 px-4 py-2 text-white">
-                                Dashboard
-                              </div>
-                              <div className="border-r border-gray-600/10 px-4 py-2">
-                                Competitors
-                              </div>
-                              <div className="border-r border-gray-600/10 px-4 py-2">
-                                Products
-                              </div>
-                            </div>
-                          </div>
-                          <div className="px-6 pb-14 pt-6">
-                            {/* Placeholder for dashboard screenshot */}
-                            <div className="rounded bg-white/10 p-4 text-center text-white">
-                              <p className="text-sm">Dashboard Preview</p>
-                              <div className="mt-4 grid grid-cols-3 gap-4">
-                                <div className="rounded-lg bg-white/20 p-4">
-                                  <div className="text-2xl font-bold">24</div>
-                                  <div className="text-xs">Competitors</div>
-                                </div>
-                                <div className="rounded-lg bg-white/20 p-4">
-                                  <div className="text-2xl font-bold">1,248</div>
-                                  <div className="text-xs">Products</div>
-                                </div>
-                                <div className="rounded-lg bg-white/20 p-4">
-                                  <div className="text-2xl font-bold">37</div>
-                                  <div className="text-xs">Price Changes</div>
-                                </div>
-                              </div>
-                              <div className="mt-4 rounded-lg bg-white/20 p-4">
-                                <div className="mb-2 text-left text-xs">Recent Price Drops</div>
-                                <div className="space-y-2">
-                                  <div className="flex items-center justify-between rounded bg-white/10 p-2 text-xs">
-                                    <span>Product A</span>
-                                    <span className="text-red-300">-15%</span>
-                                  </div>
-                                  <div className="flex items-center justify-between rounded bg-white/10 p-2 text-xs">
-                                    <span>Product B</span>
-                                    <span className="text-red-300">-8%</span>
-                                  </div>
-                                  <div className="flex items-center justify-between rounded bg-white/10 p-2 text-xs">
-                                    <span>Product C</span>
-                                    <span className="text-red-300">-5%</span>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <div
-                        className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-black/10 md:rounded-3xl"
-                        aria-hidden="true"
-                      />
-                    </div>
                   </div>
                 </div>
               </div>
             </div>
+          </div>
           <div className="absolute inset-x-0 bottom-0 -z-10 h-24 bg-gradient-to-t from-white sm:h-32" />
         </div>
 
@@ -220,6 +157,118 @@ function LandingPageContent() {
                   </dd>
                 </div>
               </dl>
+            </div>
+          </div>
+
+          {/* Screenshot showcase section */}
+          <div className="mx-auto mt-32 max-w-7xl px-6 sm:mt-40 lg:px-8">
+            <div className="mx-auto max-w-2xl lg:text-center">
+              <h2 className="text-base font-semibold leading-7 text-indigo-600">Powerful Features</h2>
+              <p className="mt-2 text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">
+                See PriceTracker in action
+              </p>
+            </div>
+
+            {/* Products screenshot */}
+            <div className="mt-16 sm:mt-20">
+              <div className="grid grid-cols-1 gap-x-6 gap-y-10 lg:grid-cols-2 lg:gap-x-8">
+                <div className="relative group">
+                  <div className="aspect-[16/9] overflow-hidden rounded-2xl bg-gray-100 shadow-lg transition-all duration-300 group-hover:shadow-xl p-3">
+                    <div className="p-3 bg-white rounded-xl h-full">
+                      <Image
+                        src="/screenshots/products_1.jpg"
+                        alt="Products dashboard showing competitor prices"
+                        className="w-full object-cover rounded-lg"
+                        width={800}
+                        height={450}
+                      />
+                    </div>
+                    <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-gray-900/10"></div>
+                  </div>
+                  <div className="mt-5 px-2">
+                    <h3 className="text-lg font-semibold leading-8 text-gray-900">
+                      Product Management
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-gray-600">
+                      Track all your products and competitor prices in one place with powerful filtering and sorting options.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="relative group">
+                  <div className="aspect-[16/9] overflow-hidden rounded-2xl bg-gray-100 shadow-lg transition-all duration-300 group-hover:shadow-xl p-3">
+                    <div className="p-3 bg-white rounded-xl h-full">
+                      <Image
+                        src="/screenshots/insights_1.jpg"
+                        alt="Analytics dashboard with pricing insights"
+                        className="w-full object-cover rounded-lg"
+                        width={800}
+                        height={450}
+                      />
+                    </div>
+                    <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-gray-900/10"></div>
+                  </div>
+                  <div className="mt-5 px-2">
+                    <h3 className="text-lg font-semibold leading-8 text-gray-900">
+                      Advanced Analytics
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-gray-600">
+                      Gain valuable insights with our comprehensive analytics dashboard showing price trends and market positioning.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* More screenshots */}
+            <div className="mt-16">
+              <div className="grid grid-cols-1 gap-x-6 gap-y-10 lg:grid-cols-2 lg:gap-x-8">
+                <div className="relative group">
+                  <div className="aspect-[16/9] overflow-hidden rounded-2xl bg-gray-100 shadow-lg transition-all duration-300 group-hover:shadow-xl p-3">
+                    <div className="p-3 bg-white rounded-xl h-full">
+                      <Image
+                        src="/screenshots/competitors_1.jpg"
+                        alt="Competitor management interface"
+                        className="w-full object-cover rounded-lg"
+                        width={800}
+                        height={450}
+                      />
+                    </div>
+                    <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-gray-900/10"></div>
+                  </div>
+                  <div className="mt-5 px-2">
+                    <h3 className="text-lg font-semibold leading-8 text-gray-900">
+                      Competitor Management
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-gray-600">
+                      Easily add and manage competitors with our intuitive interface. Set up automated scrapers for each competitor.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="relative group">
+                  <div className="aspect-[16/9] overflow-hidden rounded-2xl bg-gray-100 shadow-lg transition-all duration-300 group-hover:shadow-xl p-3">
+                    <div className="p-3 bg-white rounded-xl h-full">
+                      <Image
+                        src="/screenshots/scrapers_1.jpg"
+                        alt="Scraper configuration interface"
+                        className="w-full object-cover rounded-lg"
+                        width={800}
+                        height={450}
+                      />
+                    </div>
+                    <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-gray-900/10"></div>
+                  </div>
+                  <div className="mt-5 px-2">
+                    <h3 className="text-lg font-semibold leading-8 text-gray-900">
+                      Powerful Scraper Tools
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-gray-600">
+                      Configure and manage scrapers with our easy-to-use interface. Schedule automatic runs to keep your data fresh.
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 

@@ -3,6 +3,8 @@ import { authOptions } from "@/lib/auth/options";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import UserMenu from "@/components/layout/user-menu";
+import PageTitle from "@/components/layout/page-title";
+import MobileSidebar from "@/components/layout/mobile-sidebar";
 
 export default async function AppLayout({
   children,
@@ -192,27 +194,7 @@ export default async function AppLayout({
       </aside>
 
       {/* Mobile sidebar */}
-      <div className="md:hidden">
-        {/* Mobile sidebar toggle button */}
-        <button
-          type="button"
-          className="fixed left-4 top-4 z-20 rounded-md bg-indigo-600 p-2 text-white"
-        >
-          <svg
-            className="h-6 w-6"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M4 6h16M4 12h16M4 18h16"
-            />
-          </svg>
-        </button>
-      </div>
+      <MobileSidebar />
 
       {/* Main content */}
       <div className="flex flex-1 flex-col md:pl-64">
@@ -220,28 +202,9 @@ export default async function AppLayout({
         <header className="sticky top-0 z-10 flex h-16 flex-shrink-0 bg-white shadow">
           <div className="flex flex-1 justify-between px-4">
             <div className="flex flex-1">
-              {/* Search bar placeholder */}
-              <div className="flex w-full md:ml-0">
-                <div className="relative w-full text-gray-400 focus-within:text-gray-600">
-                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                    <svg
-                      className="h-5 w-5"
-                      fill="currentColor"
-                      viewBox="0 0 20 20"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        clipRule="evenodd"
-                        d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
-                      />
-                    </svg>
-                  </div>
-                  <input
-                    className="block h-full w-full rounded-md border border-transparent bg-white py-2 pl-10 pr-3 text-gray-900 placeholder-gray-500 focus:border-indigo-500 focus:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 sm:text-sm"
-                    placeholder="Search"
-                    type="search"
-                  />
-                </div>
+              {/* Page title display */}
+              <div className="flex w-full md:ml-0 items-center">
+                <PageTitle />
               </div>
             </div>
             <div className="ml-4 flex items-center md:ml-6">
