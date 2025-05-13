@@ -1,125 +1,87 @@
--- This SQL script schedules jobs and sets up error handling for workers using pg_cron.
--- It should be run last, after 04_public_functions_triggers.sql.
--- Requires the pg_cron extension to be enabled in the database.
+-- =========================================================================
+-- Job-related objects
+-- =========================================================================
+-- Generated: 2025-05-13 18:12:56
+-- This file is part of the PriceTracker database setup
+-- =========================================================================
 
--- Create a function to handle worker errors more gracefully
-CREATE OR REPLACE FUNCTION handle_worker_error()
-RETURNS TRIGGER AS $$
+revoke all on table cron.job from postgres;
+
+grant select on table cron.job to postgres with grant option;
+
 BEGIN
-    -- If a run has been in 'pending' status for more than 5 minutes, mark it as failed
-    UPDATE scraper_runs
+  -- Find the oldest pending job for integration runs.
+  -- Lock the row to prevent other workers from picking it up simultaneously.
+  -- SKIP LOCKED ensures that if another worker has already locked this row,
+  -- this transaction won't wait but will instead try to find the next available job.
+  SELECT ir.id
+  INTO claimed_job_id
+  FROM integration_runs ir
+  WHERE ir.status = 'pending'
+  ORDER BY ir.created_at
+  LIMIT 1
+  FOR UPDATE SKIP LOCKED;
+
+IF claimed_job_id IS NULL THEN
+    -- No job found, or all available jobs are currently locked by other transactions.
+    RETURN;
+
+-- Update the job status to 'processing' and set the started_at timestamp.
+  -- The RETURNING clause will return the updated row(s).
+  RETURN QUERY
+  UPDATE integration_runs ir
+  SET status = 'processing', started_at = NOW()
+  WHERE ir.id = claimed_job_id AND ir.status = 'pending' -- Double-check status
+  RETURNING ir.*; -- Return all columns from the updated integration_runs row
+END;
+
+BEGIN
+  -- Atomically find a job, lock it, and update its status.
+  -- This CTE structure ensures atomicity for the find-and-update part.
+  WITH potential_job AS (
+    SELECT sr_inner.id
+    FROM scraper_runs sr_inner
+    WHERE sr_inner.status = 'pending' AND sr_inner.scraper_type = worker_type_filter
+    ORDER BY sr_inner.created_at
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED -- Crucial for concurrency: if locked, try next
+  ),
+  updated_job AS (
+    UPDATE scraper_runs sr_update
     SET
-        status = 'failed',
-        error_message = 'Worker timeout: The job was not picked up by a worker within 5 minutes',
-        completed_at = NOW()
-    WHERE
-        status = 'pending'
-        AND started_at < NOW() - INTERVAL '5 minutes'
-        AND id NOT IN (SELECT run_id FROM scraper_run_timeouts WHERE processed = false);
+      status = 'running',
+      started_at = NOW(),
+      claimed_by_worker_at = NOW() -- Set the claimed_by_worker_at timestamp
+    FROM potential_job pj
+    WHERE sr_update.id = pj.id AND sr_update.status = 'pending' -- Ensure it's still pending before update
+    RETURNING sr_update.id -- Return the ID of the job that was actually updated
+  )
+  SELECT uj.id INTO claimed_job_id_val FROM updated_job uj;
 
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create a function to retry failed runs with specific error messages
-CREATE OR REPLACE FUNCTION retry_fetch_failed_runs()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- If a run has failed with 'fetch failed' and hasn't been retried more than 3 times,
-    -- create a new run with the same parameters
-    IF NEW.status = 'failed' AND NEW.error_message = 'fetch failed' THEN
-        -- Check if this run has already been retried too many times
-        DECLARE
-            retry_count INTEGER;
-        BEGIN
-            SELECT COUNT(*) INTO retry_count
-            FROM scraper_runs
-            WHERE
-                scraper_id = NEW.scraper_id
-                AND error_message = 'fetch failed'
-                AND started_at > NOW() - INTERVAL '1 hour';
-
-            IF retry_count < 3 THEN
-                -- Create a new run with the same parameters
-                INSERT INTO scraper_runs (
-                    scraper_id,
-                    user_id,
-                    status,
-                    started_at,
-                    is_test_run,
-                    scraper_type
-                )
-                VALUES (
-                    NEW.scraper_id,
-                    NEW.user_id,
-                    'pending',
-                    NOW(),
-                    NEW.is_test_run,
-                    NEW.scraper_type
-                );
-
-                -- Log the retry
-                RAISE NOTICE 'Retrying failed run % for scraper %', NEW.id, NEW.scraper_id;
-            END IF;
-        END;
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create a trigger to retry failed runs
-DROP TRIGGER IF EXISTS retry_fetch_failed_trigger ON scraper_runs;
-
-CREATE TRIGGER retry_fetch_failed_trigger
-AFTER UPDATE OF status ON scraper_runs
-FOR EACH ROW
-WHEN (NEW.status = 'failed' AND NEW.error_message = 'fetch failed')
-EXECUTE FUNCTION retry_fetch_failed_runs();
-
--- Add comments to explain the functions and triggers
-COMMENT ON FUNCTION handle_worker_error() IS
-'Handles worker timeouts by marking pending jobs as failed if they have been pending for too long';
-
-COMMENT ON FUNCTION retry_fetch_failed_runs() IS
-'Automatically retries runs that failed with "fetch failed" error, up to 3 times within an hour';
-
-COMMENT ON TRIGGER retry_fetch_failed_trigger ON scraper_runs IS
-'Triggers automatic retry of runs that failed with "fetch failed" error';
-
--- Schedule jobs using pg_cron
-DO $$
-BEGIN
-  -- Check if pg_cron extension exists
-  IF EXISTS (
-    SELECT 1
-    FROM pg_extension
-    WHERE extname = 'pg_cron'
-  ) THEN
-    -- Create the pg_cron extension if it doesn't exist
-    CREATE EXTENSION IF NOT EXISTS pg_cron;
-
-    -- If jobs already exist, unschedule them first to avoid duplicates or errors on re-run
-    PERFORM cron.unschedule('cleanup_scraped_products_job');
-    PERFORM cron.unschedule('worker_timeout_handler');
-
-    -- Schedule the cleanup job to run at 03:00 UTC every day
-    PERFORM cron.schedule(
-      'cleanup_scraped_products_job', -- Job name
-      '0 3 * * *',                    -- Cron schedule (every day at 3:00 AM UTC)
-      'SELECT cleanup_scraped_products()' -- SQL command to execute
-    );
-
-    -- Schedule the worker timeout handler to run every minute
-    PERFORM cron.schedule(
-      'worker_timeout_handler',       -- Job name
-      '* * * * *',                    -- Cron schedule (every minute)
-      'SELECT handle_worker_error()'  -- SQL command to execute
-    );
-
-    RAISE NOTICE 'Scheduled jobs using pg_cron: "cleanup_scraped_products_job" (daily) and "worker_timeout_handler" (every minute).';
-  ELSE
-    -- If pg_cron is not available, log a message
-    RAISE NOTICE 'pg_cron extension is not available. The scheduled functions need to be run manually or via an external scheduler.';
+IF claimed_job_id_val IS NULL THEN
+    -- No job was found and claimed (either no pending jobs, or all were locked by other transactions).
+    RETURN; -- Exits the function, returning an empty set.
   END IF;
-END $$;
+
+-- If a job was successfully claimed and updated,
+  -- return its full details along with the competitor_id from the related scraper.
+  RETURN QUERY
+  SELECT
+    sr.id,
+    sr.created_at,
+    sr.scraper_id,
+    sr.user_id,
+    CAST(sr.status AS TEXT), -- Cast to TEXT if status is an ENUM, to match RETURNS TABLE
+    CAST(sr.scraper_type AS TEXT), -- Cast to TEXT if scraper_type is an ENUM
+    sr.started_at,
+    sr.completed_at,
+    sr.error_message,
+    sr.error_details,
+    sr.product_count,
+    sr.is_test_run,
+    s.competitor_id AS fetched_competitor_id -- Alias to match the RETURNS TABLE definition
+  FROM scraper_runs sr
+  JOIN scrapers s ON sr.scraper_id = s.id
+  WHERE sr.id = claimed_job_id_val; -- Select the specific job that was claimed
+END;
+

@@ -1,32 +1,20 @@
--- This SQL script sets up the next_auth schema for NextAuth.js
--- It should be run first.
+-- =========================================================================
+-- Next Auth schema and related objects
+-- =========================================================================
+-- Generated: 2025-05-13 18:12:56
+-- This file is part of the PriceTracker database setup
+-- =========================================================================
 
 --
--- Name: next_auth; Type: SCHEMA;
+-- Name: next_auth; Type: SCHEMA; Schema: -; Owner: -
 --
+
 CREATE SCHEMA next_auth;
 
-GRANT USAGE ON SCHEMA next_auth TO service_role;
-GRANT ALL ON SCHEMA next_auth TO postgres;
-
 --
--- Create users table
+-- Name: uid(); Type: FUNCTION; Schema: next_auth; Owner: -
 --
-CREATE TABLE IF NOT EXISTS next_auth.users
-(
-    id uuid NOT NULL DEFAULT uuid_generate_v4(),
-    name text,
-    email text,
-    "emailVerified" timestamp with time zone,
-    image text,
-    CONSTRAINT users_pkey PRIMARY KEY (id),
-    CONSTRAINT email_unique UNIQUE (email)
-);
 
-GRANT ALL ON TABLE next_auth.users TO postgres;
-GRANT ALL ON TABLE next_auth.users TO service_role;
-
---- uid() function to be used in RLS policies
 CREATE FUNCTION next_auth.uid() RETURNS uuid
     LANGUAGE sql STABLE
     AS $$
@@ -38,31 +26,45 @@ CREATE FUNCTION next_auth.uid() RETURNS uuid
 $$;
 
 --
--- Create sessions table
+-- Name: create_user_for_nextauth(); Type: FUNCTION; Schema: public; Owner: -
 --
-CREATE TABLE IF NOT EXISTS next_auth.sessions
-(
-    id uuid NOT NULL DEFAULT uuid_generate_v4(),
-    expires timestamp with time zone NOT NULL,
-    "sessionToken" text NOT NULL,
-    "userId" uuid,
-    CONSTRAINT sessions_pkey PRIMARY KEY (id),
-    CONSTRAINT sessionToken_unique UNIQUE ("sessionToken"),
-    CONSTRAINT "sessions_userId_fkey" FOREIGN KEY ("userId")
-        REFERENCES next_auth.users (id) MATCH SIMPLE
-        ON UPDATE NO ACTION
-        ON DELETE CASCADE
-);
 
-GRANT ALL ON TABLE next_auth.sessions TO postgres;
-GRANT ALL ON TABLE next_auth.sessions TO service_role;
+CREATE FUNCTION public.create_user_for_nextauth() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+  -- Create a user in the next_auth schema when a user is created in auth.users
+  INSERT INTO next_auth.users (id, name, email, "emailVerified", image)
+  VALUES (
+    NEW.id,
+    NEW.raw_user_meta_data->>'name',
+    NEW.email,
+    NOW(),
+    NEW.raw_user_meta_data->>'avatar_url'
+  );
 
 --
--- Create accounts table
+-- Name: update_user_profile(); Type: FUNCTION; Schema: public; Owner: -
 --
-CREATE TABLE IF NOT EXISTS next_auth.accounts
-(
-    id uuid NOT NULL DEFAULT uuid_generate_v4(),
+
+CREATE FUNCTION public.update_user_profile() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+  -- Update the user_profile when next_auth.users is updated
+  UPDATE public.user_profiles
+  SET 
+    name = NEW.name,
+    avatar_url = NEW.image,
+    updated_at = NOW()
+  WHERE id = NEW.id;
+
+--
+-- Name: accounts; Type: TABLE; Schema: next_auth; Owner: -
+--
+
+CREATE TABLE next_auth.accounts (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
     type text NOT NULL,
     provider text NOT NULL,
     "providerAccountId" text NOT NULL,
@@ -75,37 +77,125 @@ CREATE TABLE IF NOT EXISTS next_auth.accounts
     session_state text,
     oauth_token_secret text,
     oauth_token text,
-    "userId" uuid,
-    CONSTRAINT accounts_pkey PRIMARY KEY (id),
-    CONSTRAINT provider_unique UNIQUE (provider, "providerAccountId"),
-    CONSTRAINT "accounts_userId_fkey" FOREIGN KEY ("userId")
-        REFERENCES next_auth.users (id) MATCH SIMPLE
-        ON UPDATE NO ACTION
-        ON DELETE CASCADE
+    "userId" uuid
 );
 
-GRANT ALL ON TABLE next_auth.accounts TO postgres;
-GRANT ALL ON TABLE next_auth.accounts TO service_role;
+--
+-- Name: sessions; Type: TABLE; Schema: next_auth; Owner: -
+--
 
---
--- Create verification_tokens table
---
-CREATE TABLE IF NOT EXISTS next_auth.verification_tokens
-(
-    identifier text,
-    token text,
+CREATE TABLE next_auth.sessions (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
     expires timestamp with time zone NOT NULL,
-    CONSTRAINT verification_tokens_pkey PRIMARY KEY (token),
-    CONSTRAINT token_unique UNIQUE (token),
-    CONSTRAINT token_identifier_unique UNIQUE (token, identifier)
+    "sessionToken" text NOT NULL,
+    "userId" uuid
 );
 
-GRANT ALL ON TABLE next_auth.verification_tokens TO postgres;
-GRANT ALL ON TABLE next_auth.verification_tokens TO service_role;
+--
+-- Name: users; Type: TABLE; Schema: next_auth; Owner: -
+--
 
--- IMPORTANT: Don't forget to expose the next_auth schema in the Supabase API settings
--- 1. In your Supabase dashboard, go to Project Settings > API
--- 2. Scroll down to the "API Settings" section
--- 3. Find the "Exposed schemas" setting
--- 4. Add "next_auth" to the list of exposed schemas
--- 5. Click "Save" to apply the changes
+CREATE TABLE next_auth.users (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    name text,
+    email text,
+    "emailVerified" timestamp with time zone,
+    image text,
+    language text,
+    notification_preferences jsonb,
+    timezone text
+);
+
+--
+-- Name: verification_tokens; Type: TABLE; Schema: next_auth; Owner: -
+--
+
+CREATE TABLE next_auth.verification_tokens (
+    identifier text,
+    token text NOT NULL,
+    expires timestamp with time zone NOT NULL
+);
+
+--
+-- Name: accounts accounts_pkey; Type: CONSTRAINT; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE ONLY next_auth.accounts
+    ADD CONSTRAINT accounts_pkey PRIMARY KEY (id);
+
+--
+-- Name: users email_unique; Type: CONSTRAINT; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE ONLY next_auth.users
+    ADD CONSTRAINT email_unique UNIQUE (email);
+
+--
+-- Name: accounts provider_unique; Type: CONSTRAINT; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE ONLY next_auth.accounts
+    ADD CONSTRAINT provider_unique UNIQUE (provider, "providerAccountId");
+
+--
+-- Name: sessions sessions_pkey; Type: CONSTRAINT; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE ONLY next_auth.sessions
+    ADD CONSTRAINT sessions_pkey PRIMARY KEY (id);
+
+--
+-- Name: sessions sessiontoken_unique; Type: CONSTRAINT; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE ONLY next_auth.sessions
+    ADD CONSTRAINT sessiontoken_unique UNIQUE ("sessionToken");
+
+--
+-- Name: verification_tokens token_identifier_unique; Type: CONSTRAINT; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE ONLY next_auth.verification_tokens
+    ADD CONSTRAINT token_identifier_unique UNIQUE (token, identifier);
+
+--
+-- Name: users users_pkey; Type: CONSTRAINT; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE ONLY next_auth.users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+
+--
+-- Name: verification_tokens verification_tokens_pkey; Type: CONSTRAINT; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE ONLY next_auth.verification_tokens
+    ADD CONSTRAINT verification_tokens_pkey PRIMARY KEY (token);
+
+--
+-- Name: users update_user_profile_trigger; Type: TRIGGER; Schema: next_auth; Owner: -
+--
+
+CREATE TRIGGER update_user_profile_trigger AFTER UPDATE ON next_auth.users FOR EACH ROW EXECUTE FUNCTION public.update_user_profile();
+
+--
+-- Name: accounts accounts_userId_fkey; Type: FK CONSTRAINT; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE ONLY next_auth.accounts
+    ADD CONSTRAINT "accounts_userId_fkey" FOREIGN KEY ("userId") REFERENCES next_auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: sessions sessions_userId_fkey; Type: FK CONSTRAINT; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE ONLY next_auth.sessions
+    ADD CONSTRAINT "sessions_userId_fkey" FOREIGN KEY ("userId") REFERENCES next_auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: companies companies_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.companies
+    ADD CONSTRAINT companies_user_id_fkey FOREIGN KEY (user_id) REFERENCES next_auth.users(id);
+

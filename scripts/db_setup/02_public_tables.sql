@@ -1,387 +1,2300 @@
--- This SQL script sets up the application-specific tables in the public schema.
--- It should be run after 01_next_auth_schema.sql.
--- NOTE: For improved type safety in TypeScript code (e.g., workers, API routes),
--- remember to generate Supabase types after applying schema changes:
--- `supabase gen types typescript --project-id <your-project-id> --schema public > src/lib/supabase/database.types.ts`
+-- =========================================================================
+-- Public schema tables and sequences
+-- =========================================================================
+-- Generated: 2025-05-13 18:12:56
+-- This file is part of the PriceTracker database setup
+-- =========================================================================
 
--- 1. Create user_profiles table
-CREATE TABLE IF NOT EXISTS user_profiles (
-  id UUID REFERENCES auth.users(id) PRIMARY KEY,
-  name TEXT,
-  avatar_url TEXT,
-  subscription_tier TEXT DEFAULT 'free',
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- 2. Create user_subscriptions table
-CREATE TABLE IF NOT EXISTS user_subscriptions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  stripe_customer_id TEXT,
-  stripe_subscription_id TEXT,
-  price_id TEXT,
-  status TEXT DEFAULT 'inactive',
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- 3. Create competitors table
-CREATE TABLE IF NOT EXISTS competitors (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  name TEXT NOT NULL,
-  website TEXT NOT NULL,
-  logo_url TEXT,
-  notes TEXT,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- 4. Create products table
-CREATE TABLE IF NOT EXISTS products (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  name TEXT NOT NULL,
-  sku TEXT,
-  ean TEXT,
-  brand TEXT,
-  category TEXT,
-  description TEXT,
-  image_url TEXT,
-  our_price DECIMAL(10, 2),
-  cost_price DECIMAL(10, 2),
-  wholesale_price DECIMAL(10, 2),
-  is_active BOOLEAN DEFAULT TRUE,
-  brand_id UUID NOT NULL REFERENCES brands(id),
-  currency_code TEXT CHECK (char_length(currency_code) = 3 AND currency_code = upper(currency_code)),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Add comment for currency_code column
-COMMENT ON COLUMN products.currency_code IS 'ISO 4217 currency code (e.g., SEK, USD)';
-
--- Add indexes for improved product matching performance on products table
-CREATE INDEX IF NOT EXISTS idx_products_ean ON products(ean);
-CREATE INDEX IF NOT EXISTS idx_products_brand_sku ON products(brand, sku);
-CREATE INDEX IF NOT EXISTS idx_products_brand_id ON products(brand_id);
-
--- 5. Create brands table
-CREATE TABLE IF NOT EXISTS brands (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  name TEXT NOT NULL,
-  is_active BOOLEAN DEFAULT TRUE,
-  needs_review BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Add unique constraint for user_id and brand name
-ALTER TABLE brands ADD CONSTRAINT unique_user_brand UNIQUE (user_id, name);
-
--- Add indexes for improved query performance on brands table
-CREATE INDEX IF NOT EXISTS idx_brands_user_id ON brands(user_id);
-CREATE INDEX IF NOT EXISTS idx_brands_name ON brands(name);
-CREATE INDEX IF NOT EXISTS idx_brands_is_active ON brands(is_active);
-CREATE INDEX IF NOT EXISTS idx_brands_needs_review ON brands(needs_review);
-
--- 6. Create scrapers table
-CREATE TABLE IF NOT EXISTS scrapers (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  competitor_id UUID REFERENCES competitors(id) NOT NULL,
-  name TEXT NOT NULL,
-  url TEXT NOT NULL,
-  scraper_type VARCHAR(20) DEFAULT 'ai', -- Type of scraper: 'ai', 'python', or 'typescript'. NOTE: Existing data might need manual migration if changing usage patterns.
-  python_script TEXT, -- For storing Python code for Python scrapers
-  typescript_script TEXT, -- For storing TypeScript code for Crawlee scrapers
-  script_metadata JSONB, -- For storing metadata about the script
-  schedule JSONB NOT NULL,
-  is_active BOOLEAN DEFAULT FALSE,
-  is_approved BOOLEAN DEFAULT FALSE, -- Whether the scraper has passed a Test Run and is eligible for activation
-  status TEXT DEFAULT 'idle',
-  error_message TEXT,
-  last_run TIMESTAMP WITH TIME ZONE,
-  execution_time BIGINT, -- Time in milliseconds it took to run the scraper
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  last_products_per_second DECIMAL(10, 2), -- Products per second metric from the most recently completed successful run.
-  filter_by_active_brands BOOLEAN DEFAULT FALSE NOT NULL, -- Flag to filter scraping by active brands
-  scrape_only_own_products BOOLEAN DEFAULT FALSE NOT NULL, -- Flag to only scrape products matching user's catalog
-  test_results JSONB -- For storing test run results
-);
-
--- Drop the legacy approved_at column if it exists
-DO $$
 BEGIN
-  IF EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='scrapers' AND column_name='approved_at') THEN
-    ALTER TABLE public.scrapers DROP COLUMN approved_at;
-  END IF;
-END $$;
+  FOR cmd IN SELECT * FROM pg_event_trigger_ddl_commands()
+  LOOP
+    IF cmd.command_tag IN (
+      'CREATE SCHEMA', 'ALTER SCHEMA'
+    , 'CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO', 'ALTER TABLE'
+    , 'CREATE FOREIGN TABLE', 'ALTER FOREIGN TABLE'
+    , 'CREATE VIEW', 'ALTER VIEW'
+    , 'CREATE MATERIALIZED VIEW', 'ALTER MATERIALIZED VIEW'
+    , 'CREATE FUNCTION', 'ALTER FUNCTION'
+    , 'CREATE TRIGGER'
+    , 'CREATE TYPE', 'ALTER TYPE'
+    , 'CREATE RULE'
+    , 'COMMENT'
+    )
+    -- don't notify in case of CREATE TEMP table or other objects created on pg_temp
+    AND cmd.schema_name is distinct from 'pg_temp'
+    THEN
+      NOTIFY pgrst, 'reload schema';
 
--- Add filter_by_active_brands column if it doesn't exist (handles case where table was created before this column was added)
-ALTER TABLE public.scrapers ADD COLUMN IF NOT EXISTS filter_by_active_brands BOOLEAN DEFAULT FALSE NOT NULL;
+--
+-- Name: integration_runs; Type: TABLE; Schema: public; Owner: -
+--
 
--- Add indexes for improved query performance on scrapers table
-CREATE INDEX IF NOT EXISTS idx_scrapers_scraper_type ON scrapers(scraper_type);
-CREATE INDEX IF NOT EXISTS idx_scrapers_competitor_id ON scrapers(competitor_id);
-CREATE INDEX IF NOT EXISTS idx_scrapers_execution_time ON scrapers(execution_time);
-
--- Add comment to explain the purpose of scrapers table
-COMMENT ON TABLE scrapers IS 'Stores scraper configurations for different types: AI, Python, and CSV';
-
--- 7. Create scraped_products table
-CREATE TABLE IF NOT EXISTS scraped_products (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  scraper_id UUID REFERENCES scrapers(id), -- Made nullable to allow direct competitor-product relationships
-  competitor_id UUID REFERENCES competitors(id) NOT NULL,
-  product_id UUID REFERENCES products(id),
-  name TEXT NOT NULL,
-  price DECIMAL(10, 2) NOT NULL,
-  currency TEXT DEFAULT 'USD',
-  currency_code TEXT CHECK (char_length(currency_code) = 3 AND currency_code = upper(currency_code)),
-  url TEXT,
-  image_url TEXT,
-  sku TEXT,
-  brand TEXT,
-  ean TEXT, -- Added EAN for product matching
-  scraped_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.integration_runs (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    integration_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    started_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    products_processed integer DEFAULT 0,
+    products_updated integer DEFAULT 0,
+    products_created integer DEFAULT 0,
+    error_message text,
+    log_details jsonb,
+    created_at timestamp with time zone DEFAULT now(),
+    test_products jsonb,
+    configuration jsonb
 );
 
--- Add comment for currency_code column
-COMMENT ON COLUMN scraped_products.currency_code IS 'ISO 4217 currency code (e.g., SEK, USD)';
+--
+-- Name: audit_log_entries; Type: TABLE; Schema: auth; Owner: -
+--
 
--- Add indexes for improved query performance on scraped_products table
-CREATE INDEX IF NOT EXISTS idx_scraped_products_ean ON scraped_products(ean);
-CREATE INDEX IF NOT EXISTS idx_scraped_products_brand_sku ON scraped_products(brand, sku);
-CREATE INDEX IF NOT EXISTS idx_scraped_products_scraper_id_scraped_at ON scraped_products(scraper_id, scraped_at);
-
--- 8. Create price_changes table
-CREATE TABLE IF NOT EXISTS price_changes (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  product_id UUID REFERENCES products(id) NOT NULL,
-  competitor_id UUID REFERENCES competitors(id) NOT NULL,
-  old_price DECIMAL(10, 2) NOT NULL,
-  new_price DECIMAL(10, 2) NOT NULL,
-  price_change_percentage DECIMAL(10, 2) NOT NULL,
-  currency_code TEXT CHECK (char_length(currency_code) = 3 AND currency_code = upper(currency_code)),
-  integration_id UUID REFERENCES integrations(id),
-  changed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE auth.audit_log_entries (
+    instance_id uuid,
+    id uuid NOT NULL,
+    payload json,
+    created_at timestamp with time zone,
+    ip_address character varying(64) DEFAULT ''::character varying NOT NULL
 );
 
--- Add comment for currency_code column
-COMMENT ON COLUMN price_changes.currency_code IS 'ISO 4217 currency code (e.g., SEK, USD)';
+--
+-- Name: TABLE audit_log_entries; Type: COMMENT; Schema: auth; Owner: -
+--
 
--- Add indexes for improved query performance on price_changes table
-CREATE INDEX IF NOT EXISTS idx_price_changes_product_id ON price_changes(product_id);
-CREATE INDEX IF NOT EXISTS idx_price_changes_competitor_id ON price_changes(competitor_id);
+COMMENT ON TABLE auth.audit_log_entries IS 'Auth: Audit trail for user actions.';
 
--- 9. Create scraper_runs table to track execution of scrapers
-CREATE TABLE IF NOT EXISTS scraper_runs (
-  id UUID PRIMARY KEY,
-  scraper_id UUID REFERENCES scrapers(id) NOT NULL,
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  status TEXT DEFAULT 'initializing',
-  started_at TIMESTAMP WITH TIME ZONE NOT NULL,
-  completed_at TIMESTAMP WITH TIME ZONE,
-  is_test_run BOOLEAN DEFAULT FALSE,
-  product_count INTEGER DEFAULT 0,
-  current_batch INTEGER DEFAULT 0,
-  total_batches INTEGER,
-  error_message TEXT,
-  error_details TEXT, -- Detailed error information for debugging
-  progress_messages TEXT[],
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  execution_time_ms BIGINT, -- Total execution time of the scraper run in milliseconds (calculated from completed_at - started_at).
-  products_per_second DECIMAL(10, 2), -- Calculated metric: product_count / (execution_time_ms / 1000.0). Null if execution time is zero or product_count is null.
-  scraper_type VARCHAR(20) -- Type of scraper: 'python', 'typescript', etc.
+--
+-- Name: flow_state; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.flow_state (
+    id uuid NOT NULL,
+    user_id uuid,
+    auth_code text NOT NULL,
+    code_challenge_method auth.code_challenge_method NOT NULL,
+    code_challenge text NOT NULL,
+    provider_type text NOT NULL,
+    provider_access_token text,
+    provider_refresh_token text,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    authentication_method text NOT NULL,
+    auth_code_issued_at timestamp with time zone
 );
 
--- Add indexes for improved query performance on scraper_runs table
-CREATE INDEX IF NOT EXISTS idx_scraper_runs_scraper_id ON scraper_runs(scraper_id);
-CREATE INDEX IF NOT EXISTS idx_scraper_runs_is_test_run ON scraper_runs(is_test_run);
+--
+-- Name: TABLE flow_state; Type: COMMENT; Schema: auth; Owner: -
+--
 
--- 10. Create scraper_run_timeouts table to track timeouts for scraper runs
-CREATE TABLE IF NOT EXISTS scraper_run_timeouts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  run_id UUID NOT NULL REFERENCES scraper_runs(id) ON DELETE CASCADE,
-  timeout_at TIMESTAMP WITH TIME ZONE NOT NULL,
-  processed BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  processed_at TIMESTAMP WITH TIME ZONE
+COMMENT ON TABLE auth.flow_state IS 'stores metadata for pkce logins';
+
+--
+-- Name: identities; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.identities (
+    provider_id text NOT NULL,
+    user_id uuid NOT NULL,
+    identity_data jsonb NOT NULL,
+    provider text NOT NULL,
+    last_sign_in_at timestamp with time zone,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    email text GENERATED ALWAYS AS (lower((identity_data ->> 'email'::text))) STORED,
+    id uuid DEFAULT gen_random_uuid() NOT NULL
 );
 
--- Create an index on timeout_at and processed for efficient querying
-CREATE INDEX IF NOT EXISTS idx_scraper_run_timeouts_lookup
-ON scraper_run_timeouts(timeout_at, processed);
+--
+-- Name: TABLE identities; Type: COMMENT; Schema: auth; Owner: -
+--
 
--- Create an index on run_id for efficient lookups
-CREATE INDEX IF NOT EXISTS idx_scraper_run_timeouts_run_id
-ON scraper_run_timeouts(run_id);
+COMMENT ON TABLE auth.identities IS 'Auth: Stores identities associated to a user.';
 
--- Add a comment to the table
-COMMENT ON TABLE scraper_run_timeouts IS 'Stores timeout information for scraper runs';
+--
+-- Name: COLUMN identities.email; Type: COMMENT; Schema: auth; Owner: -
+--
 
--- 11. Create csv_uploads table to track CSV file uploads
-CREATE TABLE IF NOT EXISTS csv_uploads (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  competitor_id UUID REFERENCES competitors(id) NOT NULL,
-  filename TEXT NOT NULL,
-  file_content TEXT NOT NULL,
-  uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  processed BOOLEAN DEFAULT FALSE,
-  processed_at TIMESTAMP WITH TIME ZONE,
-  error_message TEXT
+COMMENT ON COLUMN auth.identities.email IS 'Auth: Email is a generated column that references the optional email property in the identity_data';
+
+--
+-- Name: instances; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.instances (
+    id uuid NOT NULL,
+    uuid uuid,
+    raw_base_config text,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone
 );
 
--- Add indexes for improved query performance on csv_uploads table
-CREATE INDEX IF NOT EXISTS idx_csv_uploads_user_id ON csv_uploads(user_id);
-CREATE INDEX IF NOT EXISTS idx_csv_uploads_competitor_id ON csv_uploads(competitor_id);
-CREATE INDEX IF NOT EXISTS idx_csv_uploads_processed ON csv_uploads(processed);
+--
+-- Name: TABLE instances; Type: COMMENT; Schema: auth; Owner: -
+--
 
--- Add a comment to the table
-COMMENT ON TABLE csv_uploads IS 'Stores CSV file uploads for processing';
+COMMENT ON TABLE auth.instances IS 'Auth: Manages users across multiple sites.';
 
--- 12. Create debug_logs table for application logging
-CREATE TABLE IF NOT EXISTS debug_logs (
-  id SERIAL PRIMARY KEY,
-  message TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+--
+-- Name: mfa_amr_claims; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.mfa_amr_claims (
+    session_id uuid NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    authentication_method text NOT NULL,
+    id uuid NOT NULL
 );
 
--- Add an index for improved query performance on debug_logs table
-CREATE INDEX IF NOT EXISTS idx_debug_logs_created_at ON debug_logs(created_at);
+--
+-- Name: TABLE mfa_amr_claims; Type: COMMENT; Schema: auth; Owner: -
+--
 
--- Add a comment to the table
-COMMENT ON TABLE debug_logs IS 'Stores debug logs for application troubleshooting';
+COMMENT ON TABLE auth.mfa_amr_claims IS 'auth: stores authenticator method reference claims for multi factor authentication';
 
--- 13. Create dismissed_duplicates table to track dismissed duplicate brands
-CREATE TABLE IF NOT EXISTS dismissed_duplicates (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  brand_id_1 UUID NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
-  brand_id_2 UUID NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
-  dismissal_key TEXT NOT NULL, -- A key to group related dismissals
-  dismissed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+--
+-- Name: mfa_challenges; Type: TABLE; Schema: auth; Owner: -
+--
 
-  -- Ensure we don't have duplicate entries for the same brand pair
-  CONSTRAINT unique_dismissed_pair UNIQUE (user_id, brand_id_1, brand_id_2),
-
-  -- Ensure brand_id_1 is always less than brand_id_2 for consistency
-  CONSTRAINT brand_id_order CHECK (brand_id_1 < brand_id_2)
+CREATE TABLE auth.mfa_challenges (
+    id uuid NOT NULL,
+    factor_id uuid NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    verified_at timestamp with time zone,
+    ip_address inet NOT NULL,
+    otp_code text,
+    web_authn_session_data jsonb
 );
 
--- Add index for faster lookups
-CREATE INDEX IF NOT EXISTS idx_dismissed_duplicates_user_id ON dismissed_duplicates(user_id);
-CREATE INDEX IF NOT EXISTS idx_dismissed_duplicates_brand_ids ON dismissed_duplicates(brand_id_1, brand_id_2);
+--
+-- Name: TABLE mfa_challenges; Type: COMMENT; Schema: auth; Owner: -
+--
 
--- Add RLS policies
-ALTER TABLE dismissed_duplicates ENABLE ROW LEVEL SECURITY;
+COMMENT ON TABLE auth.mfa_challenges IS 'auth: stores metadata about challenge requests made';
 
--- 14. Create brand_aliases table to track brand aliases (merged brand names)
-CREATE TABLE IF NOT EXISTS brand_aliases (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  brand_id UUID NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
-  alias_name TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+--
+-- Name: mfa_factors; Type: TABLE; Schema: auth; Owner: -
+--
 
-  -- Ensure we don't have duplicate aliases for the same brand
-  CONSTRAINT unique_brand_alias UNIQUE (user_id, brand_id, alias_name)
+CREATE TABLE auth.mfa_factors (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    friendly_name text,
+    factor_type auth.factor_type NOT NULL,
+    status auth.factor_status NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    secret text,
+    phone text,
+    last_challenged_at timestamp with time zone,
+    web_authn_credential jsonb,
+    web_authn_aaguid uuid
 );
 
--- Add indexes for faster lookups
-CREATE INDEX IF NOT EXISTS idx_brand_aliases_brand_id ON brand_aliases(brand_id);
-CREATE INDEX IF NOT EXISTS idx_brand_aliases_alias_name ON brand_aliases(alias_name);
-CREATE INDEX IF NOT EXISTS idx_brand_aliases_user_id ON brand_aliases(user_id);
+--
+-- Name: TABLE mfa_factors; Type: COMMENT; Schema: auth; Owner: -
+--
 
--- Add RLS policies
-ALTER TABLE brand_aliases ENABLE ROW LEVEL SECURITY;
+COMMENT ON TABLE auth.mfa_factors IS 'auth: stores metadata about factors';
 
--- 15. Create staged_integration_products table for integration imports
-CREATE TABLE IF NOT EXISTS staged_integration_products (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  integration_run_id UUID NOT NULL,
-  integration_id UUID NOT NULL,
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  prestashop_product_id TEXT,
-  name TEXT NOT NULL,
-  sku TEXT,
-  ean TEXT,
-  brand TEXT,
-  price NUMERIC,
-  wholesale_price NUMERIC,
-  image_url TEXT,
-  raw_data JSONB,
-  status TEXT DEFAULT 'pending' NOT NULL,
-  error_message TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-  processed_at TIMESTAMP WITH TIME ZONE,
-  product_id UUID,
-  currency_code TEXT CHECK (char_length(currency_code) = 3 AND currency_code = upper(currency_code))
+--
+-- Name: one_time_tokens; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.one_time_tokens (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    token_type auth.one_time_token_type NOT NULL,
+    token_hash text NOT NULL,
+    relates_to text NOT NULL,
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
+    updated_at timestamp without time zone DEFAULT now() NOT NULL,
+    CONSTRAINT one_time_tokens_token_hash_check CHECK ((char_length(token_hash) > 0))
 );
 
--- Add comment for currency_code column
-COMMENT ON COLUMN staged_integration_products.currency_code IS 'ISO 4217 currency code from the integration source';
+--
+-- Name: refresh_tokens; Type: TABLE; Schema: auth; Owner: -
+--
 
--- Add indexes for improved query performance on staged_integration_products table
-CREATE INDEX IF NOT EXISTS idx_staged_integration_products_integration_run_id ON staged_integration_products(integration_run_id);
-CREATE INDEX IF NOT EXISTS idx_staged_integration_products_user_id ON staged_integration_products(user_id);
-CREATE INDEX IF NOT EXISTS idx_staged_integration_products_status ON staged_integration_products(status);
-
--- 16. Create integrations table for external platform connections
-CREATE TABLE IF NOT EXISTS integrations (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  platform TEXT NOT NULL,
-  name TEXT NOT NULL,
-  api_url TEXT NOT NULL,
-  api_key TEXT NOT NULL,
-  status TEXT DEFAULT 'pending_setup' NOT NULL,
-  last_sync_at TIMESTAMP WITH TIME ZONE,
-  last_sync_status TEXT,
-  sync_frequency TEXT DEFAULT 'daily',
-  configuration JSONB,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE auth.refresh_tokens (
+    instance_id uuid,
+    id bigint NOT NULL,
+    token character varying(255),
+    user_id character varying(255),
+    revoked boolean,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    parent character varying(255),
+    session_id uuid
 );
 
--- Add indexes for improved query performance on integrations table
-CREATE INDEX IF NOT EXISTS idx_integrations_user_id ON integrations(user_id);
-CREATE INDEX IF NOT EXISTS idx_integrations_platform ON integrations(platform);
-CREATE INDEX IF NOT EXISTS idx_integrations_status ON integrations(status);
+--
+-- Name: TABLE refresh_tokens; Type: COMMENT; Schema: auth; Owner: -
+--
 
--- Add comment to the table
-COMMENT ON TABLE integrations IS 'Stores external platform integrations like PrestaShop, WooCommerce, etc.';
+COMMENT ON TABLE auth.refresh_tokens IS 'Auth: Store of tokens used to refresh JWT tokens once they expire.';
 
--- 17. Create integration_runs table to track integration syncs
-CREATE TABLE IF NOT EXISTS integration_runs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  integration_id UUID REFERENCES integrations(id) NOT NULL,
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  status TEXT DEFAULT 'pending' NOT NULL,
-  started_at TIMESTAMP WITH TIME ZONE,
-  completed_at TIMESTAMP WITH TIME ZONE,
-  products_processed INTEGER DEFAULT 0,
-  products_updated INTEGER DEFAULT 0,
-  products_created INTEGER DEFAULT 0,
-  error_message TEXT,
-  log_details JSONB,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  test_products JSONB,
-  configuration JSONB
+--
+-- Name: refresh_tokens_id_seq; Type: SEQUENCE; Schema: auth; Owner: -
+--
+
+CREATE SEQUENCE auth.refresh_tokens_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+--
+-- Name: refresh_tokens_id_seq; Type: SEQUENCE OWNED BY; Schema: auth; Owner: -
+--
+
+ALTER SEQUENCE auth.refresh_tokens_id_seq OWNED BY auth.refresh_tokens.id;
+
+--
+-- Name: saml_providers; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.saml_providers (
+    id uuid NOT NULL,
+    sso_provider_id uuid NOT NULL,
+    entity_id text NOT NULL,
+    metadata_xml text NOT NULL,
+    metadata_url text,
+    attribute_mapping jsonb,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    name_id_format text,
+    CONSTRAINT "entity_id not empty" CHECK ((char_length(entity_id) > 0)),
+    CONSTRAINT "metadata_url not empty" CHECK (((metadata_url = NULL::text) OR (char_length(metadata_url) > 0))),
+    CONSTRAINT "metadata_xml not empty" CHECK ((char_length(metadata_xml) > 0))
 );
 
--- Add indexes for improved query performance on integration_runs table
-CREATE INDEX IF NOT EXISTS idx_integration_runs_integration_id ON integration_runs(integration_id);
-CREATE INDEX IF NOT EXISTS idx_integration_runs_user_id ON integration_runs(user_id);
-CREATE INDEX IF NOT EXISTS idx_integration_runs_status ON integration_runs(status);
+--
+-- Name: TABLE saml_providers; Type: COMMENT; Schema: auth; Owner: -
+--
 
--- Add comment to the table
-COMMENT ON TABLE integration_runs IS 'Tracks execution of integration syncs with external platforms';
+COMMENT ON TABLE auth.saml_providers IS 'Auth: Manages SAML Identity Provider connections.';
+
+--
+-- Name: saml_relay_states; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.saml_relay_states (
+    id uuid NOT NULL,
+    sso_provider_id uuid NOT NULL,
+    request_id text NOT NULL,
+    for_email text,
+    redirect_to text,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    flow_state_id uuid,
+    CONSTRAINT "request_id not empty" CHECK ((char_length(request_id) > 0))
+);
+
+--
+-- Name: TABLE saml_relay_states; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.saml_relay_states IS 'Auth: Contains SAML Relay State information for each Service Provider initiated login.';
+
+--
+-- Name: schema_migrations; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.schema_migrations (
+    version character varying(255) NOT NULL
+);
+
+--
+-- Name: TABLE schema_migrations; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.schema_migrations IS 'Auth: Manages updates to the auth system.';
+
+--
+-- Name: sessions; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.sessions (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    factor_id uuid,
+    aal auth.aal_level,
+    not_after timestamp with time zone,
+    refreshed_at timestamp without time zone,
+    user_agent text,
+    ip inet,
+    tag text
+);
+
+--
+-- Name: TABLE sessions; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.sessions IS 'Auth: Stores session data associated to a user.';
+
+--
+-- Name: COLUMN sessions.not_after; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.sessions.not_after IS 'Auth: Not after is a nullable column that contains a timestamp after which the session should be regarded as expired.';
+
+--
+-- Name: sso_domains; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.sso_domains (
+    id uuid NOT NULL,
+    sso_provider_id uuid NOT NULL,
+    domain text NOT NULL,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    CONSTRAINT "domain not empty" CHECK ((char_length(domain) > 0))
+);
+
+--
+-- Name: TABLE sso_domains; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.sso_domains IS 'Auth: Manages SSO email address domain mapping to an SSO Identity Provider.';
+
+--
+-- Name: sso_providers; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.sso_providers (
+    id uuid NOT NULL,
+    resource_id text,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    CONSTRAINT "resource_id not empty" CHECK (((resource_id = NULL::text) OR (char_length(resource_id) > 0)))
+);
+
+--
+-- Name: TABLE sso_providers; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.sso_providers IS 'Auth: Manages SSO identity provider information; see saml_providers for SAML.';
+
+--
+-- Name: COLUMN sso_providers.resource_id; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.sso_providers.resource_id IS 'Auth: Uniquely identifies a SSO provider according to a user-chosen resource ID (case insensitive), useful in infrastructure as code.';
+
+--
+-- Name: users; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.users (
+    instance_id uuid,
+    id uuid NOT NULL,
+    aud character varying(255),
+    role character varying(255),
+    email character varying(255),
+    encrypted_password character varying(255),
+    email_confirmed_at timestamp with time zone,
+    invited_at timestamp with time zone,
+    confirmation_token character varying(255),
+    confirmation_sent_at timestamp with time zone,
+    recovery_token character varying(255),
+    recovery_sent_at timestamp with time zone,
+    email_change_token_new character varying(255),
+    email_change character varying(255),
+    email_change_sent_at timestamp with time zone,
+    last_sign_in_at timestamp with time zone,
+    raw_app_meta_data jsonb,
+    raw_user_meta_data jsonb,
+    is_super_admin boolean,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    phone text DEFAULT NULL::character varying,
+    phone_confirmed_at timestamp with time zone,
+    phone_change text DEFAULT ''::character varying,
+    phone_change_token character varying(255) DEFAULT ''::character varying,
+    phone_change_sent_at timestamp with time zone,
+    confirmed_at timestamp with time zone GENERATED ALWAYS AS (LEAST(email_confirmed_at, phone_confirmed_at)) STORED,
+    email_change_token_current character varying(255) DEFAULT ''::character varying,
+    email_change_confirm_status smallint DEFAULT 0,
+    banned_until timestamp with time zone,
+    reauthentication_token character varying(255) DEFAULT ''::character varying,
+    reauthentication_sent_at timestamp with time zone,
+    is_sso_user boolean DEFAULT false NOT NULL,
+    deleted_at timestamp with time zone,
+    is_anonymous boolean DEFAULT false NOT NULL,
+    CONSTRAINT users_email_change_confirm_status_check CHECK (((email_change_confirm_status >= 0) AND (email_change_confirm_status <= 2)))
+);
+
+--
+-- Name: TABLE users; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON TABLE auth.users IS 'Auth: Stores user login data within a secure schema.';
+
+--
+-- Name: COLUMN users.is_sso_user; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.users.is_sso_user IS 'Auth: Set this column to true when the account comes from SSO. These accounts can have duplicate emails.';
+
+--
+-- Name: brand_aliases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.brand_aliases (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    user_id uuid NOT NULL,
+    brand_id uuid NOT NULL,
+    alias_name text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: brands; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.brands (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text NOT NULL,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    needs_review boolean DEFAULT false NOT NULL
+);
+
+--
+-- Name: companies; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.companies (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text,
+    address text,
+    org_number text,
+    primary_currency text,
+    secondary_currencies text[],
+    currency_format text,
+    matching_rules jsonb,
+    price_thresholds jsonb,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT companies_primary_currency_check CHECK ((char_length(primary_currency) = 3))
+);
+
+--
+-- Name: competitors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.competitors (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text NOT NULL,
+    website text NOT NULL,
+    logo_url text,
+    notes text,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: csv_uploads; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.csv_uploads (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    competitor_id uuid NOT NULL,
+    filename text NOT NULL,
+    file_content text NOT NULL,
+    uploaded_at timestamp with time zone DEFAULT now(),
+    processed boolean DEFAULT false,
+    processed_at timestamp with time zone,
+    error_message text
+);
+
+--
+-- Name: debug_logs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.debug_logs (
+    id integer NOT NULL,
+    message text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: debug_logs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.debug_logs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+--
+-- Name: debug_logs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.debug_logs_id_seq OWNED BY public.debug_logs.id;
+
+--
+-- Name: dismissed_duplicates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.dismissed_duplicates (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    user_id uuid NOT NULL,
+    brand_id_1 uuid NOT NULL,
+    brand_id_2 uuid NOT NULL,
+    dismissal_key text NOT NULL,
+    dismissed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT brand_id_order CHECK ((brand_id_1 < brand_id_2))
+);
+
+--
+-- Name: integrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.integrations (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    platform text NOT NULL,
+    name text NOT NULL,
+    api_url text NOT NULL,
+    api_key text NOT NULL,
+    status text DEFAULT 'pending_setup'::text NOT NULL,
+    last_sync_at timestamp with time zone,
+    last_sync_status text,
+    sync_frequency text DEFAULT 'daily'::text,
+    configuration jsonb,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: price_changes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.price_changes (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    competitor_id uuid,
+    old_price numeric(10,2) NOT NULL,
+    new_price numeric(10,2) NOT NULL,
+    price_change_percentage numeric(10,2) NOT NULL,
+    changed_at timestamp with time zone DEFAULT now(),
+    integration_id uuid,
+    currency_code text,
+    url text,
+    CONSTRAINT price_changes_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code)))),
+    CONSTRAINT price_changes_source_check CHECK (((competitor_id IS NOT NULL) OR (integration_id IS NOT NULL)))
+);
+
+--
+-- Name: COLUMN price_changes.currency_code; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.price_changes.currency_code IS 'ISO 4217 currency code (e.g., SEK, USD)';
+
+--
+-- Name: products; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.products (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text NOT NULL,
+    sku text,
+    ean text,
+    brand text,
+    category text,
+    description text,
+    image_url text,
+    our_price numeric(10,2),
+    wholesale_price numeric(10,2),
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    brand_id uuid NOT NULL,
+    currency_code text,
+    url text,
+    CONSTRAINT products_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
+);
+
+--
+-- Name: COLUMN products.currency_code; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.products.currency_code IS 'ISO 4217 currency code (e.g., SEK, USD)';
+
+--
+-- Name: COLUMN products.url; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.products.url IS 'URL to the product on the source platform';
+
+--
+-- Name: scraped_products; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraped_products (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    scraper_id uuid,
+    competitor_id uuid NOT NULL,
+    product_id uuid,
+    name text NOT NULL,
+    price numeric(10,2) NOT NULL,
+    currency text DEFAULT 'USD'::text,
+    url text,
+    image_url text,
+    sku text,
+    brand text,
+    scraped_at timestamp with time zone DEFAULT now(),
+    ean text,
+    currency_code text,
+    CONSTRAINT scraped_products_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
+);
+
+--
+-- Name: COLUMN scraped_products.currency_code; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraped_products.currency_code IS 'ISO 4217 currency code determined by the scraper';
+
+--
+-- Name: scraper_ai_sessions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraper_ai_sessions (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    competitor_id uuid NOT NULL,
+    url text NOT NULL,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    current_phase text NOT NULL,
+    analysis_data jsonb DEFAULT '{}'::jsonb,
+    url_collection_data jsonb DEFAULT '{}'::jsonb,
+    data_extraction_data jsonb DEFAULT '{}'::jsonb,
+    assembly_data jsonb DEFAULT '{}'::jsonb,
+    CONSTRAINT scraper_ai_sessions_current_phase_check CHECK ((current_phase = ANY (ARRAY['analysis'::text, 'data-validation'::text, 'assembly'::text, 'complete'::text])))
+);
+
+--
+-- Name: TABLE scraper_ai_sessions; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.scraper_ai_sessions IS 'AI scraper sessions with phases: analysis, data-validation, assembly, complete';
+
+--
+-- Name: COLUMN scraper_ai_sessions.current_phase; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_ai_sessions.current_phase IS 'Current phase of the AI scraper generation process: analysis, data-validation, assembly, complete';
+
+--
+-- Name: COLUMN scraper_ai_sessions.analysis_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_ai_sessions.analysis_data IS 'Data from the site analysis phase';
+
+--
+-- Name: COLUMN scraper_ai_sessions.url_collection_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_ai_sessions.url_collection_data IS 'Legacy: Data from the URL collection phase (now part of data-validation)';
+
+--
+-- Name: COLUMN scraper_ai_sessions.data_extraction_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_ai_sessions.data_extraction_data IS 'Data from the data validation phase (previously data-extraction)';
+
+--
+-- Name: COLUMN scraper_ai_sessions.assembly_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_ai_sessions.assembly_data IS 'Data from the script assembly phase';
+
+--
+-- Name: scraper_analysis; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraper_analysis (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    competitor_id uuid NOT NULL,
+    url text NOT NULL,
+    base_url text NOT NULL,
+    hostname text NOT NULL,
+    title text,
+    sitemap_urls text[] DEFAULT '{}'::text[],
+    brand_pages text[] DEFAULT '{}'::text[],
+    category_pages text[] DEFAULT '{}'::text[],
+    product_listing_pages text[] DEFAULT '{}'::text[],
+    api_endpoints jsonb DEFAULT '[]'::jsonb,
+    proposed_strategy text NOT NULL,
+    strategy_description text,
+    html_sample text,
+    product_selectors jsonb,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: scraper_data_extraction; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraper_data_extraction (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    competitor_id uuid NOT NULL,
+    url_collection_id uuid,
+    products jsonb DEFAULT '[]'::jsonb,
+    execution_log text[] DEFAULT '{}'::text[],
+    generated_code text,
+    error text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: scraper_run_timeouts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraper_run_timeouts (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    run_id uuid NOT NULL,
+    timeout_at timestamp with time zone NOT NULL,
+    processed boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    processed_at timestamp with time zone
+);
+
+--
+-- Name: TABLE scraper_run_timeouts; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.scraper_run_timeouts IS 'Stores timeout information for scraper runs';
+
+--
+-- Name: scraper_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraper_runs (
+    id uuid NOT NULL,
+    scraper_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    status text DEFAULT 'initializing'::text,
+    started_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    is_test_run boolean DEFAULT false,
+    product_count integer DEFAULT 0,
+    current_batch integer DEFAULT 0,
+    total_batches integer,
+    error_message text,
+    progress_messages text[],
+    created_at timestamp with time zone DEFAULT now(),
+    execution_time_ms bigint,
+    products_per_second numeric(10,2),
+    scraper_type text,
+    error_details text,
+    claimed_by_worker_at timestamp with time zone,
+    current_phase integer
+);
+
+--
+-- Name: COLUMN scraper_runs.progress_messages; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_runs.progress_messages IS 'Array to store progress messages or logs during a scraper run';
+
+--
+-- Name: COLUMN scraper_runs.execution_time_ms; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_runs.execution_time_ms IS 'Total execution time of the scraper run in milliseconds (calculated from completed_at - started_at).';
+
+--
+-- Name: COLUMN scraper_runs.products_per_second; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_runs.products_per_second IS 'Calculated metric: product_count / (execution_time_ms / 1000.0). Null if execution time is zero or product_count is null.';
+
+--
+-- Name: COLUMN scraper_runs.error_details; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_runs.error_details IS 'Detailed error information including stack traces';
+
+--
+-- Name: COLUMN scraper_runs.current_phase; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_runs.current_phase IS 'Current phase of the scraper run (1 = URL collection, 2 = Processing products, etc.)';
+
+--
+-- Name: scraper_script_assembly; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraper_script_assembly (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    competitor_id uuid NOT NULL,
+    data_extraction_id uuid,
+    assembled_script text,
+    validation_result jsonb,
+    scraper_id uuid,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: scraper_url_collection; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraper_url_collection (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    competitor_id uuid NOT NULL,
+    analysis_id uuid,
+    urls text[] DEFAULT '{}'::text[],
+    total_count integer DEFAULT 0,
+    sample_urls text[] DEFAULT '{}'::text[],
+    execution_log text[] DEFAULT '{}'::text[],
+    generated_code text,
+    error text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: scrapers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scrapers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    competitor_id uuid NOT NULL,
+    name text NOT NULL,
+    url text NOT NULL,
+    schedule jsonb NOT NULL,
+    is_active boolean DEFAULT false,
+    status text DEFAULT 'idle'::text,
+    error_message text,
+    last_run timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    scraper_type character varying(20) DEFAULT 'ai'::character varying NOT NULL,
+    python_script text,
+    script_metadata jsonb,
+    is_approved boolean DEFAULT false,
+    test_results jsonb,
+    execution_time bigint,
+    last_products_per_second numeric(10,2),
+    typescript_script text,
+    scrape_only_own_products boolean DEFAULT false NOT NULL,
+    filter_by_active_brands boolean DEFAULT false NOT NULL
+);
+
+--
+-- Name: TABLE scrapers; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.scrapers IS 'Stores scraper configurations for different types: AI, Python, and CSV';
+
+--
+-- Name: COLUMN scrapers.execution_time; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scrapers.execution_time IS 'Time in milliseconds it took to run the scraper';
+
+--
+-- Name: COLUMN scrapers.last_products_per_second; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scrapers.last_products_per_second IS 'Products per second metric from the most recently completed successful run.';
+
+--
+-- Name: COLUMN scrapers.scrape_only_own_products; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scrapers.scrape_only_own_products IS 'Flag to only scrape products matching the user''s own product catalog (based on EAN/SKU/Brand matching)';
+
+--
+-- Name: staged_integration_products; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.staged_integration_products (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    integration_run_id uuid NOT NULL,
+    integration_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    prestashop_product_id text,
+    name text NOT NULL,
+    sku text,
+    ean text,
+    brand text,
+    price numeric(10,2),
+    wholesale_price numeric(10,2),
+    image_url text,
+    raw_data jsonb,
+    status text DEFAULT 'pending'::text NOT NULL,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    processed_at timestamp with time zone,
+    product_id uuid,
+    currency_code text,
+    url text,
+    CONSTRAINT staged_integration_products_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
+);
+
+--
+-- Name: COLUMN staged_integration_products.currency_code; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.staged_integration_products.currency_code IS 'ISO 4217 currency code from the integration source';
+
+--
+-- Name: COLUMN staged_integration_products.url; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.staged_integration_products.url IS 'URL to the product on the integration platform';
+
+--
+-- Name: user_profiles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_profiles (
+    id uuid NOT NULL,
+    name text,
+    avatar_url text,
+    subscription_tier text DEFAULT 'free'::text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: user_subscriptions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_subscriptions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    stripe_customer_id text,
+    stripe_subscription_id text,
+    price_id text,
+    status text DEFAULT 'inactive'::text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: messages; Type: TABLE; Schema: realtime; Owner: -
+--
+
+CREATE TABLE realtime.messages (
+    topic text NOT NULL,
+    extension text NOT NULL,
+    payload jsonb,
+    event text,
+    private boolean DEFAULT false,
+    updated_at timestamp without time zone DEFAULT now() NOT NULL,
+    inserted_at timestamp without time zone DEFAULT now() NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL
+)
+PARTITION BY RANGE (inserted_at);
+
+--
+-- Name: schema_migrations; Type: TABLE; Schema: realtime; Owner: -
+--
+
+CREATE TABLE realtime.schema_migrations (
+    version bigint NOT NULL,
+    inserted_at timestamp(0) without time zone
+);
+
+--
+-- Name: subscription; Type: TABLE; Schema: realtime; Owner: -
+--
+
+CREATE TABLE realtime.subscription (
+    id bigint NOT NULL,
+    subscription_id uuid NOT NULL,
+    entity regclass NOT NULL,
+    filters realtime.user_defined_filter[] DEFAULT '{}'::realtime.user_defined_filter[] NOT NULL,
+    claims jsonb NOT NULL,
+    claims_role regrole GENERATED ALWAYS AS (realtime.to_regrole((claims ->> 'role'::text))) STORED NOT NULL,
+    created_at timestamp without time zone DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+--
+-- Name: subscription_id_seq; Type: SEQUENCE; Schema: realtime; Owner: -
+--
+
+ALTER TABLE realtime.subscription ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME realtime.subscription_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+--
+-- Name: buckets; Type: TABLE; Schema: storage; Owner: -
+--
+
+CREATE TABLE storage.buckets (
+    id text NOT NULL,
+    name text NOT NULL,
+    owner uuid,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    public boolean DEFAULT false,
+    avif_autodetection boolean DEFAULT false,
+    file_size_limit bigint,
+    allowed_mime_types text[],
+    owner_id text
+);
+
+--
+-- Name: COLUMN buckets.owner; Type: COMMENT; Schema: storage; Owner: -
+--
+
+COMMENT ON COLUMN storage.buckets.owner IS 'Field is deprecated, use owner_id instead';
+
+--
+-- Name: migrations; Type: TABLE; Schema: storage; Owner: -
+--
+
+CREATE TABLE storage.migrations (
+    id integer NOT NULL,
+    name character varying(100) NOT NULL,
+    hash character varying(40) NOT NULL,
+    executed_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+);
+
+--
+-- Name: objects; Type: TABLE; Schema: storage; Owner: -
+--
+
+CREATE TABLE storage.objects (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    bucket_id text,
+    name text,
+    owner uuid,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    last_accessed_at timestamp with time zone DEFAULT now(),
+    metadata jsonb,
+    path_tokens text[] GENERATED ALWAYS AS (string_to_array(name, '/'::text)) STORED,
+    version text,
+    owner_id text,
+    user_metadata jsonb
+);
+
+--
+-- Name: COLUMN objects.owner; Type: COMMENT; Schema: storage; Owner: -
+--
+
+COMMENT ON COLUMN storage.objects.owner IS 'Field is deprecated, use owner_id instead';
+
+--
+-- Name: s3_multipart_uploads; Type: TABLE; Schema: storage; Owner: -
+--
+
+CREATE TABLE storage.s3_multipart_uploads (
+    id text NOT NULL,
+    in_progress_size bigint DEFAULT 0 NOT NULL,
+    upload_signature text NOT NULL,
+    bucket_id text NOT NULL,
+    key text NOT NULL COLLATE pg_catalog."C",
+    version text NOT NULL,
+    owner_id text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    user_metadata jsonb
+);
+
+--
+-- Name: s3_multipart_uploads_parts; Type: TABLE; Schema: storage; Owner: -
+--
+
+CREATE TABLE storage.s3_multipart_uploads_parts (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    upload_id text NOT NULL,
+    size bigint DEFAULT 0 NOT NULL,
+    part_number integer NOT NULL,
+    bucket_id text NOT NULL,
+    key text NOT NULL COLLATE pg_catalog."C",
+    etag text NOT NULL,
+    owner_id text,
+    version text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: schema_migrations; Type: TABLE; Schema: supabase_migrations; Owner: -
+--
+
+CREATE TABLE supabase_migrations.schema_migrations (
+    version text NOT NULL,
+    statements text[],
+    name text,
+    created_by text,
+    idempotency_key text
+);
+
+--
+-- Name: seed_files; Type: TABLE; Schema: supabase_migrations; Owner: -
+--
+
+CREATE TABLE supabase_migrations.seed_files (
+    path text NOT NULL,
+    hash text NOT NULL
+);
+
+--
+-- Name: refresh_tokens id; Type: DEFAULT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.refresh_tokens ALTER COLUMN id SET DEFAULT nextval('auth.refresh_tokens_id_seq'::regclass);
+
+--
+-- Name: debug_logs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.debug_logs ALTER COLUMN id SET DEFAULT nextval('public.debug_logs_id_seq'::regclass);
+
+--
+-- Name: mfa_amr_claims amr_id_pk; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.mfa_amr_claims
+    ADD CONSTRAINT amr_id_pk PRIMARY KEY (id);
+
+--
+-- Name: audit_log_entries audit_log_entries_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.audit_log_entries
+    ADD CONSTRAINT audit_log_entries_pkey PRIMARY KEY (id);
+
+--
+-- Name: flow_state flow_state_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.flow_state
+    ADD CONSTRAINT flow_state_pkey PRIMARY KEY (id);
+
+--
+-- Name: identities identities_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.identities
+    ADD CONSTRAINT identities_pkey PRIMARY KEY (id);
+
+--
+-- Name: identities identities_provider_id_provider_unique; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.identities
+    ADD CONSTRAINT identities_provider_id_provider_unique UNIQUE (provider_id, provider);
+
+--
+-- Name: instances instances_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.instances
+    ADD CONSTRAINT instances_pkey PRIMARY KEY (id);
+
+--
+-- Name: mfa_amr_claims mfa_amr_claims_session_id_authentication_method_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.mfa_amr_claims
+    ADD CONSTRAINT mfa_amr_claims_session_id_authentication_method_pkey UNIQUE (session_id, authentication_method);
+
+--
+-- Name: mfa_challenges mfa_challenges_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.mfa_challenges
+    ADD CONSTRAINT mfa_challenges_pkey PRIMARY KEY (id);
+
+--
+-- Name: mfa_factors mfa_factors_last_challenged_at_key; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.mfa_factors
+    ADD CONSTRAINT mfa_factors_last_challenged_at_key UNIQUE (last_challenged_at);
+
+--
+-- Name: mfa_factors mfa_factors_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.mfa_factors
+    ADD CONSTRAINT mfa_factors_pkey PRIMARY KEY (id);
+
+--
+-- Name: one_time_tokens one_time_tokens_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.one_time_tokens
+    ADD CONSTRAINT one_time_tokens_pkey PRIMARY KEY (id);
+
+--
+-- Name: refresh_tokens refresh_tokens_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.refresh_tokens
+    ADD CONSTRAINT refresh_tokens_pkey PRIMARY KEY (id);
+
+--
+-- Name: refresh_tokens refresh_tokens_token_unique; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.refresh_tokens
+    ADD CONSTRAINT refresh_tokens_token_unique UNIQUE (token);
+
+--
+-- Name: saml_providers saml_providers_entity_id_key; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_providers
+    ADD CONSTRAINT saml_providers_entity_id_key UNIQUE (entity_id);
+
+--
+-- Name: saml_providers saml_providers_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_providers
+    ADD CONSTRAINT saml_providers_pkey PRIMARY KEY (id);
+
+--
+-- Name: saml_relay_states saml_relay_states_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_relay_states
+    ADD CONSTRAINT saml_relay_states_pkey PRIMARY KEY (id);
+
+--
+-- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.schema_migrations
+    ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version);
+
+--
+-- Name: sessions sessions_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sessions
+    ADD CONSTRAINT sessions_pkey PRIMARY KEY (id);
+
+--
+-- Name: sso_domains sso_domains_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sso_domains
+    ADD CONSTRAINT sso_domains_pkey PRIMARY KEY (id);
+
+--
+-- Name: sso_providers sso_providers_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sso_providers
+    ADD CONSTRAINT sso_providers_pkey PRIMARY KEY (id);
+
+--
+-- Name: users users_phone_key; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.users
+    ADD CONSTRAINT users_phone_key UNIQUE (phone);
+
+--
+-- Name: users users_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+
+--
+-- Name: brand_aliases brand_aliases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brand_aliases
+    ADD CONSTRAINT brand_aliases_pkey PRIMARY KEY (id);
+
+--
+-- Name: brands brands_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brands
+    ADD CONSTRAINT brands_pkey PRIMARY KEY (id);
+
+--
+-- Name: companies companies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.companies
+    ADD CONSTRAINT companies_pkey PRIMARY KEY (id);
+
+--
+-- Name: competitors competitors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competitors
+    ADD CONSTRAINT competitors_pkey PRIMARY KEY (id);
+
+--
+-- Name: csv_uploads csv_uploads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.csv_uploads
+    ADD CONSTRAINT csv_uploads_pkey PRIMARY KEY (id);
+
+--
+-- Name: debug_logs debug_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.debug_logs
+    ADD CONSTRAINT debug_logs_pkey PRIMARY KEY (id);
+
+--
+-- Name: dismissed_duplicates dismissed_duplicates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dismissed_duplicates
+    ADD CONSTRAINT dismissed_duplicates_pkey PRIMARY KEY (id);
+
+--
+-- Name: integration_runs integration_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.integration_runs
+    ADD CONSTRAINT integration_runs_pkey PRIMARY KEY (id);
+
+--
+-- Name: integrations integrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.integrations
+    ADD CONSTRAINT integrations_pkey PRIMARY KEY (id);
+
+--
+-- Name: price_changes price_changes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes
+    ADD CONSTRAINT price_changes_pkey PRIMARY KEY (id);
+
+--
+-- Name: products products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products
+    ADD CONSTRAINT products_pkey PRIMARY KEY (id);
+
+--
+-- Name: scraped_products scraped_products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraped_products
+    ADD CONSTRAINT scraped_products_pkey PRIMARY KEY (id);
+
+--
+-- Name: scraper_ai_sessions scraper_ai_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_ai_sessions
+    ADD CONSTRAINT scraper_ai_sessions_pkey PRIMARY KEY (id);
+
+--
+-- Name: scraper_analysis scraper_analysis_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_analysis
+    ADD CONSTRAINT scraper_analysis_pkey PRIMARY KEY (id);
+
+--
+-- Name: scraper_data_extraction scraper_data_extraction_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_data_extraction
+    ADD CONSTRAINT scraper_data_extraction_pkey PRIMARY KEY (id);
+
+--
+-- Name: scraper_run_timeouts scraper_run_timeouts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_run_timeouts
+    ADD CONSTRAINT scraper_run_timeouts_pkey PRIMARY KEY (id);
+
+--
+-- Name: scraper_runs scraper_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_runs
+    ADD CONSTRAINT scraper_runs_pkey PRIMARY KEY (id);
+
+--
+-- Name: scraper_script_assembly scraper_script_assembly_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_script_assembly
+    ADD CONSTRAINT scraper_script_assembly_pkey PRIMARY KEY (id);
+
+--
+-- Name: scraper_url_collection scraper_url_collection_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_url_collection
+    ADD CONSTRAINT scraper_url_collection_pkey PRIMARY KEY (id);
+
+--
+-- Name: scrapers scrapers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scrapers
+    ADD CONSTRAINT scrapers_pkey PRIMARY KEY (id);
+
+--
+-- Name: staged_integration_products staged_integration_products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.staged_integration_products
+    ADD CONSTRAINT staged_integration_products_pkey PRIMARY KEY (id);
+
+--
+-- Name: brand_aliases unique_brand_alias; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brand_aliases
+    ADD CONSTRAINT unique_brand_alias UNIQUE (user_id, brand_id, alias_name);
+
+--
+-- Name: dismissed_duplicates unique_dismissed_pair; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dismissed_duplicates
+    ADD CONSTRAINT unique_dismissed_pair UNIQUE (user_id, brand_id_1, brand_id_2);
+
+--
+-- Name: brands unique_user_brand; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brands
+    ADD CONSTRAINT unique_user_brand UNIQUE (user_id, name);
+
+--
+-- Name: user_profiles user_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_profiles
+    ADD CONSTRAINT user_profiles_pkey PRIMARY KEY (id);
+
+--
+-- Name: user_subscriptions user_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_subscriptions
+    ADD CONSTRAINT user_subscriptions_pkey PRIMARY KEY (id);
+
+--
+-- Name: messages messages_pkey; Type: CONSTRAINT; Schema: realtime; Owner: -
+--
+
+ALTER TABLE ONLY realtime.messages
+    ADD CONSTRAINT messages_pkey PRIMARY KEY (id, inserted_at);
+
+--
+-- Name: subscription pk_subscription; Type: CONSTRAINT; Schema: realtime; Owner: -
+--
+
+ALTER TABLE ONLY realtime.subscription
+    ADD CONSTRAINT pk_subscription PRIMARY KEY (id);
+
+--
+-- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: realtime; Owner: -
+--
+
+ALTER TABLE ONLY realtime.schema_migrations
+    ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version);
+
+--
+-- Name: buckets buckets_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.buckets
+    ADD CONSTRAINT buckets_pkey PRIMARY KEY (id);
+
+--
+-- Name: migrations migrations_name_key; Type: CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.migrations
+    ADD CONSTRAINT migrations_name_key UNIQUE (name);
+
+--
+-- Name: migrations migrations_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.migrations
+    ADD CONSTRAINT migrations_pkey PRIMARY KEY (id);
+
+--
+-- Name: objects objects_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.objects
+    ADD CONSTRAINT objects_pkey PRIMARY KEY (id);
+
+--
+-- Name: s3_multipart_uploads_parts s3_multipart_uploads_parts_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.s3_multipart_uploads_parts
+    ADD CONSTRAINT s3_multipart_uploads_parts_pkey PRIMARY KEY (id);
+
+--
+-- Name: s3_multipart_uploads s3_multipart_uploads_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.s3_multipart_uploads
+    ADD CONSTRAINT s3_multipart_uploads_pkey PRIMARY KEY (id);
+
+--
+-- Name: schema_migrations schema_migrations_idempotency_key_key; Type: CONSTRAINT; Schema: supabase_migrations; Owner: -
+--
+
+ALTER TABLE ONLY supabase_migrations.schema_migrations
+    ADD CONSTRAINT schema_migrations_idempotency_key_key UNIQUE (idempotency_key);
+
+--
+-- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: supabase_migrations; Owner: -
+--
+
+ALTER TABLE ONLY supabase_migrations.schema_migrations
+    ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version);
+
+--
+-- Name: seed_files seed_files_pkey; Type: CONSTRAINT; Schema: supabase_migrations; Owner: -
+--
+
+ALTER TABLE ONLY supabase_migrations.seed_files
+    ADD CONSTRAINT seed_files_pkey PRIMARY KEY (path);
+
+--
+-- Name: identities identities_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.identities
+    ADD CONSTRAINT identities_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: mfa_amr_claims mfa_amr_claims_session_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.mfa_amr_claims
+    ADD CONSTRAINT mfa_amr_claims_session_id_fkey FOREIGN KEY (session_id) REFERENCES auth.sessions(id) ON DELETE CASCADE;
+
+--
+-- Name: mfa_challenges mfa_challenges_auth_factor_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.mfa_challenges
+    ADD CONSTRAINT mfa_challenges_auth_factor_id_fkey FOREIGN KEY (factor_id) REFERENCES auth.mfa_factors(id) ON DELETE CASCADE;
+
+--
+-- Name: mfa_factors mfa_factors_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.mfa_factors
+    ADD CONSTRAINT mfa_factors_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: one_time_tokens one_time_tokens_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.one_time_tokens
+    ADD CONSTRAINT one_time_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: refresh_tokens refresh_tokens_session_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.refresh_tokens
+    ADD CONSTRAINT refresh_tokens_session_id_fkey FOREIGN KEY (session_id) REFERENCES auth.sessions(id) ON DELETE CASCADE;
+
+--
+-- Name: saml_providers saml_providers_sso_provider_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_providers
+    ADD CONSTRAINT saml_providers_sso_provider_id_fkey FOREIGN KEY (sso_provider_id) REFERENCES auth.sso_providers(id) ON DELETE CASCADE;
+
+--
+-- Name: saml_relay_states saml_relay_states_flow_state_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_relay_states
+    ADD CONSTRAINT saml_relay_states_flow_state_id_fkey FOREIGN KEY (flow_state_id) REFERENCES auth.flow_state(id) ON DELETE CASCADE;
+
+--
+-- Name: saml_relay_states saml_relay_states_sso_provider_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.saml_relay_states
+    ADD CONSTRAINT saml_relay_states_sso_provider_id_fkey FOREIGN KEY (sso_provider_id) REFERENCES auth.sso_providers(id) ON DELETE CASCADE;
+
+--
+-- Name: sessions sessions_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sessions
+    ADD CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: sso_domains sso_domains_sso_provider_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sso_domains
+    ADD CONSTRAINT sso_domains_sso_provider_id_fkey FOREIGN KEY (sso_provider_id) REFERENCES auth.sso_providers(id) ON DELETE CASCADE;
+
+--
+-- Name: brand_aliases brand_aliases_brand_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brand_aliases
+    ADD CONSTRAINT brand_aliases_brand_id_fkey FOREIGN KEY (brand_id) REFERENCES public.brands(id) ON DELETE CASCADE;
+
+--
+-- Name: brand_aliases brand_aliases_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brand_aliases
+    ADD CONSTRAINT brand_aliases_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: brands brands_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brands
+    ADD CONSTRAINT brands_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: competitors competitors_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competitors
+    ADD CONSTRAINT competitors_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: csv_uploads csv_uploads_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.csv_uploads
+    ADD CONSTRAINT csv_uploads_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+--
+-- Name: csv_uploads csv_uploads_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.csv_uploads
+    ADD CONSTRAINT csv_uploads_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: dismissed_duplicates dismissed_duplicates_brand_id_1_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dismissed_duplicates
+    ADD CONSTRAINT dismissed_duplicates_brand_id_1_fkey FOREIGN KEY (brand_id_1) REFERENCES public.brands(id) ON DELETE CASCADE;
+
+--
+-- Name: dismissed_duplicates dismissed_duplicates_brand_id_2_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dismissed_duplicates
+    ADD CONSTRAINT dismissed_duplicates_brand_id_2_fkey FOREIGN KEY (brand_id_2) REFERENCES public.brands(id) ON DELETE CASCADE;
+
+--
+-- Name: dismissed_duplicates dismissed_duplicates_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dismissed_duplicates
+    ADD CONSTRAINT dismissed_duplicates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: integration_runs integration_runs_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.integration_runs
+    ADD CONSTRAINT integration_runs_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id);
+
+--
+-- Name: integration_runs integration_runs_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.integration_runs
+    ADD CONSTRAINT integration_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: integrations integrations_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.integrations
+    ADD CONSTRAINT integrations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: price_changes price_changes_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes
+    ADD CONSTRAINT price_changes_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+--
+-- Name: price_changes price_changes_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes
+    ADD CONSTRAINT price_changes_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id);
+
+--
+-- Name: price_changes price_changes_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes
+    ADD CONSTRAINT price_changes_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+--
+-- Name: price_changes price_changes_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes
+    ADD CONSTRAINT price_changes_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: products products_brand_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products
+    ADD CONSTRAINT products_brand_id_fkey FOREIGN KEY (brand_id) REFERENCES public.brands(id);
+
+--
+-- Name: products products_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products
+    ADD CONSTRAINT products_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: scraped_products scraped_products_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraped_products
+    ADD CONSTRAINT scraped_products_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+--
+-- Name: scraped_products scraped_products_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraped_products
+    ADD CONSTRAINT scraped_products_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+--
+-- Name: scraped_products scraped_products_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraped_products
+    ADD CONSTRAINT scraped_products_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
+
+--
+-- Name: scraped_products scraped_products_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraped_products
+    ADD CONSTRAINT scraped_products_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: scraper_ai_sessions scraper_ai_sessions_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_ai_sessions
+    ADD CONSTRAINT scraper_ai_sessions_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+--
+-- Name: scraper_ai_sessions scraper_ai_sessions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_ai_sessions
+    ADD CONSTRAINT scraper_ai_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: scraper_analysis scraper_analysis_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_analysis
+    ADD CONSTRAINT scraper_analysis_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+--
+-- Name: scraper_analysis scraper_analysis_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_analysis
+    ADD CONSTRAINT scraper_analysis_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: scraper_data_extraction scraper_data_extraction_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_data_extraction
+    ADD CONSTRAINT scraper_data_extraction_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+--
+-- Name: scraper_data_extraction scraper_data_extraction_url_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_data_extraction
+    ADD CONSTRAINT scraper_data_extraction_url_collection_id_fkey FOREIGN KEY (url_collection_id) REFERENCES public.scraper_url_collection(id);
+
+--
+-- Name: scraper_data_extraction scraper_data_extraction_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_data_extraction
+    ADD CONSTRAINT scraper_data_extraction_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: scraper_run_timeouts scraper_run_timeouts_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_run_timeouts
+    ADD CONSTRAINT scraper_run_timeouts_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.scraper_runs(id) ON DELETE CASCADE;
+
+--
+-- Name: scraper_runs scraper_runs_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_runs
+    ADD CONSTRAINT scraper_runs_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
+
+--
+-- Name: scraper_runs scraper_runs_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_runs
+    ADD CONSTRAINT scraper_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: scraper_script_assembly scraper_script_assembly_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_script_assembly
+    ADD CONSTRAINT scraper_script_assembly_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+--
+-- Name: scraper_script_assembly scraper_script_assembly_data_extraction_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_script_assembly
+    ADD CONSTRAINT scraper_script_assembly_data_extraction_id_fkey FOREIGN KEY (data_extraction_id) REFERENCES public.scraper_data_extraction(id);
+
+--
+-- Name: scraper_script_assembly scraper_script_assembly_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_script_assembly
+    ADD CONSTRAINT scraper_script_assembly_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
+
+--
+-- Name: scraper_script_assembly scraper_script_assembly_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_script_assembly
+    ADD CONSTRAINT scraper_script_assembly_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: scraper_url_collection scraper_url_collection_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_url_collection
+    ADD CONSTRAINT scraper_url_collection_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.scraper_analysis(id);
+
+--
+-- Name: scraper_url_collection scraper_url_collection_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_url_collection
+    ADD CONSTRAINT scraper_url_collection_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+--
+-- Name: scraper_url_collection scraper_url_collection_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_url_collection
+    ADD CONSTRAINT scraper_url_collection_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: scrapers scrapers_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scrapers
+    ADD CONSTRAINT scrapers_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+--
+-- Name: scrapers scrapers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scrapers
+    ADD CONSTRAINT scrapers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: staged_integration_products staged_integration_products_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.staged_integration_products
+    ADD CONSTRAINT staged_integration_products_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id) ON DELETE CASCADE;
+
+--
+-- Name: staged_integration_products staged_integration_products_integration_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.staged_integration_products
+    ADD CONSTRAINT staged_integration_products_integration_run_id_fkey FOREIGN KEY (integration_run_id) REFERENCES public.integration_runs(id) ON DELETE CASCADE;
+
+--
+-- Name: staged_integration_products staged_integration_products_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.staged_integration_products
+    ADD CONSTRAINT staged_integration_products_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+--
+-- Name: staged_integration_products staged_integration_products_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.staged_integration_products
+    ADD CONSTRAINT staged_integration_products_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: user_profiles user_profiles_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_profiles
+    ADD CONSTRAINT user_profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id);
+
+--
+-- Name: user_subscriptions user_subscriptions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_subscriptions
+    ADD CONSTRAINT user_subscriptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: objects objects_bucketId_fkey; Type: FK CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.objects
+    ADD CONSTRAINT "objects_bucketId_fkey" FOREIGN KEY (bucket_id) REFERENCES storage.buckets(id);
+
+--
+-- Name: s3_multipart_uploads s3_multipart_uploads_bucket_id_fkey; Type: FK CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.s3_multipart_uploads
+    ADD CONSTRAINT s3_multipart_uploads_bucket_id_fkey FOREIGN KEY (bucket_id) REFERENCES storage.buckets(id);
+
+--
+-- Name: s3_multipart_uploads_parts s3_multipart_uploads_parts_bucket_id_fkey; Type: FK CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.s3_multipart_uploads_parts
+    ADD CONSTRAINT s3_multipart_uploads_parts_bucket_id_fkey FOREIGN KEY (bucket_id) REFERENCES storage.buckets(id);
+
+--
+-- Name: s3_multipart_uploads_parts s3_multipart_uploads_parts_upload_id_fkey; Type: FK CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.s3_multipart_uploads_parts
+    ADD CONSTRAINT s3_multipart_uploads_parts_upload_id_fkey FOREIGN KEY (upload_id) REFERENCES storage.s3_multipart_uploads(id) ON DELETE CASCADE;
+
+--
+-- Name: audit_log_entries; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.audit_log_entries ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: flow_state; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.flow_state ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: identities; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.identities ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: instances; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.instances ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: mfa_amr_claims; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.mfa_amr_claims ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: mfa_challenges; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.mfa_challenges ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: mfa_factors; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.mfa_factors ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: one_time_tokens; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.one_time_tokens ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: refresh_tokens; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.refresh_tokens ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: saml_providers; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.saml_providers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: saml_relay_states; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.saml_relay_states ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: schema_migrations; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.schema_migrations ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: sessions; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.sessions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: sso_domains; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.sso_domains ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: sso_providers; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.sso_providers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: users; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.users ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: brand_aliases; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.brand_aliases ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: brands; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.brands ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: companies; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: competitors; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.competitors ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: csv_uploads; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.csv_uploads ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: debug_logs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.debug_logs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: dismissed_duplicates; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.dismissed_duplicates ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: integration_runs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.integration_runs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: integrations; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.integrations ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: price_changes; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.price_changes ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: products; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraped_products; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraped_products ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraper_ai_sessions; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraper_ai_sessions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraper_analysis; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraper_analysis ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraper_data_extraction; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraper_data_extraction ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraper_run_timeouts; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraper_run_timeouts ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraper_runs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraper_runs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraper_script_assembly; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraper_script_assembly ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraper_url_collection; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraper_url_collection ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scrapers; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scrapers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: staged_integration_products; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.staged_integration_products ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_profiles; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_subscriptions; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_subscriptions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: messages; Type: ROW SECURITY; Schema: realtime; Owner: -
+--
+
+ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: buckets; Type: ROW SECURITY; Schema: storage; Owner: -
+--
+
+ALTER TABLE storage.buckets ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: migrations; Type: ROW SECURITY; Schema: storage; Owner: -
+--
+
+ALTER TABLE storage.migrations ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: objects; Type: ROW SECURITY; Schema: storage; Owner: -
+--
+
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: s3_multipart_uploads; Type: ROW SECURITY; Schema: storage; Owner: -
+--
+
+ALTER TABLE storage.s3_multipart_uploads ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: s3_multipart_uploads_parts; Type: ROW SECURITY; Schema: storage; Owner: -
+--
+
+ALTER TABLE storage.s3_multipart_uploads_parts ENABLE ROW LEVEL SECURITY;
+
