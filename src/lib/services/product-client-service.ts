@@ -305,3 +305,57 @@ export async function getProductCSVTemplate(): Promise<string> {
 
   return response.text();
 }
+
+/**
+ * Export products as CSV with the current filters
+ */
+export async function exportProductsCSV(filters: {
+  brand?: string;
+  category?: string;
+  search?: string;
+  isActive?: boolean;
+  sourceId?: string;
+  hasPrice?: boolean;
+  sortBy?: string;
+  sortOrder?: string;
+  price_lower_than_competitors?: boolean;
+  price_higher_than_competitors?: boolean;
+} = {}): Promise<void> {
+  try {
+    const response = await fetch('/api/products/csv-export', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(filters),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to export products as CSV');
+    }
+
+    // Get the blob from the response
+    const blob = await response.blob();
+
+    // Create a URL for the blob
+    const url = window.URL.createObjectURL(blob);
+
+    // Create a temporary anchor element
+    const a = document.createElement('a');
+    a.href = url;
+
+    // Set a default filename with date in case Content-Disposition is ignored
+    const today = new Date().toISOString().split('T')[0];
+    a.download = `products_${today}.csv`;
+
+    // Append to the document, click, and clean up
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  } catch (error) {
+    console.error('Error exporting products as CSV:', error);
+    throw error;
+  }
+}

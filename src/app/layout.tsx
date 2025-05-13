@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -16,11 +16,16 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1.0,
+  maximumScale: 1.0,
+};
+
 export const metadata: Metadata = {
   title: "PriceTracker | Monitor Competitor Prices",
   description: "Track and analyze competitor prices to stay competitive in the market",
   keywords: ["price tracking", "competitor analysis", "price monitoring", "ecommerce"],
-  viewport: "width=device-width, initial-scale=1.0, maximum-scale=1.0",
 };
 
 export default function RootLayout({
