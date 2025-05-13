@@ -26,12 +26,14 @@ export async function GET(request: NextRequest) {
 
     const brandService = new BrandService();
 
-    console.time('api-brands-analytics');
+    // Generate a unique label for each API call to avoid "Label already exists" warning
+    const apiTimeLabel = `api-brands-analytics-${Date.now()}`;
+    console.time(apiTimeLabel);
 
     // Get brand analytics data (now includes aliases)
     const analyticsData = await brandService.getBrandAnalytics(userId, brandId);
 
-    console.timeEnd('api-brands-analytics');
+    console.timeEnd(apiTimeLabel);
 
     // Add cache headers to the response
     const response = NextResponse.json(analyticsData);

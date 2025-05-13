@@ -934,7 +934,9 @@ export class BrandService {
     const supabase = createSupabaseAdminClient();
 
     try {
-      console.time('getBrandAnalytics');
+      // Generate a unique label for each call to avoid "Label already exists" warning
+      const timeLabel = `getBrandAnalytics-${Date.now()}`;
+      console.time(timeLabel);
 
       // Use the optimized database function to get all brand analytics in a single query
       const { data: brandsWithAnalytics, error } = await supabase.rpc(
@@ -1019,7 +1021,7 @@ export class BrandService {
         competitor_names: competitorNamesMap.get(brand.id) || []
       }));
 
-      console.timeEnd('getBrandAnalytics');
+      console.timeEnd(timeLabel);
       return result;
     } catch (error) {
       console.error('Unexpected error in getBrandAnalytics:', error);

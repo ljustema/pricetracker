@@ -8,22 +8,24 @@ The database setup is organized into multiple, ordered scripts located in the `d
 
 **Scripts:**
 
+0.  **`db_setup/00_extensions.sql`**: Sets up all required PostgreSQL extensions (pg_cron, pgsodium, pg_graphql, etc.) and related event triggers.
 1.  **`db_setup/01_next_auth_schema.sql`**: Sets up the `next_auth` schema required by NextAuth.js (tables, grants, helper function).
 2.  **`db_setup/02_public_tables.sql`**: Creates all application-specific tables (`user_profiles`, `products`, `competitors`, `scrapers`, `scraped_products`, `price_changes`, `scraper_runs`, `brands`, `brand_aliases`, `integrations`, `integration_runs`, `staged_integration_products`, etc.) in the `public` schema, along with necessary indexes and comments.
 3.  **`db_setup/03_public_rls.sql`**: Applies Row Level Security (RLS) policies to the tables in the `public` schema to ensure users can only access their own data.
 4.  **`db_setup/04_public_functions_triggers.sql`**: Creates database functions and triggers used by the application (e.g., `create_profile_for_user`, `record_price_change`, `get_products_filtered`, `cleanup_scraped_products`, `process_staged_integration_products`).
 5.  **`db_setup/05_public_jobs.sql`**: Schedules a daily job using `pg_cron` to run the `cleanup_scraped_products` function and sets up error handling for worker processes. **Requires the `pg_cron` extension to be enabled in your Supabase project.**
+6.  **`db_setup/06_other.sql`**: Contains other database objects including schemas, types, and default privileges that don't fit into the categories above.
 
 **Execution Order:**
 
-It is crucial to run these scripts **in numerical order** (01 through 05 in `db_setup/`) to ensure dependencies are met (e.g., tables exist before RLS is applied, functions exist before jobs are scheduled).
+It is crucial to run these scripts **in numerical order** (00 through 06 in `db_setup/`) to ensure dependencies are met (e.g., extensions are created before tables, tables exist before RLS is applied, functions exist before jobs are scheduled).
 
 **How to Run:**
 
 1.  Log in to your Supabase dashboard.
 2.  Select your project.
 3.  Navigate to the SQL Editor.
-4.  For each script from `01` to `05`:
+4.  For each script from `00` to `06`:
     *   Create a new query.
     *   Copy the contents of the corresponding `.sql` file from the `db_setup/` directory.
     *   Paste the content into the SQL Editor.
@@ -72,7 +74,32 @@ DROP SCHEMA next_auth CASCADE;
 -- GRANT ALL ON SCHEMA next_auth TO postgres;
 ```
 
-After running the reset script, you will need to run the setup scripts (`db_setup/01` through `05`) again in order.
+After running the reset script, you will need to run the setup scripts (`db_setup/00` through `06`) again in order.
+
+## Generating Database Setup Files
+
+The database setup files can be generated from an existing Supabase instance using the `dump_and_split.bat` script. This script:
+
+1. Uses `pg_dump` to create a schema-only dump of your Supabase database
+2. Runs the `split_schema.py` Python script to split the dump into logical sections
+
+To use this script:
+
+1. Ensure you have PostgreSQL installed locally (for pg_dump)
+2. Update the connection details in `dump_and_split.bat` if needed
+3. Run the script from the command line:
+   ```
+   dump_and_split.bat
+   ```
+
+The script will create the following files in the `db_setup/` directory:
+- `00_extensions.sql` - PostgreSQL extensions
+- `01_next_auth_schema.sql` - Next Auth schema and related objects
+- `02_public_tables.sql` - Public schema tables and sequences
+- `03_public_rls.sql` - Row Level Security policies
+- `04_public_functions_triggers.sql` - Functions and triggers
+- `05_public_jobs.sql` - Job-related objects
+- `06_other.sql` - Other database objects
 
 ## Type Generation
 
