@@ -41,22 +41,27 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       .eq("id", userId)
       .single();
 
-    // If the user doesn't exist in auth.users, create one
-    if (!authUser || authUserError) {
-      // Create a user in the auth.users table
+    // Try to create the user in auth.users if needed
+    try {
+      // Use ON CONFLICT DO NOTHING in the RPC function to handle duplicates gracefully
       const { error: createUserError } = await supabase.rpc("create_user_for_nextauth", {
         user_id: userId,
         email: session.user.email || "",
         name: session.user.name || "",
       });
 
-      if (createUserError) {
+      // Only log errors that aren't related to duplicate keys
+      if (createUserError && !createUserError.message.includes('duplicate key')) {
         console.error("Error creating user in auth.users:", createUserError);
         return NextResponse.json(
           { error: "Failed to create user in auth.users: " + createUserError.message },
           { status: 500 }
         );
       }
+    } catch (error) {
+      // Catch any unexpected errors but continue with product fetching
+      console.error("Error in user creation process:", error);
+      // We'll continue with product fetching even if user creation fails
     }
 
     // --- Start: Product Fetching Logic using RPC ---
