@@ -41,13 +41,6 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       .eq("id", userId)
       .single();
 
-    // First, check if the user exists in auth.users
-    const { data: authUser, error: authUserError } = await supabase
-      .from("auth.users")
-      .select("id")
-      .eq("id", userId)
-      .single();
-
     // If the user doesn't exist in auth.users, create one
     if (!authUser || authUserError) {
       console.log("User not found in auth.users, creating one...");
