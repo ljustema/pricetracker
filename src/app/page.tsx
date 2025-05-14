@@ -338,7 +338,7 @@ function LandingPageContent() {
               </div>
             </nav>
             <p className="mt-10 text-center text-xs leading-5 text-gray-500">
-              &amp;copy; {new Date().getFullYear()} PriceTracker, Inc. All rights reserved.
+              {new Date().getFullYear()} PriceTracker, Inc. All rights reserved.
             </p>
           </footer>
       </div>

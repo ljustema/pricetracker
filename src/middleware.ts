@@ -3,16 +3,24 @@ import type { NextRequest } from 'next/server';
 
 // This function can be marked `async` if using `await` inside
 export function middleware(request: NextRequest) {
+  const host = request.headers.get('host');
+
   // Check if the host is 'pricetracker.se' without the 'www' prefix
-  if (request.headers.get('host') === 'pricetracker.se') {
+  // or if it's using a Railway preview URL
+  if (host === 'pricetracker.se' || (host && !host.startsWith('www.') && host.includes('pricetracker.se'))) {
     // Create the new URL with 'www' prefix
     const url = request.nextUrl.clone();
-    url.host = 'www.pricetracker.se';
-    
-    // Return a redirect response
-    return NextResponse.redirect(url);
+
+    // Handle different protocols (http/https)
+    const protocol = request.headers.get('x-forwarded-proto') || 'https';
+
+    // Set the full URL with www prefix
+    url.href = `${protocol}://www.pricetracker.se${request.nextUrl.pathname}${request.nextUrl.search}`;
+
+    // Return a permanent redirect response (301)
+    return NextResponse.redirect(url, 301);
   }
-  
+
   // Continue with the request if no redirect is needed
   return NextResponse.next();
 }
