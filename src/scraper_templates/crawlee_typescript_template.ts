@@ -1,14 +1,15 @@
 /**
  * PriceTracker - Flexible Product Scraper Template
- * 
- * This template is designed to be a highly configurable starting point for 
+ *
+ * This template is designed to be a highly configurable starting point for
  * creating product scrapers for the PriceTracker platform. It supports multiple
  * collection strategies including API calls and web scraping with various URL
  * discovery methods (sitemaps, brand pages, category crawling).
- * 
+ *
  * Configuration options are grouped at the top of the file for easy modification.
- * 
- * Version 1.0.0
+ *
+ * Version 1.1.0 - Optimized for performance with memory-only storage, improved
+ * concurrency handling, and better error management.
  */
 
 // ------------------------------------ //
@@ -22,11 +23,11 @@ const CONFIG = {
     BASE_URL: "https://www.example.com", // Base URL of the target website
     LANGUAGE: "sv", // Site primary language (used for some scraping operations)
   },
-  
+
   // Collection strategy configuration
   COLLECTION_STRATEGY: {
     TYPE: "scraping", // Options: "api" or "scraping"
-    
+
     // API settings (used if TYPE is "api")
     API: {
       BASE_URL: "https://api.example.com/v1",
@@ -41,20 +42,20 @@ const CONFIG = {
         MAX_PAGES: 0, // 0 for unlimited
       }
     },
-    
+
     // Scraping settings (used if TYPE is "scraping")
     SCRAPING: {
       // URL discovery method
       URL_DISCOVERY: {
         METHOD: "sitemap", // Options: "sitemap", "brand-pages", "category", "custom"
-        
+
         // Sitemap settings
         SITEMAP: {
           INDEX_URL: "https://www.example.com/sitemap.xml",
           PRODUCT_SITEMAP_FILTER: "sitemap-products", // String that appears in product sitemap URLs
           PRODUCT_URL_FILTER: "/product/", // String that identifies a product URL
         },
-        
+
         // Brand pages settings
         BRAND_PAGES: {
           BRANDS_LIST_URL: "https://www.example.com/brands",
@@ -62,7 +63,7 @@ const CONFIG = {
           PAGINATION_SELECTOR: ".pagination a", // CSS selector for pagination
           PRODUCT_SELECTOR: ".product-item a", // CSS selector for product links
         },
-        
+
         // Category crawling settings
         CATEGORY: {
           START_URLS: ["https://www.example.com/category1", "https://www.example.com/category2"],
@@ -71,7 +72,7 @@ const CONFIG = {
           PRODUCT_SELECTOR: ".product-item a",
           MAX_DEPTH: 3, // How deep to crawl categories
         },
-        
+
         // Custom discovery method (implement your own logic)
         CUSTOM: {
           // Add custom configuration here
@@ -79,7 +80,7 @@ const CONFIG = {
       },
     }
   },
-  
+
   // Product data extraction settings
   PRODUCT_EXTRACTION: {
     // CSS selectors for extracting product data (when scraping)
@@ -104,13 +105,13 @@ const CONFIG = {
       ENABLED: true, // Whether to attempt extraction from schema.org JSON-LD
       SCRIPT_SELECTOR: "script[type='application/ld+json']"
     },
-    
+
     // Microdata extraction settings
     MICRODATA: {
       ENABLED: false, // Whether to attempt extraction from microdata
     }
   },
-  
+
   // Performance settings
   PERFORMANCE: {
     MAX_CONCURRENCY: 10, // Maximum number of concurrent requests
@@ -120,20 +121,21 @@ const CONFIG = {
     REQUEST_DELAY: 0, // Delay between requests in milliseconds (0 for no delay)
     MAX_REQUESTS_PER_MINUTE: 180, // Rate limiting
   },
-  
+
   // Filtering settings
   FILTERING: {
     ENABLED: false, // Whether to filter products
     BY_BRAND: {
       ENABLED: false,
-      BRANDS: [] // Array of brand names to include
+      BRANDS: [] as string[] // Array of brand names to include
     },
     BY_OWN_PRODUCTS: {
       ENABLED: false,
-      // These will be populated from the context
+      EANS: [] as string[], // Will be populated from context
+      SKU_BRANDS: [] as { sku: string; brand: string }[] // Will be populated from context
     }
   },
-  
+
   // Testing/validation settings
   TEST_SETTINGS: {
     TEST_MODE_LIMIT: 20, // Number of products to process in test mode
@@ -145,14 +147,14 @@ const CONFIG = {
 // ------- DEPENDENCIES SECTION ------- //
 // ------------------------------------ //
 
-import { CheerioCrawler, RequestQueue, log, ProxyConfiguration, Configuration, Request } from 'crawlee';
+import { CheerioCrawler, RequestQueue, Configuration } from 'crawlee';
 import { XMLParser } from 'fast-xml-parser';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import fetch from 'node-fetch';
-import * as path from 'path';
 import * as os from 'os';
-import * as fs from 'fs';
+// We'll use the global Buffer and process objects
+// TypeScript will recognize these in a Node.js environment
 
 // ------------------------------------ //
 // ------- INTERFACES SECTION --------- //
@@ -268,7 +270,10 @@ function configureCrawleeStorage(): Configuration {
     const memoryConfig = new Configuration({
       persistStorage: false, // Use memory-only storage to avoid permission issues
     });
-    
+
+    // Set global configuration to use memory storage
+    Configuration.getGlobalConfig().set('persistStorage', false);
+
     logProgress(`Created minimal Crawlee Configuration for memory-only storage.`);
     return memoryConfig;
   } catch (error) {
@@ -329,7 +334,7 @@ async function fetchSitemapUrls(sitemapUrl: string): Promise<string[]> {
  */
 async function discoverProductUrlsFromSitemap(isTestRun: boolean): Promise<string[]> {
   logProgress('Fetching sitemap index to discover product sitemaps', 1);
-  
+
   try {
     // Fetch the sitemap index
     const response = await fetch(CONFIG.COLLECTION_STRATEGY.SCRAPING.URL_DISCOVERY.SITEMAP.INDEX_URL, {
@@ -355,7 +360,7 @@ async function discoverProductUrlsFromSitemap(isTestRun: boolean): Promise<strin
 
     // Extract product sitemap URLs
     const productSitemapFilter = CONFIG.COLLECTION_STRATEGY.SCRAPING.URL_DISCOVERY.SITEMAP.PRODUCT_SITEMAP_FILTER;
-    
+
     const productSitemapUrls = Array.isArray(sitemapElements)
       ? sitemapElements
           .map((item: { loc: string }) => typeof item === 'object' ? item.loc : '')
@@ -402,7 +407,7 @@ async function discoverProductUrlsFromBrandPages(): Promise<string[]> {
   logProgress('Starting product URL discovery from brand pages', 1);
   // This implementation would need to be customized for each website
   // Here's a pseudocode outline:
-  
+
   /*
   1. Fetch the brands list page
   2. Extract all brand page URLs
@@ -412,7 +417,7 @@ async function discoverProductUrlsFromBrandPages(): Promise<string[]> {
      c. Check for pagination and follow if needed
   4. Return all discovered product URLs
   */
-  
+
   // Placeholder implementation
   return [];
 }
@@ -425,7 +430,7 @@ async function discoverProductUrlsFromCategories(): Promise<string[]> {
   logProgress('Starting product URL discovery from category pages', 1);
   // This implementation would need to be customized for each website
   // Here's a pseudocode outline:
-  
+
   /*
   1. For each start URL in CONFIG.COLLECTION_STRATEGY.SCRAPING.CATEGORY.START_URLS:
      a. Fetch the category page
@@ -434,7 +439,7 @@ async function discoverProductUrlsFromCategories(): Promise<string[]> {
      d. Check for pagination and follow if needed
   2. Return all discovered product URLs
   */
-  
+
   // Placeholder implementation
   return [];
 }
@@ -444,7 +449,7 @@ async function discoverProductUrlsFromCategories(): Promise<string[]> {
  */
 async function discoverProductUrls(isTestRun: boolean): Promise<string[]> {
   const method = CONFIG.COLLECTION_STRATEGY.SCRAPING.URL_DISCOVERY.METHOD;
-  
+
   switch (method) {
     case 'sitemap':
       return discoverProductUrlsFromSitemap(isTestRun);
@@ -471,70 +476,72 @@ async function discoverProductUrls(isTestRun: boolean): Promise<string[]> {
  */
 async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): Promise<ScrapedProductData[]> {
   logProgress('Starting API-based product data collection', 1);
-  
+
   const { API } = CONFIG.COLLECTION_STRATEGY;
   const products: ApiProduct[] = [];
-  
+
   try {
     // Determine how many pages to fetch
     let currentPage = 1;
     let hasMorePages = true;
     const testLimit = isTestRun || isValidation ? CONFIG.TEST_SETTINGS.TEST_MODE_LIMIT : 0;
-    
+
     // Set up headers
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'User-Agent': 'PriceTracker/1.0'
     };
-    
+
     if (API.REQUIRES_AUTH && API.AUTH_TOKEN) {
       headers['Authorization'] = `Bearer ${API.AUTH_TOKEN}`;
     }
-    
+
     // Fetch products in pages
     while (hasMorePages) {
       // Construct the API URL with pagination
       let apiUrl = `${API.BASE_URL}${API.PRODUCT_ENDPOINT}`;
-      
+
       if (API.PAGINATION.ENABLED) {
         const pageSeparator = apiUrl.includes('?') ? '&' : '?';
         apiUrl += `${pageSeparator}${API.PAGINATION.PARAM_NAME}=${currentPage}`;
-        
+
         if (API.PAGINATION.PAGE_SIZE_PARAM) {
           apiUrl += `&${API.PAGINATION.PAGE_SIZE_PARAM}=${API.PAGINATION.PAGE_SIZE}`;
         }
       }
-      
+
       logProgress(`Fetching page ${currentPage} from API: ${apiUrl}`);
-      
+
       const response = await fetch(apiUrl, { headers });
-      
+
       if (!response.ok) {
         throw new Error(`API request failed: ${response.status} ${response.statusText}`);
       }
-      
+
       const data = await response.json();
-      
+
       // Extract products from response
       // This needs to be customized based on the API's response format
-      const pageProducts: ApiProduct[] = Array.isArray(data) ? data : (data.products || data.items || []);
-      
+      const pageProducts: ApiProduct[] = Array.isArray(data)
+        ? data as ApiProduct[]
+        : ((data as any)?.products || (data as any)?.items || []);
+
       if (pageProducts.length > 0) {
         products.push(...pageProducts);
         logProgress(`Fetched ${pageProducts.length} products from page ${currentPage}. Total: ${products.length}`);
-        
+
         // Check if we should stop due to test limits
         if (testLimit > 0 && products.length >= testLimit) {
           logProgress(`Reached test limit of ${testLimit} products. Stopping API fetching.`);
           hasMorePages = false;
           break;
         }
-        
+
         // Check if we should continue to the next page
         if (API.PAGINATION.ENABLED) {
           const hasNextPage = pageProducts.length === API.PAGINATION.PAGE_SIZE;
           const withinPageLimit = API.PAGINATION.MAX_PAGES === 0 || currentPage < API.PAGINATION.MAX_PAGES;
-          
+
           if (hasNextPage && withinPageLimit) {
             currentPage++;
           } else {
@@ -548,15 +555,15 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
         hasMorePages = false;
       }
     }
-    
+
     logProgress(`Completed API fetching with ${products.length} products collected.`);
-    
+
     // Convert API products to the common ScrapedProductData format
     const convertedProducts: ScrapedProductData[] = products.map(apiProduct => {
       // This conversion needs to be customized based on the specific API response format
       return {
         name: apiProduct.name,
-        price: typeof apiProduct.price === 'number' ? apiProduct.price : parseFloat(apiProduct.price.toString()),
+        price: typeof apiProduct.price === 'number' ? apiProduct.price : parseFloat(String(apiProduct.price)),
         currency: apiProduct.currency_code || 'SEK', // Default to SEK if not specified
         url: `${CONFIG.SITE.BASE_URL}/product/${apiProduct.id}`, // Construct URL based on product ID
         sku: apiProduct.sku || null,
@@ -568,7 +575,7 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
         raw_price: apiProduct.price.toString()
       };
     });
-    
+
     return convertedProducts;
   } catch (error) {
     logError('Error fetching products from API', error);
@@ -587,7 +594,7 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
 async function extractProductData($: any, url: string): Promise<ScrapedProductData | null> {
   try {
     // Initialize product data with defaults
-    let productData: ScrapedProductData = {
+    const productData: ScrapedProductData = {
       name: '',
       price: null,
       currency: 'SEK', // Default currency
@@ -600,7 +607,7 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
       description: null,
       raw_price: null
     };
-    
+
     // --- 1. Try extracting from schema.org JSON-LD first ---
     if (CONFIG.PRODUCT_EXTRACTION.SCHEMA_ORG.ENABLED) {
       const schemaScripts = $(CONFIG.PRODUCT_EXTRACTION.SCHEMA_ORG.SCRIPT_SELECTOR);
@@ -611,33 +618,34 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
             if (scriptContent && scriptContent.includes('Product')) {
               const schemaData = JSON.parse(scriptContent);
               const products = Array.isArray(schemaData) ? schemaData : [schemaData];
-              
+
               for (const product of products) {
                 if (product['@type'] === 'Product') {
                   // Extract Name
                   if (!productData.name && product.name) {
                     productData.name = product.name.toString();
                   }
-                  
+
                   // Extract Price & Currency
                   if (productData.price === null && product.offers && product.offers.price) {
-                    productData.raw_price = product.offers.price.toString();
-                    productData.price = parseFloat(productData.raw_price);
+                    const priceStr = String(product.offers.price);
+                    productData.raw_price = priceStr;
+                    productData.price = parseFloat(priceStr);
                     if (product.offers.priceCurrency) {
                       productData.currency = product.offers.priceCurrency;
                     }
                   }
-                  
+
                   // Extract SKU
                   if (productData.sku === null && product.sku) {
                     productData.sku = product.sku.toString();
                   }
-                  
+
                   // Extract Brand
                   if (productData.brand === null && product.brand && product.brand.name) {
                     productData.brand = product.brand.name.toString();
                   }
-                  
+
                   // Extract Image URL
                   if (productData.image_url === null && product.image) {
                     if (Array.isArray(product.image) && product.image.length > 0) {
@@ -646,7 +654,7 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
                       productData.image_url = product.image;
                     }
                   }
-                  
+
                   // Extract EAN
                   if (productData.ean === null && product.gtin) {
                     const cleanEan = product.gtin.toString().replace(/[^0-9]/g, '');
@@ -654,12 +662,12 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
                       productData.ean = cleanEan;
                     }
                   }
-                  
+
                   // Extract Description
                   if (productData.description === null && product.description) {
                     productData.description = product.description;
                   }
-                  
+
                   // Extract Availability
                   if (product.offers && product.offers.availability) {
                     const availability = product.offers.availability.toString();
@@ -668,16 +676,16 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
                 }
               }
             }
-          } catch (e) {
+          } catch (_e) {
             // Error parsing schema.org data - continue to next method
           }
         });
       }
     }
-    
+
     // --- 2. Extract using CSS selectors for any missing data ---
     const selectors = CONFIG.PRODUCT_EXTRACTION.SELECTORS;
-    
+
     // Extract Name
     if (!productData.name) {
       const nameEl = $(selectors.NAME);
@@ -685,17 +693,33 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
         productData.name = nameEl.text().trim();
       }
     }
-    
+
     // Extract Price
     if (productData.price === null) {
       const priceEl = $(selectors.PRICE);
       if (priceEl.length > 0) {
         productData.raw_price = priceEl.text().trim();
-        const priceText = productData.raw_price.replace(/[^0-9,.]/g, '').replace(',', '.');
-        productData.price = parseFloat(priceText);
+        if (productData.raw_price) {
+          // Improved price parsing with better handling of Swedish price formats
+          const cleanedPrice = productData.raw_price
+            .replace(/[^\d,\.]/g, '') // Remove all non-numeric characters except decimal separators
+            .replace(',', '.'); // Convert comma to dot for parseFloat
+
+          const price = parseFloat(cleanedPrice);
+
+          if (!isNaN(price)) {
+            // Sanity check for large numbers (possible formatting issues)
+            if (price > 100000) {
+              productData.price = price / 1000;
+            } else {
+              // Convert to integer if it's a whole number
+              productData.price = price % 1 === 0 ? Math.floor(price) : price;
+            }
+          }
+        }
       }
     }
-    
+
     // Extract Currency
     if (productData.currency === 'SEK' && selectors.CURRENCY) {
       const currencyEl = $(selectors.CURRENCY);
@@ -703,7 +727,7 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
         productData.currency = currencyEl.text().trim();
       }
     }
-    
+
     // Extract SKU
     if (productData.sku === null) {
       const skuEl = $(selectors.SKU);
@@ -711,7 +735,7 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
         productData.sku = skuEl.text().trim();
       }
     }
-    
+
     // Extract Brand
     if (productData.brand === null) {
       const brandEl = $(selectors.BRAND);
@@ -719,7 +743,7 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
         productData.brand = brandEl.text().trim();
       }
     }
-    
+
     // Extract EAN
     if (productData.ean === null) {
       try {
@@ -731,11 +755,11 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
             productData.ean = cleanEan;
           }
         }
-      } catch (e) {
+      } catch (_e) {
         // Continue if EAN extraction fails
       }
     }
-    
+
     // Extract Image URL
     if (productData.image_url === null) {
       const imgEl = $(selectors.IMAGE_URL);
@@ -743,7 +767,7 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
         productData.image_url = imgEl.attr('src') || imgEl.attr('data-src') || imgEl.attr('data-large-size') || null;
       }
     }
-    
+
     // Extract Description
     if (productData.description === null) {
       const descEl = $(selectors.DESCRIPTION);
@@ -751,17 +775,17 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
         productData.description = descEl.text().trim();
       }
     }
-    
+
     // Extract Availability
     const availabilityEl = $(selectors.AVAILABILITY.SELECTOR);
     if (availabilityEl.length > 0) {
       const availabilityText = availabilityEl.text().trim().toLowerCase();
-      
+
       // Check against out-of-stock text patterns
       const isOutOfStock = selectors.AVAILABILITY.OUT_OF_STOCK_TEXT.some(
         text => availabilityText.includes(text.toLowerCase())
       );
-      
+
       if (isOutOfStock) {
         productData.is_available = false;
       } else {
@@ -769,17 +793,17 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
         const isInStock = selectors.AVAILABILITY.IN_STOCK_TEXT.some(
           text => availabilityText.includes(text.toLowerCase())
         );
-        
+
         productData.is_available = isInStock;
       }
     }
-    
+
     // --- 3. Validate the extracted data ---
     // Required field - if no name, the extraction failed
     if (!productData.name) {
       return null;
     }
-    
+
     return productData;
   } catch (error) {
     logError(`Error extracting product data from ${url}`, error);
@@ -799,44 +823,44 @@ function productPassesFilters(product: ScrapedProductData, context: ScriptContex
   if (!CONFIG.FILTERING.ENABLED) {
     return true;
   }
-  
+
   // Filter by brand
-  if (CONFIG.FILTERING.BY_BRAND.ENABLED && 
-      context.filterByActiveBrands && 
-      context.activeBrandNames && 
-      context.activeBrandNames.length > 0 && 
+  if (CONFIG.FILTERING.BY_BRAND.ENABLED &&
+      context.filterByActiveBrands &&
+      context.activeBrandNames &&
+      context.activeBrandNames.length > 0 &&
       product.brand) {
-    
+
     const brandMatches = context.activeBrandNames.some(
       activeBrand => product.brand?.toLowerCase().includes(activeBrand.toLowerCase()) || false
     );
-    
+
     if (!brandMatches) {
       return false;
     }
   }
-  
+
   // Filter by own products
   if (CONFIG.FILTERING.BY_OWN_PRODUCTS.ENABLED && context.scrapeOnlyOwnProducts) {
     // Check if product matches by EAN
-    const eanMatch = product.ean && 
-                     context.ownProductEans && 
+    const eanMatch = product.ean &&
+                     context.ownProductEans &&
                      context.ownProductEans.includes(product.ean);
-    
+
     // Check if product matches by SKU+Brand
-    const skuBrandMatch = product.sku && 
+    const skuBrandMatch = product.sku &&
                           product.brand &&
                           context.ownProductSkuBrands &&
                           context.ownProductSkuBrands.some(item =>
                             item.sku === product.sku &&
                             item.brand.toLowerCase() === (product.brand?.toLowerCase() || '')
                           );
-    
+
     if (!eanMatch && !skuBrandMatch) {
       return false;
     }
   }
-  
+
   // All filters passed
   return true;
 }
@@ -850,12 +874,12 @@ function productPassesFilters(product: ScrapedProductData, context: ScriptContex
  */
 async function scrape(context: ScriptContext): Promise<void> {
   // Configure Crawlee storage first
-  let crawleeMemoryConfig: Configuration;
   try {
-    crawleeMemoryConfig = configureCrawleeStorage();
-  } catch (configError) {
+    configureCrawleeStorage();
+    // We don't need to pass this to the crawler anymore in newer Crawlee versions
+  } catch (_configError) {
     console.error("CRITICAL ERROR: Crawlee storage configuration failed. Exiting.");
-    process.exit(1);
+    throw new Error("Crawlee storage configuration failed");
   }
 
   logProgress("Scrape function started");
@@ -864,15 +888,26 @@ async function scrape(context: ScriptContext): Promise<void> {
   const isTestRun = context.isTestRun ?? false;
   const isValidation = context.isValidation ?? false;
   const filterByActiveBrands = context.filterByActiveBrands ?? false;
-  const activeBrandNames = context.activeBrandNames || [];
   const scrapeOnlyOwnProducts = context.scrapeOnlyOwnProducts ?? false;
-  const ownProductEans = context.ownProductEans || [];
-  const ownProductSkuBrands = context.ownProductSkuBrands || [];
 
   // Update the filtering configuration from context
   CONFIG.FILTERING.ENABLED = filterByActiveBrands || scrapeOnlyOwnProducts;
   CONFIG.FILTERING.BY_BRAND.ENABLED = filterByActiveBrands;
   CONFIG.FILTERING.BY_OWN_PRODUCTS.ENABLED = scrapeOnlyOwnProducts;
+
+  // Update filter data in CONFIG
+  if (filterByActiveBrands && context.activeBrandNames) {
+    CONFIG.FILTERING.BY_BRAND.BRANDS = context.activeBrandNames;
+  }
+
+  if (scrapeOnlyOwnProducts) {
+    if (context.ownProductEans) {
+      CONFIG.FILTERING.BY_OWN_PRODUCTS.EANS = context.ownProductEans;
+    }
+    if (context.ownProductSkuBrands) {
+      CONFIG.FILTERING.BY_OWN_PRODUCTS.SKU_BRANDS = context.ownProductSkuBrands;
+    }
+  }
 
   logProgress(`Context: isTestRun=${isTestRun}, isValidation=${isValidation}, filterByActiveBrands=${filterByActiveBrands}`, 1);
 
@@ -880,12 +915,12 @@ async function scrape(context: ScriptContext): Promise<void> {
     // Collection phase
     let productUrls: string[] = [];
     let apiProducts: ScrapedProductData[] = [];
-    
+
     if (CONFIG.COLLECTION_STRATEGY.TYPE === 'api') {
       // Collect products via API
       logProgress('Starting product collection via API', 1);
       apiProducts = await fetchProductsFromApi(isTestRun, isValidation);
-      
+
       // Process API products
       const processedProducts: ScrapedProductData[] = [];
       for (const product of apiProducts) {
@@ -893,61 +928,79 @@ async function scrape(context: ScriptContext): Promise<void> {
           processedProducts.push(product);
         }
       }
-      
+
       // Write products to output
       for (const product of processedProducts) {
         console.log(JSON.stringify(product));
       }
-      
+
       logProgress(`API collection complete. Processed ${processedProducts.length} products.`, 2);
       return; // API collection is complete, return early
     } else {
       // Collect product URLs via scraping
       logProgress('Starting product URL collection via scraping', 1);
       productUrls = await discoverProductUrls(isTestRun || isValidation);
-      
+
       // Limit URLs for test/validation runs
       if (isTestRun || isValidation) {
         const limit = CONFIG.TEST_SETTINGS.TEST_MODE_LIMIT;
         productUrls = productUrls.slice(0, limit);
         logProgress(`Test/validation mode: limited to ${limit} URLs`);
       }
-      
+
       logProgress(`Collected ${productUrls.length} product URLs for scraping.`, 1);
     }
-    
+
     // Abort if no URLs found
     if (productUrls.length === 0) {
       logProgress(`No product URLs found to process. Exiting.`, 1);
       return;
     }
-    
+
     // Prepare for product scraping
     logProgress(`Phase 2: Starting product data extraction for ${productUrls.length} URLs`, 2);
-    
+
     // Track progress
     let processedCount = 0;
     let batchCount = 0;
     const totalUrls = productUrls.length;
     const batchSize = CONFIG.PERFORMANCE.BATCH_SIZE;
-    
+
     // Track products for batch processing
     const processedProducts: ScrapedProductData[] = [];
-    
+
     // Set up progress reporting
     const progressInterval = setInterval(() => {
       logProgress(`Phase 2: Processing products: ${processedCount}/${totalUrls} (Batch: ${batchCount})`, 2);
     }, 5000);
-    
-    // Configure crawler for product page scraping
+
+    // Calculate optimal concurrency based on system resources
+    const optimalConcurrency = Math.min(
+      Math.max(2, os.cpus().length * 2), // 2 concurrent requests per CPU core, minimum 2
+      CONFIG.PERFORMANCE.MAX_CONCURRENCY // But never exceed the configured maximum
+    );
+
+    logProgress(`Using dynamic concurrency: ${optimalConcurrency} concurrent requests for product extraction`, 2);
+
+    // Initialize a request queue for product extraction
+    const requestQueue = await RequestQueue.open();
+
+    // Add all product URLs to the queue
+    for (const url of productUrls) {
+      await requestQueue.addRequest({
+        url,
+        userData: { label: 'PRODUCT' }
+      });
+    }
+
+    // Configure crawler for product page scraping with optimized settings
     const crawler = new CheerioCrawler({
-      // Use the configuration for memory-only storage
-      maxConcurrency: CONFIG.PERFORMANCE.MAX_CONCURRENCY,
+      requestQueue,
+      maxConcurrency: optimalConcurrency,
       requestHandlerTimeoutSecs: CONFIG.PERFORMANCE.REQUEST_TIMEOUT,
-      navigationTimeoutSecs: CONFIG.PERFORMANCE.REQUEST_TIMEOUT,
       maxRequestRetries: CONFIG.PERFORMANCE.MAX_RETRIES,
-      
-      // Add session pool for better handling of rate limiting
+
+      // Use session pool for better handling of rate limiting
       useSessionPool: true,
       sessionPoolOptions: {
         maxPoolSize: 20,
@@ -955,42 +1008,45 @@ async function scrape(context: ScriptContext): Promise<void> {
           maxUsageCount: 50,
         },
       },
-      
-      // Rate limiting
+
+      // Implement rate limiting
       maxRequestsPerMinute: CONFIG.PERFORMANCE.MAX_REQUESTS_PER_MINUTE,
-      
-      // Request delay if configured
+
+      // Optimize memory usage
+      additionalMimeTypes: ['application/ld+json'],
+
+      // Main request handler
       requestHandler: async ({ request, $, log }) => {
         const { url } = request;
-        
+
         log.info(`Processing product page: ${url}`);
-        
+
         try {
           // Extract product data
           const productData = await extractProductData($, url);
-          
+
           if (productData) {
             // Apply filtering
             if (productPassesFilters(productData, context)) {
               processedProducts.push(productData);
-              
+
               // Increment processed count for progress reporting
               processedCount++;
-              
+
               // Check if we've reached the batch size
               if (processedProducts.length >= batchSize) {
                 // Write the batch to stdout (which will be captured by PriceTracker)
                 logProgress(`Writing batch ${++batchCount} with ${processedProducts.length} products`, 2);
-                
+
                 // Output each product in the batch
                 for (const product of processedProducts) {
                   console.log(JSON.stringify(product));
                 }
-                
+
                 // Clear the batch
                 processedProducts.length = 0;
               }
-              
+
               // Report progress every 10 products
               if (processedCount % 10 === 0) {
                 logProgress(`Processed ${processedCount}/${totalUrls} products`, 2);
@@ -1003,42 +1059,40 @@ async function scrape(context: ScriptContext): Promise<void> {
           logError(`Error processing product ${url}`, error);
         }
       },
-      
+
+      // Handle failed requests
       failedRequestHandler: async ({ request, error }) => {
-        logError(`Request ${request.url} failed: ${error.message}`);
+        logError(`Request ${request.url} failed: ${error instanceof Error ? error.message : String(error)}`);
+
+        // Increment processed count to maintain accurate progress reporting
+        processedCount++;
       }
-    }, crawleeMemoryConfig);
-    
-    // Prepare product requests
-    const initialRequests = productUrls.map(url => ({
-      url,
-      userData: { label: 'PRODUCT' }
-    }));
-    
+    });
+
     try {
       // Start the crawler
-      await crawler.run(initialRequests);
+      await crawler.run();
     } finally {
       // Clear the progress interval
       clearInterval(progressInterval);
-      
+
       // Process any remaining products in the batch
       if (processedProducts.length > 0) {
         logProgress(`Writing final batch with ${processedProducts.length} products`, 2);
-        
+
         // Output each remaining product
         for (const product of processedProducts) {
           console.log(JSON.stringify(product));
         }
-        
+
         // Clear the batch
         processedProducts.length = 0;
         batchCount++;
       }
     }
-    
+
     logProgress(`Crawler finished. Processed ${processedCount} products in ${batchCount} batches.`, 2);
-    
+
   } catch (error) {
     logError("Error in web scraping", error);
     throw error;
@@ -1052,7 +1106,7 @@ async function scrape(context: ScriptContext): Promise<void> {
 // Process command line arguments
 const argv = yargs(hideBin(process.argv))
   .command('metadata', 'Output scraper metadata as JSON')
-  .command('scrape', 'Run the scraper', (yargs: any) => {
+  .command('scrape', 'Run the scraper', (yargs) => {
     return yargs.option('context', {
       type: 'string',
       description: 'JSON string containing execution context',
@@ -1071,12 +1125,11 @@ const argv = yargs(hideBin(process.argv))
       console.log(JSON.stringify(getMetadata()));
     } catch (e) {
       logError('Error generating metadata', e);
-      process.exit(1);
+      throw e; // Let the outer catch handle this
     }
   } else if (argv._[0] === 'scrape') {
     if (!argv.context) {
-      logError('Missing --context argument for scrape command');
-      process.exit(1);
+      throw new Error('Missing --context argument for scrape command');
     }
 
     try {
@@ -1097,17 +1150,16 @@ const argv = yargs(hideBin(process.argv))
       }
 
       await scrape(contextData);
-      process.exit(0);
     } catch (e) {
       if (e instanceof SyntaxError) {
         logError('Failed to parse context JSON', e);
       } else {
         logError('Unhandled error during scrape execution', e);
       }
-      process.exit(1);
+      throw e; // Let the outer catch handle this
     }
   }
 })().catch(e => {
   logError('Unhandled top-level error', e);
-  process.exit(1);
+  throw e; // This will cause the process to exit with a non-zero code
 });
