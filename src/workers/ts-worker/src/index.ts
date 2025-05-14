@@ -698,33 +698,42 @@ async function fetchAndProcessJob() {
 
                         // Convert to string for storage
                         errorDetails = JSON.stringify(errorDetailsObj, null, 2);
+                    } else {
+                        // Script exited with code 0 and no errors - mark as completed
+                        finalStatus = 'completed';
+                        logStructured(job.id, 'info', 'JOB_COMPLETION', `Job completed successfully. Total products processed: ${productCount}`);
                     }
 
-                    // Log the error
-                    logStructured(job.id, 'error', 'JOB_COMPLETION', errorMessage || 'Unknown error');
+                    // Only log errors if there are any
+                    if (finalStatus === 'failed' && errorMessage) {
+                        // Log the error
+                        logStructured(job.id, 'error', 'JOB_COMPLETION', errorMessage);
 
-                    // Log a summary of the error details
-                    if (scriptErrors.length > 0) {
-                        logStructured(job.id, 'error', 'JOB_COMPLETION', `Script reported ${scriptErrors.length} errors. First error: ${scriptErrors[0]}`);
+                        // Log a summary of the error details
+                        if (scriptErrors.length > 0) {
+                            logStructured(job.id, 'error', 'JOB_COMPLETION', `Script reported ${scriptErrors.length} errors. First error: ${scriptErrors[0]}`);
+                        }
                     }
 
-                    // Extract relevant lines from stderr for logging
-                    const stderrLines = stderrData.split('\n').filter(Boolean);
-                    if (stderrLines.length > 0) {
-                        const relevantLines = stderrLines.filter((line: string) =>
-                            line.includes("Error") ||
-                            line.includes("error") ||
-                            line.includes("Exception") ||
-                            line.includes("exception") ||
-                            line.includes("SyntaxError") ||
-                            line.includes("ReferenceError") ||
-                            line.includes("TypeError")
-                        );
+                    // Only extract and log stderr lines if the job failed
+                    if (finalStatus === 'failed') {
+                        const stderrLines = stderrData.split('\n').filter(Boolean);
+                        if (stderrLines.length > 0) {
+                            const relevantLines = stderrLines.filter((line: string) =>
+                                line.includes("Error") ||
+                                line.includes("error") ||
+                                line.includes("Exception") ||
+                                line.includes("exception") ||
+                                line.includes("SyntaxError") ||
+                                line.includes("ReferenceError") ||
+                                line.includes("TypeError")
+                            );
 
-                        if (relevantLines.length > 0) {
-                            logStructured(job.id, 'error', 'JOB_COMPLETION', `Relevant stderr output:\n${relevantLines.slice(0, 5).join('\n')}`);
-                        } else {
-                            logStructured(job.id, 'error', 'JOB_COMPLETION', `Stderr Output (first 5 lines):\n${stderrLines.slice(0, 5).join('\n')}`);
+                            if (relevantLines.length > 0) {
+                                logStructured(job.id, 'error', 'JOB_COMPLETION', `Relevant stderr output:\n${relevantLines.slice(0, 5).join('\n')}`);
+                            } else {
+                                logStructured(job.id, 'error', 'JOB_COMPLETION', `Stderr Output (first 5 lines):\n${stderrLines.slice(0, 5).join('\n')}`);
+                            }
                         }
                     }
 
