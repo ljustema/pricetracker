@@ -93,27 +93,91 @@ export async function POST(request: NextRequest) {
     // Convert the NextAuth user ID to a UUID
     const userId = ensureUUID(session.user.id);
 
-    // Try to create the user in auth.users if needed
-    try {
-      // Use ON CONFLICT DO NOTHING in the RPC function to handle duplicates gracefully
-      const { error: createUserError } = await supabase.rpc("create_user_for_nextauth", {
-        user_id: userId,
-        email: session.user.email || "",
-        name: session.user.name || "",
-      });
+    // First, check if the user exists in auth.users
+    const { data: authUser, error: authUserError } = await supabase
+      .from("auth.users")
+      .select("id")
+      .eq("id", userId)
+      .single();
 
-      // Only log errors that aren't related to duplicate keys
-      if (createUserError && !createUserError.message.includes('duplicate key')) {
-        console.error("Error creating user in auth.users:", createUserError);
+    // If the user doesn't exist in auth.users, create one
+    if (!authUser || authUserError) {
+      console.log("User not found in auth.users, creating one...");
+
+      try {
+        // Directly insert into auth.users
+        const { error: insertError } = await supabase
+          .from("auth.users")
+          .insert({
+            id: userId,
+            email: session.user.email || "",
+            raw_user_meta_data: { name: session.user.name || "" },
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          });
+
+        if (insertError) {
+          console.error("Error inserting into auth.users:", insertError);
+
+          // If it's not a duplicate key error, return an error response
+          if (!insertError.message.includes('duplicate key')) {
+            return NextResponse.json(
+              { error: "Failed to create user in auth.users: " + insertError.message },
+              { status: 500 }
+            );
+          }
+        }
+
+        // Also ensure the user exists in next_auth.users
+        const { data: nextAuthUser, error: nextAuthUserError } = await supabase
+          .from("next_auth.users")
+          .select("id")
+          .eq("id", userId)
+          .single();
+
+        if (!nextAuthUser || nextAuthUserError) {
+          const { error: nextAuthInsertError } = await supabase
+            .from("next_auth.users")
+            .insert({
+              id: userId,
+              name: session.user.name || "",
+              email: session.user.email || "",
+              "emailVerified": new Date().toISOString(),
+              image: session.user.image || ""
+            });
+
+          if (nextAuthInsertError && !nextAuthInsertError.message.includes('duplicate key')) {
+            console.error("Error inserting into next_auth.users:", nextAuthInsertError);
+          }
+        }
+
+        // Also ensure the user has a profile
+        const { data: userProfile, error: userProfileError } = await supabase
+          .from("user_profiles")
+          .select("id")
+          .eq("id", userId)
+          .single();
+
+        if (!userProfile || userProfileError) {
+          const { error: profileInsertError } = await supabase
+            .from("user_profiles")
+            .insert({
+              id: userId,
+              name: session.user.name || "",
+              avatar_url: session.user.image || ""
+            });
+
+          if (profileInsertError && !profileInsertError.message.includes('duplicate key')) {
+            console.error("Error inserting into user_profiles:", profileInsertError);
+          }
+        }
+      } catch (error) {
+        console.error("Error in user creation process:", error);
         return NextResponse.json(
-          { error: "Failed to create user in auth.users: " + createUserError.message },
+          { error: "Failed to create user: " + (error instanceof Error ? error.message : String(error)) },
           { status: 500 }
         );
       }
-    } catch (error) {
-      // Catch any unexpected errors but continue with competitor creation
-      console.error("Error in user creation process:", error);
-      // We'll continue with competitor creation even if user creation fails
     }
 
     // Insert the new competitor
