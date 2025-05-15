@@ -60,10 +60,10 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
         if (insertError) {
           console.error("Error inserting into auth.users:", insertError);
 
-          // If it's not a duplicate key error, return an error response
-          if (!insertError.message.includes('duplicate key')) {
+          // Check if insertError.message exists before trying to use it
+          if (!insertError.message || !insertError.message.includes('duplicate key')) {
             return NextResponse.json(
-              { error: "Failed to create user in auth.users: " + insertError.message },
+              { error: "Failed to create user in auth.users: " + JSON.stringify(insertError) },
               { status: 500 }
             );
           }
@@ -87,7 +87,7 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
               image: session.user.image || ""
             });
 
-          if (nextAuthInsertError && !nextAuthInsertError.message.includes('duplicate key')) {
+          if (nextAuthInsertError && nextAuthInsertError.message && !nextAuthInsertError.message.includes('duplicate key')) {
             console.error("Error inserting into next_auth.users:", nextAuthInsertError);
           }
         }
@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
               avatar_url: session.user.image || ""
             });
 
-          if (profileInsertError && !profileInsertError.message.includes('duplicate key')) {
+          if (profileInsertError && profileInsertError.message && !profileInsertError.message.includes('duplicate key')) {
             console.error("Error inserting into user_profiles:", profileInsertError);
           }
         }

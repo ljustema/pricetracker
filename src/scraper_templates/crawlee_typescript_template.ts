@@ -115,11 +115,11 @@ const CONFIG = {
   // Performance settings
   PERFORMANCE: {
     MAX_CONCURRENCY: 10, // Maximum number of concurrent requests
-    BATCH_SIZE: 100, // Number of products to process before writing a batch
+    BATCH_SIZE: 500, // Number of products to process before writing a batch
     REQUEST_TIMEOUT: 60, // Timeout in seconds for each request
     MAX_RETRIES: 3, // Maximum number of retries for failed requests
-    REQUEST_DELAY: 0, // Delay between requests in milliseconds (0 for no delay)
-    MAX_REQUESTS_PER_MINUTE: 180, // Rate limiting
+    REQUEST_DELAY: 100, // Delay between requests in milliseconds (0 for no delay)
+    MAX_REQUESTS_PER_MINUTE: 1000, // Rate limiting
   },
 
   // Filtering settings
@@ -369,9 +369,10 @@ async function discoverProductUrlsFromSitemap(isTestRun: boolean): Promise<strin
 
     logProgress(`Found ${productSitemapUrls.length} product sitemaps in the sitemap index`, 1);
 
-    // For test/validation runs, just use the first sitemap
-    const sitemapsToProcess = isTestRun
-      ? [productSitemapUrls[0]]
+    // For test runs, we still want to process all sitemaps to get a diverse set of products
+    // but we'll limit the number of sitemaps to process for efficiency
+    const sitemapsToProcess = isTestRun && productSitemapUrls.length > 1
+      ? productSitemapUrls.slice(0, 2) // Process at most 2 sitemaps for test runs
       : productSitemapUrls;
 
     if (sitemapsToProcess.length === 0) {
@@ -379,20 +380,12 @@ async function discoverProductUrlsFromSitemap(isTestRun: boolean): Promise<strin
     }
 
     // Process sitemaps in parallel for better performance
-    if (isTestRun) {
-      // For test runs, just process the first sitemap
-      const productUrls = await fetchSitemapUrls(sitemapsToProcess[0]);
-      logProgress(`Found ${productUrls.length} URLs from first sitemap for test run`, 1);
-      return productUrls;
-    } else {
-      // For full runs, process all sitemaps in parallel
-      logProgress(`Processing ${sitemapsToProcess.length} sitemaps in parallel for maximum performance`, 1);
-      const urlPromises = sitemapsToProcess.map(url => fetchSitemapUrls(url));
-      const urlResults = await Promise.all(urlPromises);
-      const allUrls = urlResults.flat();
-      logProgress(`Parallel processing complete. Found ${allUrls.length} total product URLs across all sitemaps`, 1);
-      return allUrls;
-    }
+    logProgress(`Processing ${sitemapsToProcess.length} sitemaps in parallel for maximum performance`, 1);
+    const urlPromises = sitemapsToProcess.map(url => fetchSitemapUrls(url));
+    const urlResults = await Promise.all(urlPromises);
+    const allUrls = urlResults.flat();
+    logProgress(`Parallel processing complete. Found ${allUrls.length} total product URLs across all sitemaps`, 1);
+    return allUrls;
   } catch (error) {
     logError(`Error discovering product URLs from sitemap`, error);
     return [];
@@ -449,22 +442,38 @@ async function discoverProductUrlsFromCategories(): Promise<string[]> {
  */
 async function discoverProductUrls(isTestRun: boolean): Promise<string[]> {
   const method = CONFIG.COLLECTION_STRATEGY.SCRAPING.URL_DISCOVERY.METHOD;
+  let productUrls: string[] = [];
 
   switch (method) {
     case 'sitemap':
-      return discoverProductUrlsFromSitemap(isTestRun);
+      productUrls = await discoverProductUrlsFromSitemap(isTestRun);
+      break;
     case 'brand-pages':
-      return discoverProductUrlsFromBrandPages();
+      productUrls = await discoverProductUrlsFromBrandPages();
+      break;
     case 'category':
-      return discoverProductUrlsFromCategories();
+      productUrls = await discoverProductUrlsFromCategories();
+      break;
     case 'custom':
       // Implement your custom URL discovery logic here
       logError('Custom URL discovery method not implemented');
-      return [];
+      break;
     default:
       logError(`Unknown URL discovery method: ${method}`);
-      return [];
+      break;
   }
+
+  if (isTestRun && productUrls.length > 0) {
+    const testLimit = CONFIG.TEST_SETTINGS.TEST_MODE_LIMIT;
+    logProgress(`Test mode: selecting ${testLimit} random URLs`, 1);
+
+    // Shuffle the array and take the first testLimit items
+    // This is more efficient than creating a new array with random selections
+    const shuffledUrls = [...productUrls].sort(() => Math.random() - 0.5);
+    return shuffledUrls.slice(0, testLimit);
+  }
+
+  return productUrls;
 }
 
 // ------------------------------------ //
@@ -941,13 +950,7 @@ async function scrape(context: ScriptContext): Promise<void> {
       logProgress('Starting product URL collection via scraping', 1);
       productUrls = await discoverProductUrls(isTestRun || isValidation);
 
-      // Limit URLs for test/validation runs
-      if (isTestRun || isValidation) {
-        const limit = CONFIG.TEST_SETTINGS.TEST_MODE_LIMIT;
-        productUrls = productUrls.slice(0, limit);
-        logProgress(`Test/validation mode: limited to ${limit} URLs`);
-      }
-
+      // The random selection for test/validation runs is now handled in discoverProductUrls
       logProgress(`Collected ${productUrls.length} product URLs for scraping.`, 1);
     }
 
