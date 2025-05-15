@@ -42,7 +42,7 @@ export default function ScraperTypeSelector({ onSelect }: ScraperTypeSelectorPro
             <div className="flex-1">
               <div className="flex items-center">
                 <BrainCircuitIcon className="h-5 w-5 mr-2 text-indigo-600" />
-                <label htmlFor="ai" className="font-medium text-gray-900">AI-Generated Scraper</label>
+                <label htmlFor="ai" className="font-medium text-gray-900">AI-Generated Scraper (Coming soon...)</label>
               </div>
               <p className="text-sm text-gray-500 mt-1">
                 Let our AI analyze the website and generate a TypeScript scraper for you. Best for standard e-commerce sites.

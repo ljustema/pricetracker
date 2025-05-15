@@ -204,7 +204,7 @@ export default function ScraperManager({
         return (
           <div className="w-full max-w-8xl mx-auto rounded-lg border border-gray-200 bg-white shadow-sm">
             <div className="border-b border-gray-200 px-6 py-4">
-              <h2 className="text-lg font-medium text-gray-900">Create AI-Generated Scraper</h2>
+              <h2 className="text-lg font-medium text-gray-900">Create AI-Generated Scraper (Coming soon..)</h2>
               <p className="mt-1 text-sm text-gray-500">
                 Let our AI analyze the website and generate a TypeScript Crawlee scraper for you. Ideal for standard e-commerce sites.
               </p>
