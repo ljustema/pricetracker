@@ -93,99 +93,68 @@ export async function POST(request: NextRequest) {
     // Convert the NextAuth user ID to a UUID
     const userId = ensureUUID(session.user.id);
 
-    // First, check if the user exists in auth.users
-    const { data: authUser, error: authUserError } = await supabase
-      .from("auth.users")
-      .select("id")
-      .eq("id", userId)
-      .single();
+    // Skip checking auth.users and focus on ensuring the user profile exists
+    // The auth.users table is managed by Supabase Auth and shouldn't be directly modified
+    try {
+      // Ensure the user has a profile in user_profiles
+      const { data: userProfile, error: userProfileError } = await supabase
+        .from("user_profiles")
+        .select("id")
+        .eq("id", userId)
+        .single();
 
-    // If the user doesn't exist in auth.users, create one
-    if (!authUser || authUserError) {
-      console.log("User not found in auth.users, creating one...");
+      if (!userProfile || userProfileError) {
+        console.log("User profile not found, creating one...");
 
-      try {
-        // Directly insert into auth.users
-        const { error: insertError } = await supabase
-          .from("auth.users")
+        // Create user profile
+        const { error: profileInsertError } = await supabase
+          .from("user_profiles")
           .insert({
             id: userId,
-            email: session.user.email || "",
-            raw_user_meta_data: { name: session.user.name || "" },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
+            name: session.user.name || "",
+            avatar_url: session.user.image || "",
+            email: session.user.email || ""
           });
 
-        if (insertError) {
-          console.error("Error inserting into auth.users:", insertError);
+        if (profileInsertError) {
+          console.error("Error creating user profile:", profileInsertError);
+
+          // Check if it's an empty object
+          const isEmptyObject = typeof profileInsertError === 'object' &&
+                               Object.keys(profileInsertError).length === 0;
 
           // If it's not a duplicate key error, return an error response
-          // Safely check if message property exists and contains 'duplicate key'
-          if (!insertError.message || !insertError.message.includes('duplicate key')) {
-            const errorMessage = insertError.message || JSON.stringify(insertError);
+          if (isEmptyObject || !profileInsertError.message || !profileInsertError.message.includes('duplicate key')) {
+            // Try to get a meaningful error message, or default to a generic one
+            let errorMessage;
+            if (isEmptyObject) {
+              errorMessage = "Unknown database error occurred";
+            } else {
+              errorMessage = profileInsertError.message || profileInsertError.details ||
+                            profileInsertError.hint || JSON.stringify(profileInsertError);
+            }
+
+            console.error("Returning error to client:", errorMessage);
+
             return NextResponse.json(
-              { error: "Failed to create user in auth.users: " + errorMessage },
+              { error: "Failed to create user profile: " + errorMessage },
               { status: 500 }
             );
           }
         }
-
-        // Also ensure the user exists in next_auth.users
-        const { data: nextAuthUser, error: nextAuthUserError } = await supabase
-          .from("next_auth.users")
-          .select("id")
-          .eq("id", userId)
-          .single();
-
-        if (!nextAuthUser || nextAuthUserError) {
-          const { error: nextAuthInsertError } = await supabase
-            .from("next_auth.users")
-            .insert({
-              id: userId,
-              name: session.user.name || "",
-              email: session.user.email || "",
-              "emailVerified": new Date().toISOString(),
-              image: session.user.image || ""
-            });
-
-          if (nextAuthInsertError && (!nextAuthInsertError.message || !nextAuthInsertError.message.includes('duplicate key'))) {
-            console.error("Error inserting into next_auth.users:", nextAuthInsertError);
-          }
-        }
-
-        // Also ensure the user has a profile
-        const { data: userProfile, error: userProfileError } = await supabase
-          .from("user_profiles")
-          .select("id")
-          .eq("id", userId)
-          .single();
-
-        if (!userProfile || userProfileError) {
-          const { error: profileInsertError } = await supabase
-            .from("user_profiles")
-            .insert({
-              id: userId,
-              name: session.user.name || "",
-              avatar_url: session.user.image || ""
-            });
-
-          if (profileInsertError && (!profileInsertError.message || !profileInsertError.message.includes('duplicate key'))) {
-            console.error("Error inserting into user_profiles:", profileInsertError);
-          }
-        }
-      } catch (error) {
-        console.error("Error in user creation process:", error);
-        // Provide more detailed error information
-        const errorDetails = error instanceof Error
-          ? { message: error.message, stack: error.stack }
-          : { rawError: String(error) };
-        console.error("Error details:", JSON.stringify(errorDetails));
-
-        return NextResponse.json(
-          { error: "Failed to create user: " + (error instanceof Error ? error.message : String(error)) },
-          { status: 500 }
-        );
       }
+    } catch (error) {
+      console.error("Error in user profile creation process:", error);
+      // Provide more detailed error information
+      const errorDetails = error instanceof Error
+        ? { message: error.message, stack: error.stack }
+        : { rawError: String(error) };
+      console.error("Error details:", JSON.stringify(errorDetails));
+
+      return NextResponse.json(
+        { error: "Failed to create user profile: " + (error instanceof Error ? error.message : String(error)) },
+        { status: 500 }
+      );
     }
 
     // Insert the new competitor
