@@ -120,9 +120,11 @@ export async function POST(request: NextRequest) {
           console.error("Error inserting into auth.users:", insertError);
 
           // If it's not a duplicate key error, return an error response
-          if (!insertError.message.includes('duplicate key')) {
+          // Safely check if message property exists and contains 'duplicate key'
+          if (!insertError.message || !insertError.message.includes('duplicate key')) {
+            const errorMessage = insertError.message || JSON.stringify(insertError);
             return NextResponse.json(
-              { error: "Failed to create user in auth.users: " + insertError.message },
+              { error: "Failed to create user in auth.users: " + errorMessage },
               { status: 500 }
             );
           }
@@ -146,7 +148,7 @@ export async function POST(request: NextRequest) {
               image: session.user.image || ""
             });
 
-          if (nextAuthInsertError && !nextAuthInsertError.message.includes('duplicate key')) {
+          if (nextAuthInsertError && (!nextAuthInsertError.message || !nextAuthInsertError.message.includes('duplicate key'))) {
             console.error("Error inserting into next_auth.users:", nextAuthInsertError);
           }
         }
@@ -167,12 +169,18 @@ export async function POST(request: NextRequest) {
               avatar_url: session.user.image || ""
             });
 
-          if (profileInsertError && !profileInsertError.message.includes('duplicate key')) {
+          if (profileInsertError && (!profileInsertError.message || !profileInsertError.message.includes('duplicate key'))) {
             console.error("Error inserting into user_profiles:", profileInsertError);
           }
         }
       } catch (error) {
         console.error("Error in user creation process:", error);
+        // Provide more detailed error information
+        const errorDetails = error instanceof Error
+          ? { message: error.message, stack: error.stack }
+          : { rawError: String(error) };
+        console.error("Error details:", JSON.stringify(errorDetails));
+
         return NextResponse.json(
           { error: "Failed to create user: " + (error instanceof Error ? error.message : String(error)) },
           { status: 500 }
