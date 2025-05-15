@@ -34,92 +34,7 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
     // Convert the NextAuth user ID to a UUID
     const userId = ensureUUID(session.user.id);
 
-    // Check if the user exists in the auth.users table
-    const { data: authUser, error: authUserError } = await supabase
-      .from("auth.users")
-      .select("id")
-      .eq("id", userId)
-      .single();
-
-    // If the user doesn't exist in auth.users, create one
-    if (!authUser || authUserError) {
-      console.log("User not found in auth.users, creating one...");
-
-      try {
-        // Directly insert into auth.users
-        const { error: insertError } = await supabase
-          .from("auth.users")
-          .insert({
-            id: userId,
-            email: session.user.email || "",
-            raw_user_meta_data: { name: session.user.name || "" },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          });
-
-        if (insertError) {
-          console.error("Error inserting into auth.users:", insertError);
-
-          // Check if insertError.message exists before trying to use it
-          if (!insertError.message || !insertError.message.includes('duplicate key')) {
-            return NextResponse.json(
-              { error: "Failed to create user in auth.users: " + JSON.stringify(insertError) },
-              { status: 500 }
-            );
-          }
-        }
-
-        // Also ensure the user exists in next_auth.users
-        const { data: nextAuthUser, error: nextAuthUserError } = await supabase
-          .from("next_auth.users")
-          .select("id")
-          .eq("id", userId)
-          .single();
-
-        if (!nextAuthUser || nextAuthUserError) {
-          const { error: nextAuthInsertError } = await supabase
-            .from("next_auth.users")
-            .insert({
-              id: userId,
-              name: session.user.name || "",
-              email: session.user.email || "",
-              "emailVerified": new Date().toISOString(),
-              image: session.user.image || ""
-            });
-
-          if (nextAuthInsertError && nextAuthInsertError.message && !nextAuthInsertError.message.includes('duplicate key')) {
-            console.error("Error inserting into next_auth.users:", nextAuthInsertError);
-          }
-        }
-
-        // Also ensure the user has a profile
-        const { data: userProfile, error: userProfileError } = await supabase
-          .from("user_profiles")
-          .select("id")
-          .eq("id", userId)
-          .single();
-
-        if (!userProfile || userProfileError) {
-          const { error: profileInsertError } = await supabase
-            .from("user_profiles")
-            .insert({
-              id: userId,
-              name: session.user.name || "",
-              avatar_url: session.user.image || ""
-            });
-
-          if (profileInsertError && profileInsertError.message && !profileInsertError.message.includes('duplicate key')) {
-            console.error("Error inserting into user_profiles:", profileInsertError);
-          }
-        }
-      } catch (error) {
-        console.error("Error in user creation process:", error);
-        return NextResponse.json(
-          { error: "Failed to create user: " + (error instanceof Error ? error.message : String(error)) },
-          { status: 500 }
-        );
-      }
-    }
+    // User creation is now handled by the get_products_filtered_with_user_check function
 
     // --- Start: Product Fetching Logic using RPC ---
 
@@ -147,12 +62,12 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       p_price_higher_than_competitors: body.price_higher_than_competitors === true ? true : null
     };
 
-    // Try to execute the RPC call, but fall back to a direct query if it fails
+    // Try to execute the RPC call with user check, but fall back to a direct query if it fails
     try {
-      const { data: rpcResult, error } = await supabase.rpc('get_products_filtered', rpcParams);
+      const { data: rpcResult, error } = await supabase.rpc('get_products_filtered_with_user_check', rpcParams);
 
       if (error) {
-        console.error("Error calling get_products_filtered RPC:", error);
+        console.error("Error calling get_products_filtered_with_user_check RPC:", error);
         throw error;
       }
 
