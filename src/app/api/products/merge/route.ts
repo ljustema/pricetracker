@@ -107,14 +107,14 @@ export async function POST(request: NextRequest) {
         console.log("Related record counts:", JSON.stringify(relatedCounts, null, 2));
       }
 
-      // Call the merge function with a reasonable timeout
+      // Call the merge function
       const { data: result, error: mergeError } = await supabase.rpc(
         "merge_products_api",
         {
           primary_id: primaryId,
           duplicate_id: duplicateId
         }
-      ).timeout(120000); // 2 minute timeout
+      );
 
       if (mergeError) {
         console.error("Error calling merge_products_api function:", mergeError);
