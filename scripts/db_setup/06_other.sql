@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-05-13 18:12:56
+-- Generated: 2025-05-16 15:00:54
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -474,6 +474,14 @@ END;
 
 $$;
 
+EXCEPTION WHEN OTHERS THEN
+  -- Log the error but don't fail
+  RAISE WARNING 'Error ensuring user exists: %', SQLERRM;
+
+END;
+
+$$;
+
 BEGIN
   -- First try to find by exact brand name
   SELECT id INTO v_brand_id
@@ -633,228 +641,6 @@ RETURN brand_id_result;
 END;
 
 $$;
-
-END;
-
-$$;
-
-_count_query text;
-
-_offset integer;
-
-_limit integer;
-
-_sort_direction text;
-
-_allowed_sort_columns text[] := ARRAY['name', 'sku', 'ean', 'brand', 'category', 'our_price', 'cost_price', 'created_at', 'updated_at'];
-
-_safe_sort_by text;
-
-_result json;
-
-_total_count bigint;
-
-BEGIN
-    -- Calculate offset and limit
-    _offset := (p_page - 1) * p_page_size;
-
-_limit := p_page_size;
-
--- Validate sort_by parameter to prevent null field name error
-    IF p_sort_by IS NULL OR p_sort_by = '' THEN
-        _safe_sort_by := 'created_at';
-
-ELSIF p_sort_by = ANY(_allowed_sort_columns) THEN
-        _safe_sort_by := p_sort_by;
-
-ELSE
-        _safe_sort_by := 'created_at'; -- Default sort column
-    END IF;
-
--- Validate and sanitize sort direction
-    IF p_sort_order IS NULL OR p_sort_order = '' THEN
-        _sort_direction := 'DESC';
-
-ELSIF lower(p_sort_order) = 'asc' THEN
-        _sort_direction := 'ASC';
-
-ELSE
-        _sort_direction := 'DESC';
-
-END IF;
-
--- Base query construction for counting
-    _count_query := format('
-        SELECT count(DISTINCT p.id)
-        FROM products p
-        LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-        WHERE p.user_id = %L', p_user_id);
-
--- Apply filters dynamically to count query
-    IF p_brand IS NOT NULL AND p_brand <> '' THEN
-        _count_query := _count_query || format(' AND p.brand_id = %L', p_brand);
-
-END IF;
-
-IF p_category IS NOT NULL AND p_category <> '' THEN
-        _count_query := _count_query || format(' AND p.category = %L', p_category);
-
-END IF;
-
-IF p_search IS NOT NULL AND p_search <> '' THEN
-        _count_query := _count_query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
-
-END IF;
-
-IF p_is_active IS NOT NULL THEN
-        _count_query := _count_query || format(' AND p.is_active = %L', p_is_active);
-
-END IF;
-
-IF p_has_price = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL';
-
-END IF;
-
--- Add competitor filter to count query
-    IF p_competitor_id IS NOT NULL THEN
-        _count_query := _count_query || format('
-            AND p.id IN (
-                SELECT DISTINCT pc.product_id
-                FROM price_changes pc
-                WHERE pc.user_id = %L
-                AND pc.competitor_id = %L
-            )', p_user_id, p_competitor_id);
-
-END IF;
-
--- Execute count query first
-    EXECUTE _count_query INTO _total_count;
-
--- Base query construction for data fetching
-    _query := format('
-        WITH FilteredProductsBase AS ( -- Renamed to avoid conflict later
-            SELECT p.id
-            FROM products p
-            LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-            WHERE p.user_id = %L', p_user_id);
-
--- Apply filters dynamically to data query (similar to count query)
-    IF p_brand IS NOT NULL AND p_brand <> '' THEN
-        _query := _query || format(' AND p.brand_id = %L', p_brand);
-
-END IF;
-
-IF p_category IS NOT NULL AND p_category <> '' THEN
-        _query := _query || format(' AND p.category = %L', p_category);
-
-END IF;
-
-IF p_search IS NOT NULL AND p_search <> '' THEN
-        _query := _query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
-
-END IF;
-
-IF p_is_active IS NOT NULL THEN
-        _query := _query || format(' AND p.is_active = %L', p_is_active);
-
-END IF;
-
-IF p_has_price = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL';
-
-END IF;
-
--- Add competitor filter to data query
-    IF p_competitor_id IS NOT NULL THEN
-        _query := _query || format('
-            AND p.id IN (
-                SELECT DISTINCT pc.product_id
-                FROM price_changes pc
-                WHERE pc.user_id = %L
-                AND pc.competitor_id = %L
-            )', p_user_id, p_competitor_id);
-
-END IF;
-
--- Add grouping, sorting and pagination to the subquery selecting product IDs
-    -- Add id as a secondary sort to ensure consistent ordering
-    _query := _query || format('
-            GROUP BY p.id -- Ensure unique product IDs before sorting/limiting
-            ORDER BY p.%I %s, p.id ASC
-            LIMIT %L OFFSET %L
-        ),
-        -- CTEs for fetching and aggregating latest prices from competitors and integrations
-        LatestCompetitorPrices AS (
-            SELECT
-                pc.product_id,
-                pc.competitor_id as source_id,
-                pc.new_price,
-                ''competitor'' as source_type,
-                c.name as source_name,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            JOIN competitors c ON pc.competitor_id = c.id
-            WHERE pc.user_id = %L AND pc.competitor_id IS NOT NULL
-        ),
-        LatestIntegrationPrices AS (
-            SELECT
-                pc.product_id,
-                pc.integration_id as source_id,
-                pc.new_price,
-                ''integration'' as source_type,
-                i.name as source_name,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            JOIN integrations i ON pc.integration_id = i.id
-            WHERE pc.user_id = %L AND pc.integration_id IS NOT NULL
-        ),
-        AllLatestPrices AS (
-            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestCompetitorPrices WHERE rn = 1
-            UNION ALL
-            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestIntegrationPrices WHERE rn = 1
-        ),
-        AggregatedSourcePrices AS (
-            SELECT
-                product_id,
-                jsonb_object_agg(
-                    source_id::text,
-                    jsonb_build_object(''price'', new_price, ''source_type'', source_type, ''source_name'', COALESCE(source_name, ''Unknown''))
-                ) as source_prices
-            FROM AllLatestPrices
-            GROUP BY product_id
-        ),
-        AggregatedCompetitorPrices AS (
-             SELECT
-                product_id,
-                jsonb_object_agg(source_id::text, new_price) as competitor_prices
-            FROM AllLatestPrices
-            GROUP BY product_id
-        )
-        -- Final SELECT joining products with aggregated prices
-        SELECT
-            p.*,
-            COALESCE(asp.source_prices, ''{}''::jsonb) as source_prices,
-            COALESCE(acp.competitor_prices, ''{}''::jsonb) as competitor_prices
-        FROM products p
-        JOIN FilteredProductsBase fp ON p.id = fp.id -- Join with the filtered product IDs
-        LEFT JOIN AggregatedSourcePrices asp ON p.id = asp.product_id
-        LEFT JOIN AggregatedCompetitorPrices acp ON p.id = acp.product_id
-        ORDER BY p.%I %s, p.id ASC', -- Apply final sorting based on the main product table fields with id as secondary sort
-        _safe_sort_by, _sort_direction, _limit, _offset, -- Parameters for LIMIT/OFFSET
-        p_user_id, -- For LatestCompetitorPrices CTE
-        p_user_id, -- For LatestIntegrationPrices CTE
-        _safe_sort_by, _sort_direction -- Parameters for final ORDER BY
-    );
-
--- Execute the main query and construct the JSON result
-    EXECUTE format('SELECT json_build_object(%L, COALESCE(json_agg(q), %L::json), %L, %L) FROM (%s) q',
-                   'data', '[]', 'totalCount', _total_count, _query)
-    INTO _result;
-
-RETURN _result;
 
 END;
 
@@ -1118,6 +904,33 @@ END IF;
     INTO _result;
 
 RETURN _result;
+
+END;
+
+$$;
+
+BEGIN
+  -- First ensure the user exists
+  PERFORM ensure_user_exists_simple(p_user_id);
+
+-- Then call the original function with all parameters
+  SELECT get_products_filtered(
+    p_user_id,
+    p_page,
+    p_page_size,
+    p_sort_by,
+    p_sort_order,
+    p_brand,
+    p_category,
+    p_search,
+    p_is_active,
+    p_competitor_id,
+    p_has_price,
+    p_price_lower_than_competitors,
+    p_price_higher_than_competitors
+  ) INTO v_result;
+
+RETURN v_result;
 
 END;
 
@@ -1443,9 +1256,8 @@ price_change_pct DECIMAL(10, 2);
 
 matched_product_id UUID;
 
-brand_id UUID;
-
-debug_info TEXT;
+v_brand_id UUID;  -- Renamed from brand_id to v_brand_id to avoid ambiguity
+  debug_info TEXT;
 
 BEGIN
   -- Match product if not already matched
@@ -1458,12 +1270,12 @@ END IF;
 
 -- If no match by EAN, try to match by brand and SKU
     IF matched_product_id IS NULL AND NEW.brand IS NOT NULL AND NEW.sku IS NOT NULL AND NEW.brand != '' AND NEW.sku != '' THEN
-      -- First try to find brand_id
-      SELECT id INTO brand_id FROM brands WHERE user_id = NEW.user_id AND name = NEW.brand LIMIT 1;
+      -- Use find_or_create_brand function to get or create the brand
+      SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
 
 -- If brand found, try to match by brand_id and SKU
-      IF brand_id IS NOT NULL THEN
-        SELECT id INTO matched_product_id FROM products WHERE user_id = NEW.user_id AND brand_id = brand_id AND sku = NEW.sku LIMIT 1;
+      IF v_brand_id IS NOT NULL THEN
+        SELECT id INTO matched_product_id FROM products WHERE user_id = NEW.user_id AND brand_id = v_brand_id AND sku = NEW.sku LIMIT 1;
 
 END IF;
 
@@ -1475,13 +1287,48 @@ END IF;
 
 END IF;
 
--- Update the scraped_product with the matched product_id
-    IF matched_product_id IS NOT NULL THEN
-      NEW.product_id := matched_product_id;
+-- If no match found, create a new product if we have sufficient data
+    IF matched_product_id IS NULL THEN
+      -- Check if we have sufficient data to create a product
+      IF (NEW.ean IS NOT NULL AND NEW.ean != '') OR
+         (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL) THEN
+
+        -- Create a new product
+        INSERT INTO products (
+          user_id,
+          name,
+          sku,
+          ean,
+          brand,
+          brand_id,
+          image_url,
+          url,
+          currency_code
+        ) VALUES (
+          NEW.user_id,
+          NEW.name,
+          NEW.sku,
+          NEW.ean,
+          NEW.brand,
+          v_brand_id,
+          NEW.image_url,
+          NEW.url,
+          COALESCE(NEW.currency_code, 'SEK')
+        )
+        RETURNING id INTO matched_product_id;
+
+-- Update the scraped_product with the new product_id
+        NEW.product_id := matched_product_id;
 
 ELSE
-      -- No match found, return without recording price change
-      RETURN NEW;
+        -- Insufficient data to create a product
+        RETURN NEW;
+
+END IF;
+
+ELSE
+      -- Update the scraped_product with the matched product_id
+      NEW.product_id := matched_product_id;
 
 END IF;
 

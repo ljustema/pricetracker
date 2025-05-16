@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-05-13 18:12:56
+-- Generated: 2025-05-16 15:00:54
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -979,7 +979,8 @@ CREATE TABLE public.user_profiles (
     avatar_url text,
     subscription_tier text DEFAULT 'free'::text,
     created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now()
+    updated_at timestamp with time zone DEFAULT now(),
+    email text
 );
 
 --

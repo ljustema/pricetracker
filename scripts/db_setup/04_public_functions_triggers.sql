@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-05-13 18:12:56
+-- Generated: 2025-05-16 15:00:54
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -392,6 +392,27 @@ BEGIN
     UPDATE scrapers
     SET is_active = FALSE
     WHERE competitor_id = NEW.competitor_id AND id <> NEW.id;
+
+--
+-- Name: ensure_user_exists_simple(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.ensure_user_exists_simple(p_user_id uuid) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+  -- Call the existing function with minimal data
+  PERFORM create_user_for_nextauth(
+    p_user_id,
+    'user-' || p_user_id || '@example.com', -- Placeholder email
+    'User ' || p_user_id::text -- Placeholder name
+  );
+
+--
+-- Name: FUNCTION ensure_user_exists_simple(p_user_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.ensure_user_exists_simple(p_user_id uuid) IS 'Ensures a user exists in all necessary tables by calling create_user_for_nextauth with minimal data.';
 
 --
 -- Name: find_brand_by_name_or_alias(uuid, text); Type: FUNCTION; Schema: public; Owner: -
@@ -882,16 +903,6 @@ BEGIN
     LIMIT p_limit;
 
 --
--- Name: get_products_filtered(uuid, integer, integer, text, text, text, text, text, boolean, uuid, boolean); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_id uuid DEFAULT NULL::uuid, p_has_price boolean DEFAULT NULL::boolean) RETURNS json
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-    _query text;
-
---
 -- Name: get_products_filtered(uuid, integer, integer, text, text, text, text, text, boolean, uuid, boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -900,6 +911,16 @@ CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFA
     AS $$
 DECLARE
     _query text;
+
+--
+-- Name: get_products_filtered_with_user_check(uuid, integer, integer, text, text, text, text, text, boolean, uuid, boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_products_filtered_with_user_check(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_id uuid DEFAULT NULL::uuid, p_has_price boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean) RETURNS json
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+DECLARE
+  v_result json;
 
 --
 -- Name: get_unique_competitor_products(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -1018,6 +1039,12 @@ CREATE FUNCTION public.record_price_change() RETURNS trigger
     AS $$
 DECLARE
   last_price DECIMAL(10, 2);
+
+--
+-- Name: FUNCTION record_price_change(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.record_price_change() IS 'Processes scraped products to match them with existing products, creates new products when no match is found, and records price changes.';
 
 --
 -- Name: retry_error_integration_products(uuid); Type: FUNCTION; Schema: public; Owner: -
