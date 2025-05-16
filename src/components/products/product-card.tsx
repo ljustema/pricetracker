@@ -135,11 +135,11 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
             <ul className="mt-1 space-y-1">
               {/* First try to use source_prices if available */}
               {Object.keys(productWithPrices.source_prices).length > 0 &&
-                Object.entries(productWithPrices.source_prices).slice(0, 3).map(([sourceId, sourceData]) => {
+                Object.entries(productWithPrices.source_prices)
+                  .sort((a, b) => a[1].price - b[1].price) // Sort by price (lowest to highest)
+                  .slice(0, 3)
+                  .map(([sourceId, sourceData]) => {
                 try {
-                  // Log the source ID and data for debugging
-                  console.log(`ProductCard - Source ID: ${sourceId}, Source Data:`, sourceData);
-
                   // Check if sourceData is valid
                   if (!sourceData || typeof sourceData !== 'object') {
                     console.error(`ProductCard - Invalid source data for source ID ${sourceId}:`, sourceData);
@@ -178,28 +178,36 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
               }).filter(Boolean)}
 
               {/* Fall back to competitor_prices if source_prices is empty */}
-              {Object.keys(productWithPrices.source_prices).length === 0 && Object.keys(productWithPrices.competitor_prices).length > 0 &&
-                competitors.slice(0, 3).map((competitor) => {
-                  // Ensure competitor ID is a string
-                  const competitorIdStr = String(competitor.id);
-                  let price = productWithPrices.competitor_prices[competitorIdStr];
+              {Object.keys(productWithPrices.source_prices).length === 0 && Object.keys(productWithPrices.competitor_prices).length > 0 && (
+                (() => {
+                  // Create an array of competitors with their prices
+                  const competitorsWithPrices = competitors
+                    .map(competitor => {
+                      // Ensure competitor ID is a string
+                      const competitorIdStr = String(competitor.id);
+                      let price = productWithPrices.competitor_prices[competitorIdStr];
 
-                  // If we don't have a price, try searching through all keys
-                  if (price === undefined) {
-                    // Try to find a matching key in competitor_prices
-                    const competitorPricesKeys = Object.keys(productWithPrices.competitor_prices || {});
-                    for (const key of competitorPricesKeys) {
-                      if (key.includes(competitor.id) || competitor.id.includes(key)) {
-                        price = productWithPrices.competitor_prices[key];
-                        console.log(`ProductCard - Found price in competitor_prices with partial match (key: ${key}): ${price}`);
-                        break;
+                      // If we don't have a price, try searching through all keys
+                      if (price === undefined) {
+                        // Try to find a matching key in competitor_prices
+                        const competitorPricesKeys = Object.keys(productWithPrices.competitor_prices || {});
+                        for (const key of competitorPricesKeys) {
+                          if (key.includes(competitor.id) || competitor.id.includes(key)) {
+                            price = productWithPrices.competitor_prices[key];
+                            break;
+                          }
+                        }
                       }
-                    }
-                  }
 
-                  if (price === undefined) return null;
+                      if (price === undefined) return null;
 
-                  return (
+                      return { competitor, price };
+                    })
+                    .filter(Boolean) // Remove null entries
+                    .sort((a, b) => a.price - b.price); // Sort by price (lowest to highest)
+
+                  // Return the JSX for the top 3 competitors by price
+                  return competitorsWithPrices.slice(0, 3).map(({ competitor, price }) => (
                     <li key={competitor.id} className="text-xs flex justify-between">
                       <span className="font-medium">{competitor.name}:</span>
                       <span className={`${
@@ -212,9 +220,9 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                         {formatPrice(price)}
                       </span>
                     </li>
-                  );
-                })
-              }
+                  ));
+                })()
+              )}
 
               {/* If neither source_prices nor competitor_prices have any entries, show a message */}
               {Object.keys(productWithPrices.source_prices).length === 0 &&

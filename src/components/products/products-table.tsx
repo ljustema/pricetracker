@@ -33,6 +33,53 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
     }
   };
 
+  // Create a sorted list of competitors based on their prices for each product
+  const sortedCompetitors = (() => {
+    // Create a map to store the average price for each competitor
+    const competitorPriceMap = new Map();
+
+    // Calculate the average price for each competitor across all products
+    productsWithPrices.forEach(product => {
+      competitors.forEach(competitor => {
+        const competitorIdStr = String(competitor.id);
+        let price;
+
+        // Try to get price from source_prices first
+        const sourceData = product.source_prices?.[competitorIdStr];
+        if (sourceData) {
+          price = sourceData.price;
+        } else {
+          // Otherwise, fall back to competitor_prices
+          price = product.competitor_prices?.[competitorIdStr];
+        }
+
+        if (price !== undefined) {
+          if (!competitorPriceMap.has(competitorIdStr)) {
+            competitorPriceMap.set(competitorIdStr, { sum: price, count: 1 });
+          } else {
+            const current = competitorPriceMap.get(competitorIdStr);
+            competitorPriceMap.set(competitorIdStr, {
+              sum: current.sum + price,
+              count: current.count + 1
+            });
+          }
+        }
+      });
+    });
+
+    // Calculate average price for each competitor
+    const competitorsWithAvgPrice = competitors.map(competitor => {
+      const competitorIdStr = String(competitor.id);
+      const priceData = competitorPriceMap.get(competitorIdStr);
+      const avgPrice = priceData ? priceData.sum / priceData.count : Infinity;
+
+      return { ...competitor, avgPrice };
+    });
+
+    // Sort competitors by average price (lowest to highest)
+    return competitorsWithAvgPrice.sort((a, b) => a.avgPrice - b.avgPrice);
+  })();
+
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full divide-y divide-gray-200">
@@ -47,8 +94,8 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
             <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
               Our Price
             </th>
-            {/* Competitor price columns */}
-            {competitors.map((competitor) => ( // Removed slice to show all competitors
+            {/* Competitor price columns - sorted by average price */}
+            {sortedCompetitors.map((competitor) => (
               <th
                 key={competitor.id}
                 scope="col"
@@ -108,14 +155,12 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                   <div className="text-sm text-gray-500">-</div>
                 )}
               </td>
-              {/* Source price cells (competitors and integrations) */}
-              {competitors.map((competitor) => {
+              {/* Source price cells (competitors and integrations) - using sorted competitors */}
+              {sortedCompetitors.map((competitor) => {
                 // First try to get price from source_prices
                 let sourceData, price, sourceType;
 
                 // Get competitor price for this product
-
-
                 try {
                   // Ensure competitor ID is a string
                   const competitorIdStr = String(competitor.id);
@@ -127,12 +172,10 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                   if (sourceData) {
                     price = sourceData.price;
                     sourceType = sourceData.source_type;
-
                   } else {
                     // Otherwise, fall back to competitor_prices
                     price = product.competitor_prices?.[competitorIdStr];
                     sourceType = "competitor";
-
                   }
 
                   // If we still don't have a price, try searching through all keys
@@ -145,7 +188,6 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                         if (sourceData) {
                           price = sourceData.price;
                           sourceType = sourceData.source_type;
-
                           break;
                         }
                       }
@@ -158,7 +200,6 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                         if (key.includes(competitor.id) || competitor.id.includes(key)) {
                           price = product.competitor_prices?.[key];
                           sourceType = "competitor";
-
                           break;
                         }
                       }
@@ -171,8 +212,6 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                   price = product.competitor_prices?.[competitorIdStr];
                   sourceType = "competitor";
                 }
-
-
 
                 return (
                   <td key={competitor.id} className="whitespace-nowrap px-6 py-4">

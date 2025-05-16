@@ -87,39 +87,88 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Merge the products
-    const { data: result, error: mergeError } = await supabase.rpc(
-      "merge_products_api",
-      {
-        primary_id: primaryId,
-        duplicate_id: duplicateId
+    // Merge the products with timeout handling
+    try {
+      // Set a client-side timeout that's longer than the server-side one
+      const mergePromise = supabase.rpc(
+        "merge_products_api",
+        {
+          primary_id: primaryId,
+          duplicate_id: duplicateId
+        }
+      );
+
+      // Add a timeout of 3 minutes
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("Client timeout: Operation took too long")), 180000);
+      });
+
+      // Race the merge operation against the timeout
+      const { data: result, error: mergeError } = await Promise.race([
+        mergePromise,
+        timeoutPromise
+      ]) as any;
+
+      if (mergeError) {
+        console.error("Error calling merge_products_api function:", mergeError);
+
+        // Check if it's a timeout error
+        if (mergeError.code === '57014' || mergeError.message?.includes('statement timeout')) {
+          return NextResponse.json(
+            {
+              error: "Merge operation timed out",
+              details: "The products have too many related records to merge in one operation. Please contact support for assistance.",
+              code: mergeError.code
+            },
+            { status: 504 } // Gateway Timeout status
+          );
+        }
+
+        return NextResponse.json(
+          {
+            error: "Failed to merge products",
+            details: mergeError.message,
+            code: mergeError.code
+          },
+          { status: 500 }
+        );
       }
-    );
 
-    if (mergeError) {
-      console.error("Error calling merge_products_api function:", mergeError);
+      if (!result?.success) {
+        console.error("Merge operation failed:", result?.message);
+        return NextResponse.json(
+          {
+            error: "Failed to merge products",
+            details: result?.message || "Unknown error"
+          },
+          { status: 500 }
+        );
+      }
+
+      // If we get here, the merge was successful
+      return NextResponse.json(result);
+    } catch (error: any) {
+      console.error("Exception during merge operation:", error);
+
+      // Handle client-side timeout
+      if (error.message?.includes('timeout')) {
+        return NextResponse.json(
+          {
+            error: "Merge operation timed out",
+            details: "The operation took too long to complete. The products may have too many related records to merge in one operation."
+          },
+          { status: 504 } // Gateway Timeout status
+        );
+      }
+
       return NextResponse.json(
         {
           error: "Failed to merge products",
-          details: mergeError.message,
-          code: mergeError.code
+          details: error.message || "Unknown error"
         },
         { status: 500 }
       );
     }
-
-    if (!result?.success) {
-      console.error("Merge operation failed:", result?.message);
-      return NextResponse.json(
-        {
-          error: "Failed to merge products",
-          details: result?.message || "Unknown error"
-        },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json(result);
   } catch (error) {
     console.error("Error in merge API route:", error);
     return NextResponse.json(

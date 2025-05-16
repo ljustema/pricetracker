@@ -114,12 +114,12 @@ const CONFIG = {
 
   // Performance settings
   PERFORMANCE: {
-    MAX_CONCURRENCY: 10, // Maximum number of concurrent requests
+    MAX_CONCURRENCY: 10, // Maximum number of concurrent requests, max is 10.
     BATCH_SIZE: 500, // Number of products to process before writing a batch
     REQUEST_TIMEOUT: 60, // Timeout in seconds for each request
     MAX_RETRIES: 3, // Maximum number of retries for failed requests
     REQUEST_DELAY: 100, // Delay between requests in milliseconds (0 for no delay)
-    MAX_REQUESTS_PER_MINUTE: 1000, // Rate limiting
+    MAX_REQUESTS_PER_MINUTE: 1000, // Rate limiting, max is 2000.
   },
 
   // Filtering settings
