@@ -87,27 +87,34 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Merge the products with timeout handling
+    // Merge the products with improved error handling
     try {
-      // Set a client-side timeout that's longer than the server-side one
-      const mergePromise = supabase.rpc(
+      console.log(`Merging products: primary=${primaryId}, duplicate=${duplicateId}`);
+
+      // First, check how many related records these products have
+      const { data: relatedCounts, error: countError } = await supabase.from('products')
+        .select(`
+          id,
+          (SELECT count(*) FROM price_changes WHERE product_id = products.id) AS price_changes_count,
+          (SELECT count(*) FROM scraped_products WHERE product_id = products.id) AS scraped_products_count,
+          (SELECT count(*) FROM staged_integration_products WHERE product_id = products.id) AS staged_products_count
+        `)
+        .in('id', [primaryId, duplicateId]);
+
+      if (countError) {
+        console.error("Error checking related records:", countError);
+      } else if (relatedCounts) {
+        console.log("Related record counts:", JSON.stringify(relatedCounts, null, 2));
+      }
+
+      // Call the merge function with a reasonable timeout
+      const { data: result, error: mergeError } = await supabase.rpc(
         "merge_products_api",
         {
           primary_id: primaryId,
           duplicate_id: duplicateId
         }
-      );
-
-      // Add a timeout of 3 minutes
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error("Client timeout: Operation took too long")), 180000);
-      });
-
-      // Race the merge operation against the timeout
-      const { data: result, error: mergeError } = await Promise.race([
-        mergePromise,
-        timeoutPromise
-      ]) as any;
+      ).timeout(120000); // 2 minute timeout
 
       if (mergeError) {
         console.error("Error calling merge_products_api function:", mergeError);
@@ -117,10 +124,22 @@ export async function POST(request: NextRequest) {
           return NextResponse.json(
             {
               error: "Merge operation timed out",
-              details: "The products have too many related records to merge in one operation. Please contact support for assistance.",
+              details: "The operation took too long to complete. Please try again or contact support if the issue persists.",
               code: mergeError.code
             },
             { status: 504 } // Gateway Timeout status
+          );
+        }
+
+        // Check for foreign key constraint violations
+        if (mergeError.code === '23503' || mergeError.message?.includes('foreign key constraint')) {
+          return NextResponse.json(
+            {
+              error: "Foreign key constraint violation",
+              details: "Cannot merge products because there are still references to the duplicate product. Please contact support for assistance.",
+              code: mergeError.code
+            },
+            { status: 400 }
           );
         }
 
@@ -146,20 +165,10 @@ export async function POST(request: NextRequest) {
       }
 
       // If we get here, the merge was successful
+      console.log("Merge successful:", JSON.stringify(result, null, 2));
       return NextResponse.json(result);
     } catch (error: any) {
       console.error("Exception during merge operation:", error);
-
-      // Handle client-side timeout
-      if (error.message?.includes('timeout')) {
-        return NextResponse.json(
-          {
-            error: "Merge operation timed out",
-            details: "The operation took too long to complete. The products may have too many related records to merge in one operation."
-          },
-          { status: 504 } // Gateway Timeout status
-        );
-      }
 
       return NextResponse.json(
         {
