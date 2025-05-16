@@ -89,22 +89,43 @@ export async function POST(request: NextRequest) {
 
     // Merge the products with improved error handling
     try {
-      console.log(`Merging products: primary=${primaryId}, duplicate=${duplicateId}`);
+      // Log the merge attempt
+      console.log(`Attempting to merge products: primary=${primaryId}, duplicate=${duplicateId}`);
 
-      // First, check how many related records these products have
-      const { data: relatedCounts, error: countError } = await supabase.from('products')
-        .select(`
-          id,
-          (SELECT count(*) FROM price_changes WHERE product_id = products.id) AS price_changes_count,
-          (SELECT count(*) FROM scraped_products WHERE product_id = products.id) AS scraped_products_count,
-          (SELECT count(*) FROM staged_integration_products WHERE product_id = products.id) AS staged_products_count
-        `)
-        .in('id', [primaryId, duplicateId]);
+      // We'll check related records separately for each table
+      try {
+        // Check price_changes
+        const { data: priceChanges, error: priceError } = await supabase
+          .from('price_changes')
+          .select('product_id, count', { count: 'exact' })
+          .in('product_id', [primaryId, duplicateId])
+          .groupby('product_id');
 
-      if (countError) {
+        // Check scraped_products
+        const { data: scrapedProducts, error: scrapedError } = await supabase
+          .from('scraped_products')
+          .select('product_id, count', { count: 'exact' })
+          .in('product_id', [primaryId, duplicateId])
+          .groupby('product_id');
+
+        // Check staged_integration_products
+        const { data: stagedProducts, error: stagedError } = await supabase
+          .from('staged_integration_products')
+          .select('product_id, count', { count: 'exact' })
+          .in('product_id', [primaryId, duplicateId])
+          .groupby('product_id');
+
+        // Log the counts if available
+        if (!priceError && !scrapedError && !stagedError) {
+          console.log("Related records:", {
+            price_changes: priceChanges,
+            scraped_products: scrapedProducts,
+            staged_products: stagedProducts
+          });
+        }
+      } catch (countError) {
+        // Just log the error but continue with the merge
         console.error("Error checking related records:", countError);
-      } else if (relatedCounts) {
-        console.log("Related record counts:", JSON.stringify(relatedCounts, null, 2));
       }
 
       // Call the merge function
