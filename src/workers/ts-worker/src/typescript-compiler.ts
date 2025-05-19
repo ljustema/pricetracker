@@ -84,6 +84,28 @@ export async function compileTypeScriptScraper(
       });
 
       debugLog('Dependencies installed successfully');
+
+      // Install Playwright browsers for TypeScript scrapers that use PlaywrightCrawler
+      debugLog('Installing Playwright browsers (this may take a moment)...');
+      try {
+        execSync('npx playwright install --with-deps chromium', {
+          cwd: tempDir,
+          stdio: 'pipe',
+          timeout: 300000 // 5 minutes timeout for Playwright install
+        });
+        debugLog('Playwright browsers installed successfully');
+      } catch (playwrightError: any) {
+        const errorMessage = playwrightError instanceof Error ? playwrightError.message : String(playwrightError);
+        debugLog(`Playwright browser installation warning: ${errorMessage}`);
+
+        if (playwrightError && typeof playwrightError === 'object' && 'stderr' in playwrightError && playwrightError.stderr) {
+          const stderr = playwrightError.stderr.toString();
+          debugLog(`Playwright installation stderr: ${stderr.trim()}`);
+        }
+
+        // Continue even if Playwright installation has warnings
+        debugLog('Continuing with compilation despite Playwright installation issues');
+      }
     } catch (npmError: any) {
       const errorMessage = npmError instanceof Error ? npmError.message : String(npmError);
       debugLog(`npm install error: ${errorMessage}`);

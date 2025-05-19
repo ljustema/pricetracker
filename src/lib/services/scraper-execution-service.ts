@@ -701,6 +701,29 @@ export class ScraperExecutionService {
               stdio: ['pipe', 'pipe', 'pipe']
             });
             addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Dependencies installed successfully');
+
+            // Install Playwright browsers for TypeScript scrapers that use PlaywrightCrawler
+            addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Installing Playwright browsers (this may take a moment)...');
+            try {
+              execSync('npx playwright install --with-deps chromium', {
+                encoding: 'utf-8',
+                timeout: TIMEOUT_MS / 2,
+                cwd: tempDir,
+                stdio: ['pipe', 'pipe', 'pipe']
+              });
+              addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Playwright browsers installed successfully');
+            } catch (playwrightError) {
+              const error = playwrightError as ExecSyncError;
+              addLog('WARN', 'TYPESCRIPT_COMPILATION', `Playwright browser installation warning: ${error.message}`);
+
+              if (error.stderr) {
+                const stderr = error.stderr.toString();
+                addLog('WARN', 'TYPESCRIPT_COMPILATION', `Playwright installation stderr: ${stderr.trim()}`);
+              }
+
+              // Continue even if Playwright installation has warnings
+              addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Continuing with validation despite Playwright installation issues');
+            }
           } catch (npmError) {
             const error = npmError as ExecSyncError;
             addLog('WARN', 'TYPESCRIPT_COMPILATION', `npm install warning: ${error.message}`);
