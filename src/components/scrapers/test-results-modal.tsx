@@ -34,7 +34,7 @@ export default function TestResultsModal({
             </svg>
           </button>
         </div>
-        
+
         {products.length === 0 ? (
           <p className="text-gray-500">No products found.</p>
         ) : (
@@ -65,12 +65,26 @@ export default function TestResultsModal({
                     <td className="whitespace-nowrap px-6 py-4">
                       {product.image_url ? (
                         <Image
-                          src={product.image_url}
+                          src={`/api/proxy-image?url=${encodeURIComponent(product.image_url)}`}
                           alt={product.name}
                           width={64}
                           height={64}
                           className="h-16 w-16 object-contain"
                           unoptimized // Skip optimization for external images
+                          onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
+                            console.error(`Failed to load image: ${product.image_url}`);
+                            // Replace with a div that looks like the fallback
+                            const imgElement = e.currentTarget;
+                            const parent = imgElement.parentElement;
+                            if (parent) {
+                              // Create a fallback div
+                              const fallbackDiv = document.createElement('div');
+                              fallbackDiv.className = "h-16 w-16 bg-gray-100 flex items-center justify-center text-gray-400";
+                              fallbackDiv.textContent = "No Image";
+                              // Replace the image with the fallback
+                              parent.replaceChild(fallbackDiv, imgElement);
+                            }
+                          }}
                         />
                       ) : (
                         <div className="h-16 w-16 bg-gray-100 flex items-center justify-center text-gray-400">
@@ -80,9 +94,9 @@ export default function TestResultsModal({
                     </td>
                     <td className="whitespace-nowrap px-6 py-4">
                       <div className="text-sm text-gray-900">
-                        <a 
-                          href={product.url} 
-                          target="_blank" 
+                        <a
+                          href={product.url}
+                          target="_blank"
                           rel="noopener noreferrer"
                           className="text-indigo-600 hover:underline"
                         >
@@ -111,7 +125,7 @@ export default function TestResultsModal({
             </table>
           </div>
         )}
-        
+
         <div className="mt-6 flex justify-end">
           <button
             type="button"

@@ -535,11 +535,12 @@ export default function ScriptScraperForm({ // Renamed component
                             {product.image_url ? (
                               <a href={product.image_url} target="_blank" rel="noopener noreferrer">
                                 <Image
-                                  src={product.image_url}
+                                  src={`/api/proxy-image?url=${encodeURIComponent(product.image_url)}`}
                                   alt={product.name || 'Product image'}
                                   width={48}
                                   height={48}
                                   className="max-h-12 max-w-12 object-contain"
+                                  unoptimized // Skip Next.js image optimization for external images
                                   onError={(e) => {
                                     // Replace broken image with placeholder
                                     (e.target as HTMLImageElement).src = 'data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2248%22%20height%3D%2248%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22%23ccc%22%3E%3Cpath%20d%3D%22M0%200h24v24H0V0z%22%20fill%3D%22none%22%2F%3E%3Cpath%20d%3D%22M19%205v14H5V5h14m0-2H5c-1.1%200-2%20.9-2%202v14c0%201.1.9%202%202%202h14c1.1%200%202-.9%202-2V5c0-1.1-.9-2-2-2zm-4.86%208.86l-3%203.87L9%2013.14%206%2017h12l-3.86-5.14z%22%2F%3E%3C%2Fsvg%3E';

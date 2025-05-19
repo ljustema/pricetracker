@@ -117,12 +117,26 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                   {product.image_url ? (
                     <div className="h-10 w-10 flex-shrink-0">
                       <Image
-                        src={product.image_url}
+                        src={`/api/proxy-image?url=${encodeURIComponent(product.image_url)}`}
                         alt={product.name}
                         width={40}
                         height={40}
                         className="h-auto w-full rounded-full object-cover"
                         style={{ aspectRatio: '1/1' }}
+                        unoptimized // Skip Next.js image optimization for external images
+                        onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
+                          console.error(`Failed to load image: ${product.image_url}`);
+                          // Replace with a div that looks like the fallback
+                          const imgElement = e.currentTarget;
+                          const parent = imgElement.parentElement;
+                          if (parent) {
+                            // Create a fallback div
+                            const fallbackDiv = document.createElement('div');
+                            fallbackDiv.className = "h-10 w-10 flex-shrink-0 rounded-full bg-gray-200";
+                            // Replace the image with the fallback
+                            parent.replaceChild(fallbackDiv, imgElement);
+                          }
+                        }}
                       />
                     </div>
                   ) : (
