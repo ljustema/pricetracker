@@ -43,15 +43,49 @@ export async function POST(req: NextRequest) {
     // Read and parse the CSV file
     const fileContent = await file.text();
 
-    // Simple CSV parser implementation
+    // CSV parser implementation that handles quoted fields
     const parseCSV = (csvText: string) => {
       const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== '');
       if (lines.length === 0) {
         return { data: [], errors: [{ message: 'Empty CSV file' }] };
       }
 
+      // Helper function to parse a CSV line with proper handling of quoted fields
+      const parseCSVLine = (line: string): string[] => {
+        const result: string[] = [];
+        let currentField = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+
+          if (char === '"') {
+            // Toggle quote state
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            // End of field
+            result.push(currentField.trim());
+            currentField = '';
+          } else {
+            // Add character to current field
+            currentField += char;
+          }
+        }
+
+        // Add the last field
+        result.push(currentField.trim());
+
+        // Remove quotes from quoted fields
+        return result.map(field => {
+          if (field.startsWith('"') && field.endsWith('"')) {
+            return field.substring(1, field.length - 1);
+          }
+          return field;
+        });
+      };
+
       // Parse header row
-      const headers = lines[0].split(',').map(header => header.trim());
+      const headers = parseCSVLine(lines[0]);
 
       // Check for required headers
       const requiredHeaders = ['name', 'price'];
@@ -68,7 +102,7 @@ export async function POST(req: NextRequest) {
       // Parse data rows
       const data = [];
       for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(',').map(value => value.trim());
+        const values = parseCSVLine(lines[i]);
         if (values.length !== headers.length) {
           return {
             data,

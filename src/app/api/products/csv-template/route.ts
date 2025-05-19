@@ -38,10 +38,22 @@ export async function GET(_req: NextRequest) {
       ]
     ];
 
+    // Helper function to properly quote CSV values
+    const escapeCSVValue = (value: string) => {
+      // If the value contains commas, quotes, or newlines, wrap it in quotes
+      if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
+        // Double up any quotes within the value
+        return `"${value.replace(/"/g, '""')}"`;
+      }
+      return value;
+    };
+
     // Build the CSV content
     let csvContent = headers.join(",") + "\n";
     exampleRows.forEach(row => {
-      csvContent += row.join(",") + "\n";
+      // Properly escape each value in the row
+      const escapedRow = row.map(value => escapeCSVValue(value));
+      csvContent += escapedRow.join(",") + "\n";
     });
 
     // Set the response headers for a CSV file download

@@ -33,7 +33,7 @@ export default function CSVUploadForm({
     pricesUpdated: number;
     message: string;
   }
-  
+
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
 
   // Fetch competitors when component mounts
@@ -75,17 +75,50 @@ export default function CSVUploadForm({
     reader.readAsText(file);
   };
 
+  const parseCSVLine = (line: string): string[] => {
+    const result: string[] = [];
+    let currentField = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+
+      if (char === '"') {
+        // Toggle quote state
+        inQuotes = !inQuotes;
+      } else if (char === ',' && !inQuotes) {
+        // End of field
+        result.push(currentField.trim());
+        currentField = '';
+      } else {
+        // Add character to current field
+        currentField += char;
+      }
+    }
+
+    // Add the last field
+    result.push(currentField.trim());
+
+    // Remove quotes from quoted fields
+    return result.map(field => {
+      if (field.startsWith('"') && field.endsWith('"')) {
+        return field.substring(1, field.length - 1);
+      }
+      return field;
+    });
+  };
+
   const previewCSV = (csvContent: string) => {
-    // Simple CSV parser for preview
+    // Split into lines and filter out empty lines
     const lines = csvContent.split(/\r?\n/).filter(line => line.trim() !== '');
     if (lines.length === 0) {
       alert('CSV file is empty');
       return;
     }
-    
+
     // Parse header row
-    const headers = lines[0].split(',').map(header => header.trim());
-    
+    const headers = parseCSVLine(lines[0]);
+
     // Check for required headers
     const requiredHeaders = ['name', 'price'];
     const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
@@ -93,25 +126,25 @@ export default function CSVUploadForm({
       alert(`CSV file is missing required headers: ${missingHeaders.join(', ')}`);
       return;
     }
-    
+
     // Parse data rows (limit to 5 for preview)
     const rows: Record<string, string>[] = [];
     const previewLimit = Math.min(lines.length - 1, 5);
-    
+
     for (let i = 1; i <= previewLimit; i++) {
-      const values = lines[i].split(',').map(value => value.trim());
+      const values = parseCSVLine(lines[i]);
       if (values.length !== headers.length) {
         alert(`Row ${i+1} has ${values.length} fields, expected ${headers.length}`);
         return;
       }
-      
+
       const row: Record<string, string> = {};
       headers.forEach((header, index) => {
         row[header] = values[index];
       });
       rows.push(row);
     }
-    
+
     setCsvPreview({ headers, rows });
   };
 
@@ -143,7 +176,7 @@ export default function CSVUploadForm({
     try {
       const result = await uploadProductsCSV(selectedCompetitorId, uploadedFile);
       setUploadResult(result as UploadResult);
-      
+
       // Only call onSuccess if we actually succeeded
       if (result.success) {
         setTimeout(() => {
