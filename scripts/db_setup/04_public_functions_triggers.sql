@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-05-16 15:00:54
+-- Generated: 2025-05-24 16:55:21
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -221,9 +221,9 @@ COMMENT ON FUNCTION extensions.set_graphql_placeholder() IS 'Reintroduces placeh
 
 CREATE FUNCTION pgbouncer.get_auth(p_usename text) RETURNS TABLE(username text, password text)
     LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-BEGIN
-    RAISE WARNING 'PgBouncer auth request: %', p_usename;
+    AS $_$
+  BEGIN
+      RAISE DEBUG 'PgBouncer auth request: %', p_usename;
 
 --
 -- Name: append_log_to_scraper_run(uuid, jsonb); Type: FUNCTION; Schema: public; Owner: -
@@ -685,8 +685,7 @@ DECLARE
 
 CREATE FUNCTION public.get_latest_competitor_prices(p_user_id uuid, p_product_id uuid) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_price numeric, new_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
     LANGUAGE plpgsql
-    AS $$
-BEGIN
+    AS $$BEGIN
     -- First get competitor prices
     RETURN QUERY
     WITH LatestCompetitorPrices AS (
@@ -779,7 +778,7 @@ BEGIN
         FROM LatestIntegrationPrices lip
         WHERE lip.rn = 1
     )
-    ORDER BY changed_at DESC;
+    ORDER BY new_price ASC;
 
 --
 -- Name: get_or_create_company(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -1002,6 +1001,12 @@ CREATE FUNCTION public.merge_products_api(primary_id uuid, duplicate_id uuid) RE
     AS $$
 DECLARE
     primary_record RECORD;
+
+--
+-- Name: FUNCTION merge_products_api(primary_id uuid, duplicate_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.merge_products_api(primary_id uuid, duplicate_id uuid) IS 'Merges two products by updating the primary product with data from the duplicate, updating all foreign key references, and deleting the duplicate.';
 
 --
 -- Name: process_pending_integration_products(uuid); Type: FUNCTION; Schema: public; Owner: -

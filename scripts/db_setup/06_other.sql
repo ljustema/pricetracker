@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-05-16 15:00:54
+-- Generated: 2025-05-24 16:55:21
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -375,12 +375,18 @@ END;
 $_$;
 
 RETURN QUERY
-    SELECT usename::TEXT, passwd::TEXT FROM pg_catalog.pg_shadow
-    WHERE usename = p_usename;
+      SELECT
+          rolname::text,
+          CASE WHEN rolvaliduntil < now()
+              THEN null
+              ELSE rolpassword::text
+          END
+      FROM pg_authid
+      WHERE rolname=$1 and rolcanlogin;
 
 END;
 
-$$;
+$_$;
 
 END;
 
@@ -585,9 +591,7 @@ END;
 
 $$;
 
-END;
-
-$$;
+END;$$;
 
 BEGIN
   -- Check if the user already has a company
@@ -950,7 +954,18 @@ duplicate_record RECORD;
 
 result JSONB;
 
+price_changes_count INT := 0;
+
+scraped_products_count INT := 0;
+
+staged_products_count INT := 0;
+
+remaining_refs BOOLEAN;
+
 BEGIN
+    -- Set a longer statement timeout for this operation
+    SET LOCAL statement_timeout = '120000'; -- 2 minutes in milliseconds
+    
     -- Get the primary and duplicate product records
     SELECT * INTO primary_record FROM products WHERE id = primary_id;
 
@@ -991,42 +1006,99 @@ END IF;
         our_price = COALESCE(primary_record.our_price, duplicate_record.our_price),
         wholesale_price = COALESCE(primary_record.wholesale_price, duplicate_record.wholesale_price),
         currency_code = COALESCE(primary_record.currency_code, duplicate_record.currency_code),
+        url = COALESCE(primary_record.url, duplicate_record.url),
         updated_at = NOW()
     WHERE id = primary_id;
 
--- Update references in price_changes table
+-- Update references in price_changes table and count affected rows
     UPDATE price_changes
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
 
--- Update references in scraped_products table
+GET DIAGNOSTICS price_changes_count = ROW_COUNT;
+
+-- Update references in scraped_products table and count affected rows
     UPDATE scraped_products
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
 
--- Update references in staged_integration_products table
+GET DIAGNOSTICS scraped_products_count = ROW_COUNT;
+
+-- Update references in staged_integration_products table and count affected rows
     UPDATE staged_integration_products
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
 
--- Delete the duplicate product
-    DELETE FROM products WHERE id = duplicate_id;
+GET DIAGNOSTICS staged_products_count = ROW_COUNT;
 
--- Return success result
-    result := jsonb_build_object(
-        'success', true,
-        'message', 'Products merged successfully',
-        'primary_id', primary_id,
-        'duplicate_id', duplicate_id
-    );
+-- Check if there are any remaining references to the duplicate product
+    SELECT EXISTS (
+        SELECT 1 FROM staged_integration_products WHERE product_id = duplicate_id
+        UNION ALL
+        SELECT 1 FROM scraped_products WHERE product_id = duplicate_id
+        UNION ALL
+        SELECT 1 FROM price_changes WHERE product_id = duplicate_id
+        LIMIT 1
+    ) INTO remaining_refs;
+
+IF remaining_refs THEN
+        -- There are still references to the duplicate product
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Cannot delete product: still referenced in other tables',
+            'primary_id', primary_id,
+            'duplicate_id', duplicate_id,
+            'stats', jsonb_build_object(
+                'price_changes_updated', price_changes_count,
+                'scraped_products_updated', scraped_products_count,
+                'staged_products_updated', staged_products_count
+            )
+        );
+
+END IF;
+
+-- Delete the duplicate product
+    BEGIN
+        DELETE FROM products WHERE id = duplicate_id;
+
+-- Return success result with statistics
+        result := jsonb_build_object(
+            'success', true,
+            'message', 'Products merged successfully',
+            'primary_id', primary_id,
+            'duplicate_id', duplicate_id,
+            'stats', jsonb_build_object(
+                'price_changes_updated', price_changes_count,
+                'scraped_products_updated', scraped_products_count,
+                'staged_products_updated', staged_products_count
+            )
+        );
+
+EXCEPTION WHEN OTHERS THEN
+        -- Return detailed error information
+        result := jsonb_build_object(
+            'success', false,
+            'message', 'Error deleting duplicate product: ' || SQLERRM,
+            'detail', SQLSTATE,
+            'primary_id', primary_id,
+            'duplicate_id', duplicate_id,
+            'stats', jsonb_build_object(
+                'price_changes_updated', price_changes_count,
+                'scraped_products_updated', scraped_products_count,
+                'staged_products_updated', staged_products_count
+            )
+        );
+
+END;
 
 RETURN result;
 
 EXCEPTION WHEN OTHERS THEN
-    -- Return error result
+    -- Return detailed error information
     result := jsonb_build_object(
         'success', false,
         'message', 'Error merging products: ' || SQLERRM,
+        'detail', SQLSTATE,
         'primary_id', primary_id,
         'duplicate_id', duplicate_id
     );
