@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Next Auth schema and related objects
 -- =========================================================================
--- Generated: 2025-05-24 16:55:21
+-- Generated: 2025-05-25 12:05:14
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -191,6 +191,20 @@ ALTER TABLE ONLY next_auth.accounts
 
 ALTER TABLE ONLY next_auth.sessions
     ADD CONSTRAINT "sessions_userId_fkey" FOREIGN KEY ("userId") REFERENCES next_auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: admin_communication_log admin_communication_log_admin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_communication_log
+    ADD CONSTRAINT admin_communication_log_admin_user_id_fkey FOREIGN KEY (admin_user_id) REFERENCES next_auth.users(id);
+
+--
+-- Name: admin_communication_log admin_communication_log_target_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_communication_log
+    ADD CONSTRAINT admin_communication_log_target_user_id_fkey FOREIGN KEY (target_user_id) REFERENCES next_auth.users(id);
 
 --
 -- Name: companies companies_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -

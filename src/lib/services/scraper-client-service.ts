@@ -282,62 +282,8 @@ export class ScraperClientService {
     throw lastError || new Error('Failed to start test run after multiple attempts');
   }
 
-  /**
-   * Approve a scraper after testing
-   */
-  static async approveScraper(scraperId: string, maxRetries = 2) {
-    console.log(`[ScraperClientService] Approving scraper ${scraperId}`);
-
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        console.log(`[ScraperClientService] Sending approval request (attempt ${attempt}/${maxRetries})`);
-
-        const response = await fetch(`/api/scrapers/${scraperId}/approve`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          // Prevent caching issues
-          cache: 'no-store',
-        });
-
-        console.log(`[ScraperClientService] Approval response status: ${response.status}`);
-
-        if (!response.ok) {
-          let errorMessage = 'Failed to approve scraper';
-          try {
-            const error = await response.json();
-            errorMessage = error.error || errorMessage;
-            console.error(`[ScraperClientService] Error response:`, error);
-          } catch (e) {
-            // If response.json() fails, use the status text
-            errorMessage = `${errorMessage}: ${response.statusText}`;
-          }
-          throw new Error(errorMessage);
-        }
-
-        const result = await response.json();
-        console.log(`[ScraperClientService] Scraper approved successfully:`, result);
-        return result;
-      } catch (error) {
-        console.error(`[ScraperClientService] Error approving scraper (attempt ${attempt}/${maxRetries}):`, error);
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        // If this is not the last attempt, wait before retrying
-        if (attempt < maxRetries) {
-          const delayMs = 1000 * attempt; // Exponential backoff
-          console.log(`[ScraperClientService] Retrying in ${delayMs}ms...`);
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-        }
-      }
-    }
-
-    // If we get here, all retries failed
-    console.error(`[ScraperClientService] All ${maxRetries} attempts to approve scraper failed`);
-    throw lastError || new Error('Failed to approve scraper after multiple attempts');
-  }
+  // Note: Approval method removed since scrapers can only be saved to database if already approved
+  // The approval process now happens in the UI before saving to database
 
   /**
    * Activate a scraper (deactivating others for the same competitor)

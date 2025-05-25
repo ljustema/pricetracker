@@ -21,7 +21,7 @@ import hashlib
 load_dotenv() # Load environment variables from .env file
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-WORKER_POLL_INTERVAL = int(os.getenv("WORKER_POLL_INTERVAL", 5)) # Seconds - Reduced from 10 to 5 for more frequent polling
+WORKER_POLL_INTERVAL = int(os.getenv("WORKER_POLL_INTERVAL", 30)) # Seconds - Increased to 30 for better stability
 WORKER_ID = f"py-worker-{os.getpid()}" # Basic worker identifier
 SCRIPT_TIMEOUT_SECONDS = 7200 # Timeout for scraper script execution (2 hours)
 DB_BATCH_SIZE = 100 # How many products to buffer before saving to DB

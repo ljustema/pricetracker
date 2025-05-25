@@ -440,7 +440,6 @@ export type Database = {
                     filter_by_active_brands: boolean;
                     id: string;
                     is_active: boolean | null;
-                    is_approved: boolean | null;
                     last_products_per_second: number | null;
                     last_run: string | null;
                     name: string;
@@ -464,7 +463,6 @@ export type Database = {
                     filter_by_active_brands?: boolean;
                     id?: string;
                     is_active?: boolean | null;
-                    is_approved?: boolean | null;
                     last_products_per_second?: number | null;
                     last_run?: string | null;
                     name: string;
@@ -488,7 +486,6 @@ export type Database = {
                     filter_by_active_brands?: boolean;
                     id?: string;
                     is_active?: boolean | null;
-                    is_approved?: boolean | null;
                     last_products_per_second?: number | null;
                     last_run?: string | null;
                     name?: string;

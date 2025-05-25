@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-05-24 16:55:21
+-- Generated: 2025-05-25 12:05:14
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -414,6 +414,134 @@ END;
 
 $$;
 
+base_time timestamp with time zone;
+
+BEGIN
+    -- Use last_sync_at as base, or current time minus interval if never synced
+    base_time := COALESCE(last_sync_at, now() - interval '1 day');
+
+CASE sync_frequency
+        WHEN 'daily' THEN
+            -- Run once per day at 3 AM
+            next_run := date_trunc('day', base_time) + interval '3 hours';
+
+IF next_run <= base_time THEN
+                next_run := next_run + interval '1 day';
+
+END IF;
+
+WHEN 'weekly' THEN
+            -- Run once per week on Monday at 3 AM
+            next_run := date_trunc('week', base_time) + interval '1 day' + interval '3 hours';
+
+IF next_run <= base_time THEN
+                next_run := next_run + interval '1 week';
+
+END IF;
+
+WHEN 'monthly' THEN
+            -- Run once per month on the 1st at 3 AM
+            next_run := date_trunc('month', base_time) + interval '1 month' + interval '3 hours';
+
+ELSE
+            -- Default to daily
+            next_run := date_trunc('day', base_time) + interval '3 hours';
+
+IF next_run <= base_time THEN
+                next_run := next_run + interval '1 day';
+
+END IF;
+
+END CASE;
+
+RETURN next_run;
+
+END;
+
+$$;
+
+time_of_day text;
+
+next_run timestamp with time zone;
+
+current_time timestamp with time zone := now();
+
+today_start timestamp with time zone;
+
+scheduled_time timestamp with time zone;
+
+BEGIN
+    -- Extract schedule parameters
+    frequency := schedule_config->>'frequency';
+
+time_of_day := COALESCE(schedule_config->>'time', '02:00');
+
+-- Get today's start (midnight)
+    today_start := date_trunc('day', current_time);
+
+-- Calculate scheduled time for today
+    scheduled_time := today_start + time_of_day::time;
+
+CASE frequency
+        WHEN 'daily' THEN
+            -- If today's scheduled time has passed, schedule for tomorrow
+            IF scheduled_time <= current_time THEN
+                next_run := scheduled_time + interval '1 day';
+
+ELSE
+                next_run := scheduled_time;
+
+END IF;
+
+WHEN 'weekly' THEN
+            -- Run once per week on the same day as last run (or Monday if no last run)
+            IF last_run IS NULL THEN
+                -- Default to next Monday at scheduled time
+                next_run := date_trunc('week', current_time) + interval '1 day' + time_of_day::time;
+
+IF next_run <= current_time THEN
+                    next_run := next_run + interval '1 week';
+
+END IF;
+
+ELSE
+                -- Run on the same day of week as last run
+                next_run := date_trunc('week', last_run) + interval '1 week' +
+                           (extract(dow from last_run) * interval '1 day') + time_of_day::time;
+
+END IF;
+
+WHEN 'monthly' THEN
+            -- Run once per month on the same day as last run (or 1st if no last run)
+            IF last_run IS NULL THEN
+                -- Default to next 1st of month at scheduled time
+                next_run := date_trunc('month', current_time) + interval '1 month' + time_of_day::time;
+
+ELSE
+                -- Run on the same day of month as last run
+                next_run := date_trunc('month', last_run) + interval '1 month' +
+                           ((extract(day from last_run) - 1) * interval '1 day') + time_of_day::time;
+
+END IF;
+
+ELSE
+            -- Default to daily
+            IF scheduled_time <= current_time THEN
+                next_run := scheduled_time + interval '1 day';
+
+ELSE
+                next_run := scheduled_time;
+
+END IF;
+
+END CASE;
+
+RETURN next_run;
+
+END;
+
+$$;
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -421,6 +549,35 @@ SET default_table_access_method = heap;
 END IF;
 
 $$;
+
+$$;
+
+BEGIN
+    DELETE FROM public.debug_logs
+    WHERE created_at < now() - interval '7 days';
+
+GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+RETURN deleted_count;
+
+END;
+
+$$;
+
+BEGIN
+    DELETE FROM public.scraper_runs
+    WHERE created_at < now() - interval '30 days'
+      AND status IN ('completed', 'failed');
+
+GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+INSERT INTO public.debug_logs (level, message, details)
+    VALUES ('INFO', 'Cleaned up old scraper runs',
+            jsonb_build_object('deleted_count', deleted_count));
+
+RETURN deleted_count;
+
+END;
 
 $$;
 
@@ -461,6 +618,44 @@ END;
 
 $$;
 
+current_timestamp timestamp with time zone := now();
+
+RETURN;
+
+END IF;
+
+EXIT;
+
+END IF;
+
+END IF;
+
+END LOOP;
+
+END;
+
+$$;
+
+current_timestamp timestamp with time zone := now();
+
+RETURN;
+
+END IF;
+
+EXIT;
+
+END IF;
+
+END IF;
+
+END IF;
+
+END LOOP;
+
+END;
+
+$$;
+
 RETURN NEW;
 
 END;
@@ -468,6 +663,53 @@ END;
 $$;
 
 -- The trigger create_profile_for_user will automatically create a profile
+END;
+
+$$;
+
+current_time timestamp with time zone := now();
+
+last_cleanup_check timestamp with time zone;
+
+-- Perform actual cleanup tasks
+        PERFORM cleanup_old_scraper_runs();
+
+PERFORM cleanup_old_debug_logs();
+
+PERFORM process_scraper_timeouts();
+
+END IF;
+
+END;
+
+$$;
+
+current_time timestamp with time zone := now();
+
+should_run_flag boolean;
+
+BEGIN
+    -- Process all active scrapers
+    FOR scraper_record IN
+        SELECT
+            s.id,
+            s.user_id,
+            s.name,
+            s.scraper_type,
+            s.schedule,
+            s.last_run,
+            s.competitor_id
+        FROM public.scrapers s
+        WHERE s.is_active = true
+          AND s.schedule IS NOT NULL
+    LOOP
+        -- Check if scraper should run
+        should_run_flag := (scraper_record.last_run IS NULL OR scraper_record.last_run < current_time - interval '23 hours');
+
+END IF;
+
+END LOOP;
+
 END;
 
 $$;
@@ -564,6 +806,19 @@ $$;
 END;
 
 $$;
+
+END;
+
+$$;
+
+END;
+
+$$;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        -- If any error occurs, return empty result
+        RETURN;
 
 END;
 
@@ -940,7 +1195,27 @@ END;
 
 $$;
 
+END;
+
 $$;
+
+$$;
+
+$$;
+
+END;
+
+$$;
+
+END;
+
+$$;
+
+END;
+
+$$;
+
+END;
 
 $$;
 
@@ -1109,6 +1384,73 @@ END;
 
 $$;
 
+update_count integer := 0;
+
+time_slot integer := 0;
+
+total_scrapers integer;
+
+minutes_per_slot integer;
+
+BEGIN
+    -- Count total active scrapers
+    SELECT COUNT(*) INTO total_scrapers
+    FROM public.scrapers
+    WHERE is_active = true;
+
+-- Update scraper schedules to distribute load
+    FOR scraper_record IN
+        SELECT id, schedule, user_id
+        FROM public.scrapers
+        WHERE is_active = true
+        ORDER BY user_id, id -- Group by user to keep their scrapers together
+    LOOP
+        -- Calculate new time slot (distribute across 24 hours)
+        DECLARE
+            new_hour integer := (time_slot * minutes_per_slot) / 60;
+
+new_minute integer := (time_slot * minutes_per_slot) % 60;
+
+new_time text := format('%02d:%02d', new_hour % 24, new_minute);
+
+updated_schedule jsonb;
+
+BEGIN
+            -- Update the schedule with new time
+            updated_schedule := jsonb_set(
+                scraper_record.schedule,
+                '{time}',
+                to_jsonb(new_time)
+            );
+
+UPDATE public.scrapers
+            SET
+                schedule = updated_schedule,
+                updated_at = now()
+            WHERE id = scraper_record.id;
+
+update_count := update_count + 1;
+
+time_slot := time_slot + 1;
+
+END;
+
+END LOOP;
+
+INSERT INTO public.debug_logs (level, message, details)
+    VALUES ('INFO', 'Optimized scraper schedules',
+            jsonb_build_object(
+                'updated_scrapers', update_count,
+                'total_scrapers', total_scrapers,
+                'minutes_per_slot', minutes_per_slot
+            ));
+
+RETURN update_count;
+
+END;
+
+$$;
+
 BEGIN
     -- Force processing of any pending products by updating them in place
     UPDATE staged_integration_products
@@ -1122,6 +1464,27 @@ BEGIN
     PERFORM update_integration_run_status(run_id);
 
 RETURN stats;
+
+END;
+
+$$;
+
+timeout_record record;
+
+timeout_count := timeout_count + 1;
+
+-- Log the timeout
+        INSERT INTO public.debug_logs (level, message, details)
+        VALUES ('WARN', 'Scraper run timed out',
+                jsonb_build_object(
+                    'run_id', timeout_record.id,
+                    'scraper_id', timeout_record.scraper_id,
+                    'started_at', timeout_record.started_at
+                ));
+
+END LOOP;
+
+RETURN timeout_count;
 
 END;
 
@@ -1634,6 +1997,10 @@ BEGIN
         WHERE id = integration_record.integration_id;
 
 END IF;
+
+END;
+
+$$;
 
 END;
 
@@ -2525,6 +2892,24 @@ CREATE INDEX users_instance_id_idx ON auth.users USING btree (instance_id);
 CREATE INDEX users_is_anonymous_idx ON auth.users USING btree (is_anonymous);
 
 --
+-- Name: idx_admin_communication_log_admin_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_admin_communication_log_admin_user_id ON public.admin_communication_log USING btree (admin_user_id);
+
+--
+-- Name: idx_admin_communication_log_sent_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_admin_communication_log_sent_at ON public.admin_communication_log USING btree (sent_at);
+
+--
+-- Name: idx_admin_communication_log_target_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_admin_communication_log_target_user_id ON public.admin_communication_log USING btree (target_user_id);
+
+--
 -- Name: idx_brand_aliases_alias_name; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2693,22 +3078,10 @@ CREATE INDEX idx_scraper_ai_sessions_current_phase ON public.scraper_ai_sessions
 CREATE INDEX idx_scraper_ai_sessions_user_id ON public.scraper_ai_sessions USING btree (user_id);
 
 --
--- Name: idx_scraper_run_timeouts_lookup; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_scraper_runs_created_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_scraper_run_timeouts_lookup ON public.scraper_run_timeouts USING btree (timeout_at, processed);
-
---
--- Name: idx_scraper_run_timeouts_run_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_scraper_run_timeouts_run_id ON public.scraper_run_timeouts USING btree (run_id);
-
---
--- Name: idx_scraper_runs_is_test_run; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_scraper_runs_is_test_run ON public.scraper_runs USING btree (is_test_run);
+CREATE INDEX idx_scraper_runs_created_at ON public.scraper_runs USING btree (created_at);
 
 --
 -- Name: idx_scraper_runs_scraper_id; Type: INDEX; Schema: public; Owner: -
@@ -2720,13 +3093,19 @@ CREATE INDEX idx_scraper_runs_scraper_id ON public.scraper_runs USING btree (scr
 -- Name: idx_scraper_runs_started_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_scraper_runs_started_at ON public.scraper_runs USING btree (started_at DESC);
+CREATE INDEX idx_scraper_runs_started_at ON public.scraper_runs USING btree (started_at);
 
 --
 -- Name: idx_scraper_runs_status; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_scraper_runs_status ON public.scraper_runs USING btree (status);
+
+--
+-- Name: idx_scraper_runs_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_runs_user_id ON public.scraper_runs USING btree (user_id);
 
 --
 -- Name: idx_scrapers_competitor_id; Type: INDEX; Schema: public; Owner: -
@@ -2775,6 +3154,30 @@ CREATE INDEX idx_staged_integration_products_sku_brand ON public.staged_integrat
 --
 
 CREATE INDEX idx_staged_integration_products_status ON public.staged_integration_products USING btree (status);
+
+--
+-- Name: idx_user_profiles_admin_role; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_admin_role ON public.user_profiles USING btree (admin_role) WHERE (admin_role IS NOT NULL);
+
+--
+-- Name: idx_user_profiles_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_created_at ON public.user_profiles USING btree (created_at);
+
+--
+-- Name: idx_user_profiles_is_suspended; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_is_suspended ON public.user_profiles USING btree (is_suspended) WHERE (is_suspended = true);
+
+--
+-- Name: idx_user_profiles_subscription_tier; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_subscription_tier ON public.user_profiles USING btree (subscription_tier);
 
 --
 -- Name: ix_realtime_subscription_entity; Type: INDEX; Schema: realtime; Owner: -

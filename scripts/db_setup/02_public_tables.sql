@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-05-24 16:55:21
+-- Generated: 2025-05-25 12:05:14
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -442,6 +442,41 @@ COMMENT ON TABLE auth.users IS 'Auth: Stores user login data within a secure sch
 COMMENT ON COLUMN auth.users.is_sso_user IS 'Auth: Set this column to true when the account comes from SSO. These accounts can have duplicate emails.';
 
 --
+-- Name: admin_communication_log; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.admin_communication_log (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    admin_user_id uuid NOT NULL,
+    target_user_id uuid NOT NULL,
+    communication_type text DEFAULT 'email'::text NOT NULL,
+    subject text,
+    message_content text NOT NULL,
+    sent_at timestamp with time zone DEFAULT now(),
+    status text DEFAULT 'sent'::text,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: TABLE admin_communication_log; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.admin_communication_log IS 'Logs communications sent by admins to users.';
+
+--
+-- Name: COLUMN admin_communication_log.admin_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.admin_communication_log.admin_user_id IS 'The ID of the admin who sent the communication.';
+
+--
+-- Name: COLUMN admin_communication_log.target_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.admin_communication_log.target_user_id IS 'The ID of the user who received the communication.';
+
+--
 -- Name: brand_aliases; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -729,65 +764,6 @@ COMMENT ON COLUMN public.scraper_ai_sessions.data_extraction_data IS 'Data from 
 COMMENT ON COLUMN public.scraper_ai_sessions.assembly_data IS 'Data from the script assembly phase';
 
 --
--- Name: scraper_analysis; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraper_analysis (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    competitor_id uuid NOT NULL,
-    url text NOT NULL,
-    base_url text NOT NULL,
-    hostname text NOT NULL,
-    title text,
-    sitemap_urls text[] DEFAULT '{}'::text[],
-    brand_pages text[] DEFAULT '{}'::text[],
-    category_pages text[] DEFAULT '{}'::text[],
-    product_listing_pages text[] DEFAULT '{}'::text[],
-    api_endpoints jsonb DEFAULT '[]'::jsonb,
-    proposed_strategy text NOT NULL,
-    strategy_description text,
-    html_sample text,
-    product_selectors jsonb,
-    created_at timestamp with time zone DEFAULT now()
-);
-
---
--- Name: scraper_data_extraction; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraper_data_extraction (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    competitor_id uuid NOT NULL,
-    url_collection_id uuid,
-    products jsonb DEFAULT '[]'::jsonb,
-    execution_log text[] DEFAULT '{}'::text[],
-    generated_code text,
-    error text,
-    created_at timestamp with time zone DEFAULT now()
-);
-
---
--- Name: scraper_run_timeouts; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraper_run_timeouts (
-    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
-    run_id uuid NOT NULL,
-    timeout_at timestamp with time zone NOT NULL,
-    processed boolean DEFAULT false NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    processed_at timestamp with time zone
-);
-
---
--- Name: TABLE scraper_run_timeouts; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.scraper_run_timeouts IS 'Stores timeout information for scraper runs';
-
---
 -- Name: scraper_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -814,69 +790,6 @@ CREATE TABLE public.scraper_runs (
 );
 
 --
--- Name: COLUMN scraper_runs.progress_messages; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraper_runs.progress_messages IS 'Array to store progress messages or logs during a scraper run';
-
---
--- Name: COLUMN scraper_runs.execution_time_ms; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraper_runs.execution_time_ms IS 'Total execution time of the scraper run in milliseconds (calculated from completed_at - started_at).';
-
---
--- Name: COLUMN scraper_runs.products_per_second; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraper_runs.products_per_second IS 'Calculated metric: product_count / (execution_time_ms / 1000.0). Null if execution time is zero or product_count is null.';
-
---
--- Name: COLUMN scraper_runs.error_details; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraper_runs.error_details IS 'Detailed error information including stack traces';
-
---
--- Name: COLUMN scraper_runs.current_phase; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraper_runs.current_phase IS 'Current phase of the scraper run (1 = URL collection, 2 = Processing products, etc.)';
-
---
--- Name: scraper_script_assembly; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraper_script_assembly (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    competitor_id uuid NOT NULL,
-    data_extraction_id uuid,
-    assembled_script text,
-    validation_result jsonb,
-    scraper_id uuid,
-    created_at timestamp with time zone DEFAULT now()
-);
-
---
--- Name: scraper_url_collection; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraper_url_collection (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    competitor_id uuid NOT NULL,
-    analysis_id uuid,
-    urls text[] DEFAULT '{}'::text[],
-    total_count integer DEFAULT 0,
-    sample_urls text[] DEFAULT '{}'::text[],
-    execution_log text[] DEFAULT '{}'::text[],
-    generated_code text,
-    error text,
-    created_at timestamp with time zone DEFAULT now()
-);
-
---
 -- Name: scrapers; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -896,7 +809,6 @@ CREATE TABLE public.scrapers (
     scraper_type character varying(20) DEFAULT 'ai'::character varying NOT NULL,
     python_script text,
     script_metadata jsonb,
-    is_approved boolean DEFAULT false,
     test_results jsonb,
     execution_time bigint,
     last_products_per_second numeric(10,2),
@@ -980,8 +892,22 @@ CREATE TABLE public.user_profiles (
     subscription_tier text DEFAULT 'free'::text,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    email text
+    email text,
+    admin_role text,
+    is_suspended boolean DEFAULT false
 );
+
+--
+-- Name: COLUMN user_profiles.admin_role; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_profiles.admin_role IS 'Defines the admin role for the user, if any (e.g., super_admin, support_admin).';
+
+--
+-- Name: COLUMN user_profiles.is_suspended; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_profiles.is_suspended IS 'Indicates if the user account is currently suspended by an admin.';
 
 --
 -- Name: user_subscriptions; Type: TABLE; Schema: public; Owner: -
@@ -1330,6 +1256,13 @@ ALTER TABLE ONLY auth.users
     ADD CONSTRAINT users_pkey PRIMARY KEY (id);
 
 --
+-- Name: admin_communication_log admin_communication_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_communication_log
+    ADD CONSTRAINT admin_communication_log_pkey PRIMARY KEY (id);
+
+--
 -- Name: brand_aliases brand_aliases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1421,46 +1354,11 @@ ALTER TABLE ONLY public.scraper_ai_sessions
     ADD CONSTRAINT scraper_ai_sessions_pkey PRIMARY KEY (id);
 
 --
--- Name: scraper_analysis scraper_analysis_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_analysis
-    ADD CONSTRAINT scraper_analysis_pkey PRIMARY KEY (id);
-
---
--- Name: scraper_data_extraction scraper_data_extraction_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_data_extraction
-    ADD CONSTRAINT scraper_data_extraction_pkey PRIMARY KEY (id);
-
---
--- Name: scraper_run_timeouts scraper_run_timeouts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_run_timeouts
-    ADD CONSTRAINT scraper_run_timeouts_pkey PRIMARY KEY (id);
-
---
 -- Name: scraper_runs scraper_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.scraper_runs
     ADD CONSTRAINT scraper_runs_pkey PRIMARY KEY (id);
-
---
--- Name: scraper_script_assembly scraper_script_assembly_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_script_assembly
-    ADD CONSTRAINT scraper_script_assembly_pkey PRIMARY KEY (id);
-
---
--- Name: scraper_url_collection scraper_url_collection_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_url_collection
-    ADD CONSTRAINT scraper_url_collection_pkey PRIMARY KEY (id);
 
 --
 -- Name: scrapers scrapers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1841,48 +1739,6 @@ ALTER TABLE ONLY public.scraper_ai_sessions
     ADD CONSTRAINT scraper_ai_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 --
--- Name: scraper_analysis scraper_analysis_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_analysis
-    ADD CONSTRAINT scraper_analysis_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
-
---
--- Name: scraper_analysis scraper_analysis_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_analysis
-    ADD CONSTRAINT scraper_analysis_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-
---
--- Name: scraper_data_extraction scraper_data_extraction_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_data_extraction
-    ADD CONSTRAINT scraper_data_extraction_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
-
---
--- Name: scraper_data_extraction scraper_data_extraction_url_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_data_extraction
-    ADD CONSTRAINT scraper_data_extraction_url_collection_id_fkey FOREIGN KEY (url_collection_id) REFERENCES public.scraper_url_collection(id);
-
---
--- Name: scraper_data_extraction scraper_data_extraction_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_data_extraction
-    ADD CONSTRAINT scraper_data_extraction_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-
---
--- Name: scraper_run_timeouts scraper_run_timeouts_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_run_timeouts
-    ADD CONSTRAINT scraper_run_timeouts_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.scraper_runs(id) ON DELETE CASCADE;
-
---
 -- Name: scraper_runs scraper_runs_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1895,55 +1751,6 @@ ALTER TABLE ONLY public.scraper_runs
 
 ALTER TABLE ONLY public.scraper_runs
     ADD CONSTRAINT scraper_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-
---
--- Name: scraper_script_assembly scraper_script_assembly_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_script_assembly
-    ADD CONSTRAINT scraper_script_assembly_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
-
---
--- Name: scraper_script_assembly scraper_script_assembly_data_extraction_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_script_assembly
-    ADD CONSTRAINT scraper_script_assembly_data_extraction_id_fkey FOREIGN KEY (data_extraction_id) REFERENCES public.scraper_data_extraction(id);
-
---
--- Name: scraper_script_assembly scraper_script_assembly_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_script_assembly
-    ADD CONSTRAINT scraper_script_assembly_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
-
---
--- Name: scraper_script_assembly scraper_script_assembly_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_script_assembly
-    ADD CONSTRAINT scraper_script_assembly_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-
---
--- Name: scraper_url_collection scraper_url_collection_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_url_collection
-    ADD CONSTRAINT scraper_url_collection_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.scraper_analysis(id);
-
---
--- Name: scraper_url_collection scraper_url_collection_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_url_collection
-    ADD CONSTRAINT scraper_url_collection_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
-
---
--- Name: scraper_url_collection scraper_url_collection_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_url_collection
-    ADD CONSTRAINT scraper_url_collection_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 --
 -- Name: scrapers scrapers_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -2126,6 +1933,12 @@ ALTER TABLE auth.sso_providers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE auth.users ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: admin_communication_log; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.admin_communication_log ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: brand_aliases; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -2204,40 +2017,10 @@ ALTER TABLE public.scraped_products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scraper_ai_sessions ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: scraper_analysis; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraper_analysis ENABLE ROW LEVEL SECURITY;
-
---
--- Name: scraper_data_extraction; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraper_data_extraction ENABLE ROW LEVEL SECURITY;
-
---
--- Name: scraper_run_timeouts; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraper_run_timeouts ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: scraper_runs; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.scraper_runs ENABLE ROW LEVEL SECURITY;
-
---
--- Name: scraper_script_assembly; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraper_script_assembly ENABLE ROW LEVEL SECURITY;
-
---
--- Name: scraper_url_collection; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraper_url_collection ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: scrapers; Type: ROW SECURITY; Schema: public; Owner: -

@@ -147,21 +147,7 @@ export default function ScraperManager({
     setStep('view-logs');
   };
 
-  const _handleApprove = async () => {
-    if (!selectedScraperId) return;
-
-    setIsLoading(true);
-    try {
-      await ScraperClientService.approveScraper(selectedScraperId);
-      await loadScrapers();
-      setStep('list');
-    } catch (error) {
-      console.error("Error approving scraper:", error);
-      alert(error instanceof Error ? error.message : "Failed to approve scraper");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // Note: Approval logic removed since scrapers can only be saved to database if already approved
 
   const handleCancel = () => {
     setStep('list');

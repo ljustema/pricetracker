@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { getToken } from 'next-auth/jwt';
 
 // This function can be marked `async` if using `await` inside
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const host = request.headers.get('host');
 
   // Check if the host is 'pricetracker.se' without the 'www' prefix
@@ -20,6 +21,9 @@ export function middleware(request: NextRequest) {
     // Return a permanent redirect response (301)
     return NextResponse.redirect(url, 301);
   }
+
+  // Admin route protection is handled by requireAdmin() in each admin page
+  // No middleware protection needed since the pages themselves check authentication and admin roles
 
   // Continue with the request if no redirect is needed
   return NextResponse.next();

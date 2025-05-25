@@ -384,7 +384,6 @@ const API_ENDPOINTS = {`
           time: '02:00', // Run at 2 AM
         },
         is_active: false, // Default to inactive until tested
-        is_approved: false, // Default to not approved until tested
         filter_by_active_brands: true, // Default to filtering by active brands
         scrape_only_own_products: false, // Default to not filtering by own products
         created_at: now,

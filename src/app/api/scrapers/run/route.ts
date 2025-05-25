@@ -13,24 +13,23 @@ export async function POST(_req: NextRequest) {
     }
 
     const userId = session.user.id;
-    
+
     // Get all active scrapers for the user
     const supabase = await createSupabaseServerClient();
     const { data: scrapers, error } = await supabase
       .from('scrapers')
       .select('id')
       .eq('user_id', userId)
-      .eq('is_active', true)
-      .eq('is_approved', true);
-    
+      .eq('is_active', true);
+
     if (error) {
       throw new Error(`Failed to get active scrapers: ${error.message}`);
     }
-    
+
     if (!scrapers || scrapers.length === 0) {
       return NextResponse.json({ message: "No active scrapers found" });
     }
-    
+
     // Run each scraper
     const results = await Promise.all(
       scrapers.map(async (scraper) => {
@@ -50,7 +49,7 @@ export async function POST(_req: NextRequest) {
         }
       })
     );
-    
+
     return NextResponse.json({
       success: true,
       message: `Ran ${results.length} scrapers`,

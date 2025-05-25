@@ -4,9 +4,9 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 
 interface Params {
-  params: {
+  params: Promise<{
     scraperId: string;
-  };
+  }>;
 }
 
 export async function POST(req: NextRequest, { params }: Params) {
@@ -20,7 +20,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     // Use await for params if needed
     const { scraperId } = await params;
     const userId = session.user.id;
-    
+
     // Activate the scraper for the user
     const scraper = await ScraperService.activateScraper(scraperId, userId);
 

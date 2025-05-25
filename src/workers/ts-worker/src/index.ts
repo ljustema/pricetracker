@@ -83,7 +83,7 @@ if (!supabaseUrl || !supabaseServiceRoleKey) {
 const supabase = createClient<Database>(supabaseUrl, supabaseServiceRoleKey);
 
 const WORKER_TYPE = 'typescript'; // Define the type of scraper this worker handles
-const POLLING_INTERVAL_MS = 5000; // Poll every 5 seconds (adjust as needed)
+const POLLING_INTERVAL_MS = 30000; // Poll every 30 seconds (reduced from 5 seconds)
 const SCRIPT_TIMEOUT_SECONDS = 7200; // Timeout for script execution (2 hours) - Matches Python worker
 const DB_BATCH_SIZE = 100; // How many products to buffer before saving to DB
 const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
@@ -95,10 +95,20 @@ let lastJobTime = Date.now();
 let lastHealthCheckTime = Date.now();
 let lastPollMessageTime = 0; // To reduce polling message frequency
 
+// Job processing state to prevent race conditions
+let isProcessingJob = false;
+let currentJobId: string | null = null;
+
 async function fetchAndProcessJob() {
   let job: any = null; // Define job variable in the outer scope for the catch block
 
   try {
+    // RACE CONDITION PROTECTION: Skip if already processing a job
+    if (isProcessingJob) {
+      console.log(`Skipping poll - already processing job ${currentJobId}`);
+      return;
+    }
+
     // Periodically check for long periods of inactivity and log health status
     const currentTime = Date.now();
     if (currentTime - lastHealthCheckTime > HEALTH_CHECK_INTERVAL_MS) {
@@ -135,6 +145,10 @@ async function fetchAndProcessJob() {
     }
 
     job = claimedJobs[0]; // Assign the first (and should be only) claimed job
+
+    // SET JOB PROCESSING STATE - Prevent race conditions
+    isProcessingJob = true;
+    currentJobId = job.id;
 
     // The job status is already 'running' and started_at is set by the RPC function.
     console.log(`Job ${job.id} claimed successfully via RPC. Scraper ID: ${job.scraper_id}`);
@@ -891,6 +905,26 @@ async function fetchAndProcessJob() {
             console.error(`Failed to update job ${job.id} status after unhandled error:`, updateError);
         }
     }
+  } finally {
+    // ALWAYS reset job processing state to prevent race conditions
+    isProcessingJob = false;
+    currentJobId = null;
+
+    // Clean up log batch for this job to prevent memory leaks
+    if (job && job.id && LOG_BATCHES[job.id]) {
+      // Flush any remaining messages
+      try {
+        await flushLogBatch(job.id);
+      } catch (flushError) {
+        console.error(`Error flushing final log batch for job ${job.id}:`, flushError);
+      }
+
+      // Clear the timer and delete the batch
+      if (LOG_BATCHES[job.id].timer) {
+        clearInterval(LOG_BATCHES[job.id].timer);
+      }
+      delete LOG_BATCHES[job.id];
+    }
   }
 }
 
@@ -917,8 +951,9 @@ interface LogBatch {
 }
 
 const LOG_BATCHES: Record<string, LogBatch> = {};
-const BATCH_FLUSH_INTERVAL_MS = 5000; // Flush every 5 seconds
-const BATCH_SIZE_THRESHOLD = 10; // Or flush when we have 10+ messages
+const BATCH_FLUSH_INTERVAL_MS = 30000; // Flush every 30 seconds (reduced frequency)
+const BATCH_SIZE_THRESHOLD = 20; // Or flush when we have 20+ messages (increased threshold)
+const MAX_PROGRESS_MESSAGES = 100; // Maximum progress messages to keep (prevent memory leaks)
 const IMPORTANT_PHASES = ['ERROR', 'ERROR_DETAILS', 'COMPLETION', 'JOB_CLAIMED', 'PHASE_UPDATE']; // These phases get flushed immediately
 
 // Function to flush a batch of log messages to the database
@@ -949,9 +984,14 @@ async function flushLogBatch(jobId: string) {
             throw fetchError;
         }
 
-        // Combine existing messages with new ones
+        // Combine existing messages with new ones, but limit total size to prevent memory leaks
         const existingMessages = currentData?.progress_messages || [];
-        const updatedMessages = [...existingMessages, ...stringifiedMessages];
+        const combinedMessages = [...existingMessages, ...stringifiedMessages];
+
+        // Keep only the most recent messages to prevent unlimited growth
+        const updatedMessages = combinedMessages.length > MAX_PROGRESS_MESSAGES
+            ? combinedMessages.slice(-MAX_PROGRESS_MESSAGES)
+            : combinedMessages;
 
         // Update with the combined array
         const { error } = await supabase

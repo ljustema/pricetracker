@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Job-related objects
 -- =========================================================================
--- Generated: 2025-05-24 16:55:21
+-- Generated: 2025-05-25 12:05:14
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -84,4 +84,281 @@ IF claimed_job_id_val IS NULL THEN
   JOIN scrapers s ON sr.scraper_id = s.id
   WHERE sr.id = claimed_job_id_val; -- Select the specific job that was claimed
 END;
+
+job_count integer := 0;
+
+new_job_id uuid;
+
+-- Concurrency limits for integration worker
+    max_integration_jobs integer := 1; -- 1 ts-util-worker
+    current_integration_jobs integer;
+
+max_jobs_per_run integer := 1; -- Maximum integration jobs to create in one run
+BEGIN
+    -- Check current integration job count
+    SELECT COUNT(*) INTO current_integration_jobs
+    FROM public.integration_runs ir
+    WHERE ir.status IN ('pending', 'initializing', 'running');
+
+-- Log current status
+    RAISE NOTICE 'Current integration jobs: %/%, Max per run: %',
+        current_integration_jobs, max_integration_jobs, max_jobs_per_run;
+
+-- If integration worker is at capacity, don't create any jobs
+    IF current_integration_jobs >= max_integration_jobs THEN
+        RETURN QUERY SELECT 0, format('Integration worker busy - %/% jobs running',
+            current_integration_jobs, max_integration_jobs);
+
+-- Process integrations in order of priority (longest time since last sync)
+    FOR integration_record IN
+        SELECT
+            i.id,
+            i.user_id,
+            i.name,
+            i.platform,
+            i.sync_frequency,
+            i.last_sync_at
+        FROM public.integrations i
+        WHERE i.status = 'active'
+          AND i.sync_frequency IS NOT NULL
+          -- Only consider integrations that haven't synced in more than 23 hours
+          AND (i.last_sync_at IS NULL OR i.last_sync_at < current_timestamp - interval '23 hours')
+        ORDER BY
+          -- Prioritize integrations that haven't synced in the longest time
+          COALESCE(i.last_sync_at, '1970-01-01'::timestamp with time zone) ASC
+        LIMIT 10 -- Only check the 10 most overdue integrations
+    LOOP
+        -- Stop if we've reached the per-run job limit or worker capacity
+        IF job_count >= max_jobs_per_run OR current_integration_jobs >= max_integration_jobs THEN
+            RAISE NOTICE 'Reached limit - jobs created: %, worker capacity: %/%',
+                job_count, current_integration_jobs, max_integration_jobs;
+
+-- Check if there's already a pending or running job for this integration
+        IF NOT EXISTS (
+            SELECT 1 FROM public.integration_runs ir
+            WHERE ir.integration_id = integration_record.id
+              AND ir.status IN ('pending', 'initializing', 'running')
+        ) THEN
+            -- Create new integration run job
+            INSERT INTO public.integration_runs (
+                id,
+                integration_id,
+                user_id,
+                status,
+                started_at,
+                is_test_run,
+                created_at
+            ) VALUES (
+                gen_random_uuid(),
+                integration_record.id,
+                integration_record.user_id,
+                'pending',
+                current_timestamp,
+                false, -- This is a scheduled run, not a test
+                current_timestamp
+            ) RETURNING id INTO new_job_id;
+
+job_count := job_count + 1;
+
+current_integration_jobs := current_integration_jobs + 1;
+
+-- Log the job creation
+            RAISE NOTICE 'Created scheduled job % for integration % (%) - Priority: %',
+                new_job_id, integration_record.name, integration_record.platform,
+                CASE
+                    WHEN integration_record.last_sync_at IS NULL THEN 'Never synced'
+                    ELSE extract(epoch from (current_timestamp - integration_record.last_sync_at))/3600 || ' hours ago'
+                END;
+
+RETURN QUERY SELECT job_count, format('Created %s scheduled integration jobs (%/%)',
+        job_count, current_integration_jobs, max_integration_jobs);
+
+job_count integer := 0;
+
+new_job_id uuid;
+
+-- Concurrency limits based on available workers
+    max_python_jobs integer := 1;    -- 1 py-worker
+    max_typescript_jobs integer := 1; -- 1 ts-worker
+    current_python_jobs integer;
+
+current_typescript_jobs integer;
+
+-- Job creation limits per run to prevent overload
+    max_jobs_per_run integer := 2; -- Maximum jobs to create in one scheduling run
+BEGIN
+    -- Check current job counts by worker type
+    SELECT COUNT(*) INTO current_python_jobs
+    FROM public.scraper_runs sr
+    WHERE sr.status IN ('pending', 'initializing', 'running')
+      AND sr.scraper_type = 'python';
+
+SELECT COUNT(*) INTO current_typescript_jobs
+    FROM public.scraper_runs sr
+    WHERE sr.status IN ('pending', 'initializing', 'running')
+      AND sr.scraper_type = 'typescript';
+
+-- Log current status
+    RAISE NOTICE 'Current jobs - Python: %/%, TypeScript: %/%, Max per run: %',
+        current_python_jobs, max_python_jobs,
+        current_typescript_jobs, max_typescript_jobs,
+        max_jobs_per_run;
+
+-- If both worker types are at capacity, don't create any jobs
+    IF current_python_jobs >= max_python_jobs AND current_typescript_jobs >= max_typescript_jobs THEN
+        RETURN QUERY SELECT 0, format('All workers busy - Python: %/%, TypeScript: %/%',
+            current_python_jobs, max_python_jobs,
+            current_typescript_jobs, max_typescript_jobs);
+
+-- Process scrapers in order of priority (longest time since last run)
+    FOR scraper_record IN
+        SELECT
+            s.id,
+            s.user_id,
+            s.name,
+            s.scraper_type,
+            s.schedule,
+            s.last_run,
+            s.competitor_id
+        FROM public.scrapers s
+        WHERE s.is_active = true
+          AND s.schedule IS NOT NULL
+          -- Only consider scrapers that haven't run in more than 23 hours
+          AND (s.last_run IS NULL OR s.last_run < current_timestamp - interval '23 hours')
+        ORDER BY
+          -- Prioritize scrapers that haven't run in the longest time
+          COALESCE(s.last_run, '1970-01-01'::timestamp with time zone) ASC
+        LIMIT 20 -- Only check the 20 most overdue scrapers to prevent long execution
+    LOOP
+        -- Stop if we've reached the per-run job limit
+        IF job_count >= max_jobs_per_run THEN
+            RAISE NOTICE 'Reached max jobs per run limit (%)', max_jobs_per_run;
+
+-- Check worker capacity for this scraper type
+        IF scraper_record.scraper_type = 'python' AND current_python_jobs >= max_python_jobs THEN
+            CONTINUE; -- Skip Python scrapers if Python worker is busy
+        END IF;
+
+IF scraper_record.scraper_type = 'typescript' AND current_typescript_jobs >= max_typescript_jobs THEN
+            CONTINUE; -- Skip TypeScript scrapers if TypeScript worker is busy
+        END IF;
+
+-- Check if there's already a pending or running job for this specific scraper
+        IF NOT EXISTS (
+            SELECT 1 FROM public.scraper_runs sr
+            WHERE sr.scraper_id = scraper_record.id
+              AND sr.status IN ('pending', 'initializing', 'running')
+        ) THEN
+            -- Create new scraper run job
+            INSERT INTO public.scraper_runs (
+                id,
+                scraper_id,
+                user_id,
+                status,
+                started_at,
+                is_test_run,
+                scraper_type,
+                created_at
+            ) VALUES (
+                gen_random_uuid(),
+                scraper_record.id,
+                scraper_record.user_id,
+                'pending',
+                current_timestamp,
+                false, -- This is a scheduled run, not a test
+                scraper_record.scraper_type,
+                current_timestamp
+            ) RETURNING id INTO new_job_id;
+
+job_count := job_count + 1;
+
+-- Update worker capacity counters
+            IF scraper_record.scraper_type = 'python' THEN
+                current_python_jobs := current_python_jobs + 1;
+
+ELSIF scraper_record.scraper_type = 'typescript' THEN
+                current_typescript_jobs := current_typescript_jobs + 1;
+
+-- Log the job creation
+            RAISE NOTICE 'Created scheduled job % for scraper % (%) - Priority: %',
+                new_job_id, scraper_record.name, scraper_record.scraper_type,
+                CASE
+                    WHEN scraper_record.last_run IS NULL THEN 'Never run'
+                    ELSE extract(epoch from (current_timestamp - scraper_record.last_run))/3600 || ' hours ago'
+                END;
+
+RETURN QUERY SELECT job_count, format('Created %s scheduled scraper jobs (Python: %/%, TypeScript: %/%)',
+        job_count, current_python_jobs, max_python_jobs, current_typescript_jobs, max_typescript_jobs);
+
+BEGIN
+    -- Check when we last ran cleanup tasks
+    SELECT COALESCE(MAX(created_at), '1970-01-01'::timestamp with time zone)
+    INTO last_cleanup_check
+    FROM public.debug_logs
+    WHERE message LIKE '%cleanup_utility_job%'
+      AND created_at > current_time - interval '1 day';
+
+-- Run cleanup tasks once per day
+    IF last_cleanup_check < current_time - interval '23 hours' THEN
+        -- Log that we're running cleanup (this serves as our utility job queue for now)
+        INSERT INTO public.debug_logs (
+            user_id,
+            level,
+            message,
+            details,
+            created_at
+        ) VALUES (
+            NULL, -- System job
+            'INFO',
+            'cleanup_utility_job',
+            jsonb_build_object(
+                'task_type', 'daily_cleanup',
+                'scheduled_at', current_time
+            ),
+            current_time
+        );
+
+job_count := job_count + 1;
+
+RAISE NOTICE 'Created utility cleanup job at %', current_time;
+
+RETURN QUERY SELECT job_count, format('Created %s utility jobs', job_count);
+
+has_pending_job_flag boolean;
+
+job_created_flag boolean;
+
+-- Check if there's already a pending job
+        SELECT EXISTS (
+            SELECT 1 FROM public.scraper_runs sr
+            WHERE sr.scraper_id = scraper_record.id
+              AND sr.status IN ('pending', 'initializing', 'running')
+        ) INTO has_pending_job_flag;
+
+job_created_flag := false;
+
+IF should_run_flag AND NOT has_pending_job_flag THEN
+            job_created_flag := true;
+
+RETURN QUERY SELECT scraper_record.id, scraper_record.name, should_run_flag, has_pending_job_flag, job_created_flag;
+
+-- Calculate minutes per slot to spread across 24 hours
+    -- Leave some buffer time between jobs
+    minutes_per_slot := GREATEST(5, (24 * 60) / GREATEST(total_scrapers, 1));
+
+BEGIN
+    -- Find scraper runs that have been running for more than 2 hours
+    FOR timeout_record IN
+        SELECT sr.id, sr.scraper_id, sr.started_at
+        FROM public.scraper_runs sr
+        WHERE sr.status = 'running'
+          AND sr.started_at < now() - interval '2 hours'
+    LOOP
+        -- Mark as failed due to timeout
+        UPDATE public.scraper_runs
+        SET
+            status = 'failed',
+            completed_at = now(),
+            error_message = 'Job timed out after 2 hours'
+        WHERE id = timeout_record.id;
 

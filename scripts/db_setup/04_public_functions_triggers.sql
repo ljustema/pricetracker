@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-05-24 16:55:21
+-- Generated: 2025-05-25 12:05:14
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -273,6 +273,26 @@ DECLARE
 COMMENT ON FUNCTION public.auto_trim_progress_messages() IS 'Automatically trims progress_messages when they exceed 200 entries';
 
 --
+-- Name: calculate_next_integration_run_time(text, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_next_integration_run_time(sync_frequency text, last_sync_at timestamp with time zone) RETURNS timestamp with time zone
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    next_run timestamp with time zone;
+
+--
+-- Name: calculate_next_scraper_run_time(jsonb, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_next_scraper_run_time(schedule_config jsonb, last_run timestamp with time zone) RETURNS timestamp with time zone
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    frequency text;
+
+--
 -- Name: claim_next_integration_job(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -303,6 +323,26 @@ DECLARE
 --
 
 COMMENT ON FUNCTION public.claim_next_scraper_job(worker_type_filter text) IS 'Atomically claims the next pending scraper job for a given worker type. It selects, locks, updates the job status, and then returns the claimed job''s details including the competitor_id from the associated scraper. Uses FOR UPDATE SKIP LOCKED for improved concurrency.';
+
+--
+-- Name: cleanup_old_debug_logs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_old_debug_logs() RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    deleted_count integer;
+
+--
+-- Name: cleanup_old_scraper_runs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_old_scraper_runs() RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    deleted_count integer;
 
 --
 -- Name: cleanup_scraped_products(); Type: FUNCTION; Schema: public; Owner: -
@@ -349,6 +389,26 @@ BEGIN
 COMMENT ON FUNCTION public.create_profile_for_user() IS 'Creates a user profile when a user is created in auth.users. Includes error handling to prevent failures during user creation.';
 
 --
+-- Name: create_scheduled_integration_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_scheduled_integration_jobs() RETURNS TABLE(jobs_created integer, message text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    integration_record record;
+
+--
+-- Name: create_scheduled_scraper_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_scheduled_scraper_jobs() RETURNS TABLE(jobs_created integer, message text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    scraper_record record;
+
+--
 -- Name: FUNCTION create_user_for_nextauth(); Type: COMMENT; Schema: public; Owner: -
 --
 
@@ -378,6 +438,26 @@ BEGIN
     NOW()
   )
   ON CONFLICT (id) DO NOTHING;
+
+--
+-- Name: create_utility_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_utility_jobs() RETURNS TABLE(jobs_created integer, message text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    job_count integer := 0;
+
+--
+-- Name: debug_create_scheduled_scraper_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.debug_create_scheduled_scraper_jobs() RETURNS TABLE(scraper_id uuid, scraper_name text, should_run boolean, has_pending_job boolean, job_created boolean)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    scraper_record record;
 
 --
 -- Name: ensure_one_active_scraper_per_competitor(); Type: FUNCTION; Schema: public; Owner: -
@@ -490,6 +570,30 @@ BEGIN
         )
     
     ORDER BY group_id, product_id;
+
+--
+-- Name: get_admin_user_stats(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_admin_user_stats() RETURNS TABLE(total_users bigint, active_users_last_30_days bigint, new_users_last_30_days bigint, free_users bigint, premium_users bigint, enterprise_users bigint, suspended_users bigint)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        (SELECT COUNT(*) FROM public.user_profiles) as total_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE updated_at >= NOW() - INTERVAL '30 days') as active_users_last_30_days,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE created_at >= NOW() - INTERVAL '30 days') as new_users_last_30_days,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE subscription_tier = 'free') as free_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE subscription_tier = 'premium') as premium_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE subscription_tier = 'enterprise') as enterprise_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE is_suspended = true) as suspended_users;
+
+--
+-- Name: FUNCTION get_admin_user_stats(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_admin_user_stats() IS 'Returns overview statistics for admin dashboard including user counts by subscription tier and activity.';
 
 --
 -- Name: get_brand_aliases(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -668,6 +772,29 @@ BEGIN
     brand_counts bc ON c.id = bc.competitor_id
   WHERE
     c.user_id = p_user_id;
+
+--
+-- Name: get_cron_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_cron_jobs() RETURNS TABLE(jobid bigint, schedule text, command text, nodename text, nodeport integer, database text, username text, active boolean, jobname text)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+    -- Return cron jobs data
+    RETURN QUERY
+    SELECT 
+        j.jobid,
+        j.schedule,
+        j.command,
+        j.nodename,
+        j.nodeport,
+        j.database,
+        j.username,
+        j.active,
+        j.jobname
+    FROM cron.job j
+    ORDER BY j.jobname;
 
 --
 -- Name: get_integration_run_stats(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -922,6 +1049,81 @@ DECLARE
   v_result json;
 
 --
+-- Name: get_scheduling_stats(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_scheduling_stats() RETURNS TABLE(metric_name text, metric_value bigint, description text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        'active_scrapers'::text,
+        COUNT(*)::bigint,
+        'Number of active scrapers'::text
+    FROM public.scrapers 
+    WHERE is_active = true
+    
+    UNION ALL
+    
+    SELECT 
+        'active_integrations'::text,
+        COUNT(*)::bigint,
+        'Number of active integrations'::text
+    FROM public.integrations 
+    WHERE status = 'active'
+    
+    UNION ALL
+    
+    SELECT 
+        'pending_scraper_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of pending scraper jobs'::text
+    FROM public.scraper_runs 
+    WHERE status = 'pending'
+    
+    UNION ALL
+    
+    SELECT 
+        'running_scraper_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of running scraper jobs'::text
+    FROM public.scraper_runs 
+    WHERE status = 'running'
+    
+    UNION ALL
+    
+    SELECT 
+        'pending_integration_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of pending integration jobs'::text
+    FROM public.integration_runs 
+    WHERE status = 'pending'
+    
+    UNION ALL
+    
+    SELECT 
+        'processing_integration_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of processing integration jobs'::text
+    FROM public.integration_runs 
+    WHERE status = 'processing'
+    
+    UNION ALL
+    
+    SELECT 
+        'jobs_completed_today'::text,
+        COUNT(*)::bigint,
+        'Number of jobs completed today'::text
+    FROM (
+        SELECT completed_at FROM public.scraper_runs 
+        WHERE status = 'completed' AND completed_at >= date_trunc('day', now())
+        UNION ALL
+        SELECT completed_at FROM public.integration_runs 
+        WHERE status = 'completed' AND completed_at >= date_trunc('day', now())
+    ) completed_jobs;
+
+--
 -- Name: get_unique_competitor_products(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -964,6 +1166,160 @@ CREATE FUNCTION public.get_unique_integration_products(p_user_id uuid, p_integra
           OR pc2.competitor_id IS NOT NULL
         )
     );
+
+--
+-- Name: get_user_growth_stats(integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_growth_stats(period_days integer DEFAULT 30) RETURNS TABLE(date date, new_users bigint, cumulative_users bigint)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH date_series AS (
+        SELECT generate_series(
+            CURRENT_DATE - INTERVAL '1 day' * period_days,
+            CURRENT_DATE,
+            INTERVAL '1 day'
+        )::DATE as date
+    ),
+    daily_signups AS (
+        SELECT 
+            created_at::DATE as signup_date,
+            COUNT(*) as new_users
+        FROM public.user_profiles
+        WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' * period_days
+        GROUP BY created_at::DATE
+    )
+    SELECT 
+        ds.date,
+        COALESCE(daily_signups.new_users, 0) as new_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE created_at::DATE <= ds.date) as cumulative_users
+    FROM date_series ds
+    LEFT JOIN daily_signups ON ds.date = daily_signups.signup_date
+    ORDER BY ds.date;
+
+--
+-- Name: FUNCTION get_user_growth_stats(period_days integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_user_growth_stats(period_days integer) IS 'Returns user growth statistics over a specified period in days.';
+
+--
+-- Name: get_user_workload(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_workload() RETURNS TABLE(user_id uuid, user_name text, user_email text, active_scrapers bigint, active_integrations bigint, jobs_today bigint, avg_execution_time_ms numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        u.id as user_id,
+        u.name as user_name,
+        u.email as user_email,
+        COALESCE(s.scraper_count, 0) as active_scrapers,
+        COALESCE(i.integration_count, 0) as active_integrations,
+        COALESCE(j.jobs_today, 0) as jobs_today,
+        COALESCE(j.avg_execution_time, 0) as avg_execution_time_ms
+    FROM public.user_profiles u
+    LEFT JOIN (
+        SELECT scrapers.user_id, COUNT(*) as scraper_count
+        FROM public.scrapers
+        WHERE is_active = true
+        GROUP BY scrapers.user_id
+    ) s ON u.id = s.user_id
+    LEFT JOIN (
+        SELECT integrations.user_id, COUNT(*) as integration_count
+        FROM public.integrations
+        WHERE status = 'active'
+        GROUP BY integrations.user_id
+    ) i ON u.id = i.user_id
+    LEFT JOIN (
+        SELECT
+            scraper_runs.user_id,
+            COUNT(*) as jobs_today,
+            AVG(scraper_runs.execution_time_ms) as avg_execution_time  -- Fixed: changed from execution_time to execution_time_ms
+        FROM public.scraper_runs
+        WHERE scraper_runs.created_at >= CURRENT_DATE
+        GROUP BY scraper_runs.user_id
+    ) j ON u.id = j.user_id
+    ORDER BY u.name;
+
+--
+-- Name: get_user_workload_stats(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_workload_stats() RETURNS TABLE(user_id uuid, user_name text, user_email text, active_scrapers bigint, active_integrations bigint, jobs_today bigint, avg_execution_time_ms numeric)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        u.id as user_id,
+        u.name as user_name,
+        u.email as user_email,
+        COALESCE(s.scraper_count, 0) as active_scrapers,
+        COALESCE(i.integration_count, 0) as active_integrations,
+        COALESCE(j.jobs_today, 0) as jobs_today,
+        COALESCE(j.avg_execution_time, 0) as avg_execution_time_ms
+    FROM public.user_profiles u
+    LEFT JOIN (
+        SELECT scrapers.user_id, COUNT(*) as scraper_count
+        FROM public.scrapers
+        WHERE is_active = true AND is_approved = true
+        GROUP BY scrapers.user_id
+    ) s ON u.id = s.user_id
+    LEFT JOIN (
+        SELECT integrations.user_id, COUNT(*) as integration_count
+        FROM public.integrations
+        WHERE status = 'active'
+        GROUP BY integrations.user_id
+    ) i ON u.id = i.user_id
+    LEFT JOIN (
+        SELECT
+            scraper_runs.user_id,
+            COUNT(*) as jobs_today,
+            AVG(execution_time_ms) as avg_execution_time
+        FROM public.scraper_runs
+        WHERE created_at >= date_trunc('day', now())
+        GROUP BY scraper_runs.user_id
+    ) j ON u.id = j.user_id
+    ORDER BY u.id;
+
+--
+-- Name: FUNCTION get_user_workload_stats(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_user_workload_stats() IS 'Returns user workload distribution with active scrapers, integrations, and job statistics. Fixed ambiguous column references.';
+
+--
+-- Name: get_worker_capacity_config(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_worker_capacity_config() RETURNS TABLE(worker_type text, max_concurrent_jobs integer, current_jobs integer, description text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Return current worker capacity configuration
+    RETURN QUERY
+    SELECT
+        'python'::text as worker_type,
+        1 as max_concurrent_jobs,
+        (SELECT COUNT(*)::integer FROM scraper_runs WHERE status IN ('pending', 'initializing', 'running') AND scraper_type = 'python') as current_jobs,
+        'Python scraper worker (py-worker)'::text as description
+    UNION ALL
+    SELECT
+        'typescript'::text as worker_type,
+        1 as max_concurrent_jobs,
+        (SELECT COUNT(*)::integer FROM scraper_runs WHERE status IN ('pending', 'initializing', 'running') AND scraper_type = 'typescript') as current_jobs,
+        'TypeScript scraper worker (ts-worker)'::text as description
+    UNION ALL
+    SELECT
+        'integration'::text as worker_type,
+        1 as max_concurrent_jobs,
+        (SELECT COUNT(*)::integer FROM integration_runs WHERE status IN ('pending', 'initializing', 'running')) as current_jobs,
+        'Integration worker (ts-util-worker)'::text as description;
 
 --
 -- Name: handle_worker_error(); Type: FUNCTION; Schema: public; Owner: -
@@ -1009,6 +1365,16 @@ DECLARE
 COMMENT ON FUNCTION public.merge_products_api(primary_id uuid, duplicate_id uuid) IS 'Merges two products by updating the primary product with data from the duplicate, updating all foreign key references, and deleting the duplicate.';
 
 --
+-- Name: optimize_scraper_schedules(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.optimize_scraper_schedules() RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    scraper_record record;
+
+--
 -- Name: process_pending_integration_products(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1017,6 +1383,16 @@ CREATE FUNCTION public.process_pending_integration_products(run_id uuid) RETURNS
     AS $$
 DECLARE
     stats JSONB;
+
+--
+-- Name: process_scraper_timeouts(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_scraper_timeouts() RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    timeout_count integer := 0;
 
 --
 -- Name: process_staged_integration_product(); Type: FUNCTION; Schema: public; Owner: -
@@ -1137,6 +1513,38 @@ CREATE FUNCTION public.update_integration_run_status(run_id uuid) RETURNS void
     AS $$
 DECLARE
     stats JSONB;
+
+--
+-- Name: update_scheduling_config(integer, integer, integer, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_scheduling_config(p_max_python_workers integer DEFAULT 1, p_max_typescript_workers integer DEFAULT 1, p_max_integration_workers integer DEFAULT 1, p_max_jobs_per_run integer DEFAULT 2) RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- This function serves as documentation for the current limits
+    -- In the future, these could be stored in a configuration table
+    -- For now, it just returns the current configuration
+
+    RETURN format('Worker capacity configuration:
+- Python workers: %s (handles scraper_type = ''python'')
+- TypeScript workers: %s (handles scraper_type = ''typescript'')
+- Integration workers: %s (handles integration jobs)
+- Max jobs created per scheduling run: %s
+
+To increase capacity:
+1. Deploy additional worker instances on Railway
+2. Update the scheduling functions with new limits
+3. Monitor performance and adjust as needed
+
+Current pg_cron schedule:
+- Scraper jobs: Every 5 minutes
+- Integration jobs: Every 10 minutes
+- Utility jobs: Every hour',
+        p_max_python_workers,
+        p_max_typescript_workers,
+        p_max_integration_workers,
+        p_max_jobs_per_run);
 
 --
 -- Name: update_scraper_status_from_run(); Type: FUNCTION; Schema: public; Owner: -
@@ -1658,12 +2066,6 @@ CREATE TRIGGER price_change_trigger AFTER INSERT ON public.scraped_products FOR 
 CREATE TRIGGER process_staged_integration_product_trigger BEFORE UPDATE ON public.staged_integration_products FOR EACH ROW EXECUTE FUNCTION public.process_staged_integration_product();
 
 --
--- Name: scraper_runs retry_fetch_failed_trigger; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER retry_fetch_failed_trigger AFTER UPDATE ON public.scraper_runs FOR EACH ROW EXECUTE FUNCTION public.retry_fetch_failed_runs();
-
---
 -- Name: products set_product_brand_id_trigger; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1680,18 +2082,6 @@ CREATE TRIGGER sync_brand_id_trigger BEFORE INSERT OR UPDATE OF brand ON public.
 --
 
 CREATE TRIGGER sync_brand_name_trigger BEFORE INSERT OR UPDATE OF brand_id ON public.products FOR EACH ROW EXECUTE FUNCTION public.sync_brand_name();
-
---
--- Name: scraper_runs trg_auto_trim_progress_messages; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_auto_trim_progress_messages BEFORE UPDATE ON public.scraper_runs FOR EACH ROW WHEN ((new.progress_messages IS NOT NULL)) EXECUTE FUNCTION public.auto_trim_progress_messages();
-
---
--- Name: scraper_runs update_scraper_status_trigger; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER update_scraper_status_trigger AFTER UPDATE ON public.scraper_runs FOR EACH ROW EXECUTE FUNCTION public.update_scraper_status_from_run();
 
 --
 -- Name: subscription tr_check_filters; Type: TRIGGER; Schema: realtime; Owner: -

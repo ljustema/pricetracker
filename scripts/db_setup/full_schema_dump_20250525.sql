@@ -809,6 +809,125 @@ $$;
 COMMENT ON FUNCTION public.auto_trim_progress_messages() IS 'Automatically trims progress_messages when they exceed 200 entries';
 
 
+--
+-- Name: calculate_next_integration_run_time(text, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_next_integration_run_time(sync_frequency text, last_sync_at timestamp with time zone) RETURNS timestamp with time zone
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    next_run timestamp with time zone;
+    base_time timestamp with time zone;
+BEGIN
+    -- Use last_sync_at as base, or current time minus interval if never synced
+    base_time := COALESCE(last_sync_at, now() - interval '1 day');
+
+    CASE sync_frequency
+        WHEN 'daily' THEN
+            -- Run once per day at 3 AM
+            next_run := date_trunc('day', base_time) + interval '3 hours';
+            IF next_run <= base_time THEN
+                next_run := next_run + interval '1 day';
+            END IF;
+
+        WHEN 'weekly' THEN
+            -- Run once per week on Monday at 3 AM
+            next_run := date_trunc('week', base_time) + interval '1 day' + interval '3 hours';
+            IF next_run <= base_time THEN
+                next_run := next_run + interval '1 week';
+            END IF;
+
+        WHEN 'monthly' THEN
+            -- Run once per month on the 1st at 3 AM
+            next_run := date_trunc('month', base_time) + interval '1 month' + interval '3 hours';
+
+        ELSE
+            -- Default to daily
+            next_run := date_trunc('day', base_time) + interval '3 hours';
+            IF next_run <= base_time THEN
+                next_run := next_run + interval '1 day';
+            END IF;
+    END CASE;
+
+    RETURN next_run;
+END;
+$$;
+
+
+--
+-- Name: calculate_next_scraper_run_time(jsonb, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_next_scraper_run_time(schedule_config jsonb, last_run timestamp with time zone) RETURNS timestamp with time zone
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    frequency text;
+    time_of_day text;
+    next_run timestamp with time zone;
+    current_time timestamp with time zone := now();
+    today_start timestamp with time zone;
+    scheduled_time timestamp with time zone;
+BEGIN
+    -- Extract schedule parameters
+    frequency := schedule_config->>'frequency';
+    time_of_day := COALESCE(schedule_config->>'time', '02:00');
+
+    -- Get today's start (midnight)
+    today_start := date_trunc('day', current_time);
+
+    -- Calculate scheduled time for today
+    scheduled_time := today_start + time_of_day::time;
+
+    CASE frequency
+        WHEN 'daily' THEN
+            -- If today's scheduled time has passed, schedule for tomorrow
+            IF scheduled_time <= current_time THEN
+                next_run := scheduled_time + interval '1 day';
+            ELSE
+                next_run := scheduled_time;
+            END IF;
+
+        WHEN 'weekly' THEN
+            -- Run once per week on the same day as last run (or Monday if no last run)
+            IF last_run IS NULL THEN
+                -- Default to next Monday at scheduled time
+                next_run := date_trunc('week', current_time) + interval '1 day' + time_of_day::time;
+                IF next_run <= current_time THEN
+                    next_run := next_run + interval '1 week';
+                END IF;
+            ELSE
+                -- Run on the same day of week as last run
+                next_run := date_trunc('week', last_run) + interval '1 week' +
+                           (extract(dow from last_run) * interval '1 day') + time_of_day::time;
+            END IF;
+
+        WHEN 'monthly' THEN
+            -- Run once per month on the same day as last run (or 1st if no last run)
+            IF last_run IS NULL THEN
+                -- Default to next 1st of month at scheduled time
+                next_run := date_trunc('month', current_time) + interval '1 month' + time_of_day::time;
+            ELSE
+                -- Run on the same day of month as last run
+                next_run := date_trunc('month', last_run) + interval '1 month' +
+                           ((extract(day from last_run) - 1) * interval '1 day') + time_of_day::time;
+            END IF;
+
+        ELSE
+            -- Default to daily
+            IF scheduled_time <= current_time THEN
+                next_run := scheduled_time + interval '1 day';
+            ELSE
+                next_run := scheduled_time;
+            END IF;
+    END CASE;
+
+    RETURN next_run;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -949,6 +1068,50 @@ COMMENT ON FUNCTION public.claim_next_scraper_job(worker_type_filter text) IS 'A
 
 
 --
+-- Name: cleanup_old_debug_logs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_old_debug_logs() RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    deleted_count integer;
+BEGIN
+    DELETE FROM public.debug_logs
+    WHERE created_at < now() - interval '7 days';
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$;
+
+
+--
+-- Name: cleanup_old_scraper_runs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_old_scraper_runs() RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    deleted_count integer;
+BEGIN
+    DELETE FROM public.scraper_runs
+    WHERE created_at < now() - interval '30 days'
+      AND status IN ('completed', 'failed');
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+    INSERT INTO public.debug_logs (level, message, details)
+    VALUES ('INFO', 'Cleaned up old scraper runs',
+            jsonb_build_object('deleted_count', deleted_count));
+
+    RETURN deleted_count;
+END;
+$$;
+
+
+--
 -- Name: cleanup_scraped_products(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1026,6 +1189,244 @@ COMMENT ON FUNCTION public.create_profile_for_user() IS 'Creates a user profile 
 
 
 --
+-- Name: create_scheduled_integration_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_scheduled_integration_jobs() RETURNS TABLE(jobs_created integer, message text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    integration_record record;
+    job_count integer := 0;
+    new_job_id uuid;
+    current_timestamp timestamp with time zone := now();
+
+    -- Concurrency limits for integration worker
+    max_integration_jobs integer := 1; -- 1 ts-util-worker
+    current_integration_jobs integer;
+    max_jobs_per_run integer := 1; -- Maximum integration jobs to create in one run
+BEGIN
+    -- Check current integration job count
+    SELECT COUNT(*) INTO current_integration_jobs
+    FROM public.integration_runs ir
+    WHERE ir.status IN ('pending', 'initializing', 'running');
+
+    -- Log current status
+    RAISE NOTICE 'Current integration jobs: %/%, Max per run: %',
+        current_integration_jobs, max_integration_jobs, max_jobs_per_run;
+
+    -- If integration worker is at capacity, don't create any jobs
+    IF current_integration_jobs >= max_integration_jobs THEN
+        RETURN QUERY SELECT 0, format('Integration worker busy - %/% jobs running',
+            current_integration_jobs, max_integration_jobs);
+        RETURN;
+    END IF;
+
+    -- Process integrations in order of priority (longest time since last sync)
+    FOR integration_record IN
+        SELECT
+            i.id,
+            i.user_id,
+            i.name,
+            i.platform,
+            i.sync_frequency,
+            i.last_sync_at
+        FROM public.integrations i
+        WHERE i.status = 'active'
+          AND i.sync_frequency IS NOT NULL
+          -- Only consider integrations that haven't synced in more than 23 hours
+          AND (i.last_sync_at IS NULL OR i.last_sync_at < current_timestamp - interval '23 hours')
+        ORDER BY
+          -- Prioritize integrations that haven't synced in the longest time
+          COALESCE(i.last_sync_at, '1970-01-01'::timestamp with time zone) ASC
+        LIMIT 10 -- Only check the 10 most overdue integrations
+    LOOP
+        -- Stop if we've reached the per-run job limit or worker capacity
+        IF job_count >= max_jobs_per_run OR current_integration_jobs >= max_integration_jobs THEN
+            RAISE NOTICE 'Reached limit - jobs created: %, worker capacity: %/%',
+                job_count, current_integration_jobs, max_integration_jobs;
+            EXIT;
+        END IF;
+
+        -- Check if there's already a pending or running job for this integration
+        IF NOT EXISTS (
+            SELECT 1 FROM public.integration_runs ir
+            WHERE ir.integration_id = integration_record.id
+              AND ir.status IN ('pending', 'initializing', 'running')
+        ) THEN
+            -- Create new integration run job
+            INSERT INTO public.integration_runs (
+                id,
+                integration_id,
+                user_id,
+                status,
+                started_at,
+                is_test_run,
+                created_at
+            ) VALUES (
+                gen_random_uuid(),
+                integration_record.id,
+                integration_record.user_id,
+                'pending',
+                current_timestamp,
+                false, -- This is a scheduled run, not a test
+                current_timestamp
+            ) RETURNING id INTO new_job_id;
+
+            job_count := job_count + 1;
+            current_integration_jobs := current_integration_jobs + 1;
+
+            -- Log the job creation
+            RAISE NOTICE 'Created scheduled job % for integration % (%) - Priority: %',
+                new_job_id, integration_record.name, integration_record.platform,
+                CASE
+                    WHEN integration_record.last_sync_at IS NULL THEN 'Never synced'
+                    ELSE extract(epoch from (current_timestamp - integration_record.last_sync_at))/3600 || ' hours ago'
+                END;
+        END IF;
+    END LOOP;
+
+    RETURN QUERY SELECT job_count, format('Created %s scheduled integration jobs (%/%)',
+        job_count, current_integration_jobs, max_integration_jobs);
+END;
+$$;
+
+
+--
+-- Name: create_scheduled_scraper_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_scheduled_scraper_jobs() RETURNS TABLE(jobs_created integer, message text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    scraper_record record;
+    job_count integer := 0;
+    new_job_id uuid;
+    current_timestamp timestamp with time zone := now();
+
+    -- Concurrency limits based on available workers
+    max_python_jobs integer := 1;    -- 1 py-worker
+    max_typescript_jobs integer := 1; -- 1 ts-worker
+    current_python_jobs integer;
+    current_typescript_jobs integer;
+
+    -- Job creation limits per run to prevent overload
+    max_jobs_per_run integer := 2; -- Maximum jobs to create in one scheduling run
+BEGIN
+    -- Check current job counts by worker type
+    SELECT COUNT(*) INTO current_python_jobs
+    FROM public.scraper_runs sr
+    WHERE sr.status IN ('pending', 'initializing', 'running')
+      AND sr.scraper_type = 'python';
+
+    SELECT COUNT(*) INTO current_typescript_jobs
+    FROM public.scraper_runs sr
+    WHERE sr.status IN ('pending', 'initializing', 'running')
+      AND sr.scraper_type = 'typescript';
+
+    -- Log current status
+    RAISE NOTICE 'Current jobs - Python: %/%, TypeScript: %/%, Max per run: %',
+        current_python_jobs, max_python_jobs,
+        current_typescript_jobs, max_typescript_jobs,
+        max_jobs_per_run;
+
+    -- If both worker types are at capacity, don't create any jobs
+    IF current_python_jobs >= max_python_jobs AND current_typescript_jobs >= max_typescript_jobs THEN
+        RETURN QUERY SELECT 0, format('All workers busy - Python: %/%, TypeScript: %/%',
+            current_python_jobs, max_python_jobs,
+            current_typescript_jobs, max_typescript_jobs);
+        RETURN;
+    END IF;
+
+    -- Process scrapers in order of priority (longest time since last run)
+    FOR scraper_record IN
+        SELECT
+            s.id,
+            s.user_id,
+            s.name,
+            s.scraper_type,
+            s.schedule,
+            s.last_run,
+            s.competitor_id
+        FROM public.scrapers s
+        WHERE s.is_active = true
+          AND s.schedule IS NOT NULL
+          -- Only consider scrapers that haven't run in more than 23 hours
+          AND (s.last_run IS NULL OR s.last_run < current_timestamp - interval '23 hours')
+        ORDER BY
+          -- Prioritize scrapers that haven't run in the longest time
+          COALESCE(s.last_run, '1970-01-01'::timestamp with time zone) ASC
+        LIMIT 20 -- Only check the 20 most overdue scrapers to prevent long execution
+    LOOP
+        -- Stop if we've reached the per-run job limit
+        IF job_count >= max_jobs_per_run THEN
+            RAISE NOTICE 'Reached max jobs per run limit (%)', max_jobs_per_run;
+            EXIT;
+        END IF;
+
+        -- Check worker capacity for this scraper type
+        IF scraper_record.scraper_type = 'python' AND current_python_jobs >= max_python_jobs THEN
+            CONTINUE; -- Skip Python scrapers if Python worker is busy
+        END IF;
+
+        IF scraper_record.scraper_type = 'typescript' AND current_typescript_jobs >= max_typescript_jobs THEN
+            CONTINUE; -- Skip TypeScript scrapers if TypeScript worker is busy
+        END IF;
+
+        -- Check if there's already a pending or running job for this specific scraper
+        IF NOT EXISTS (
+            SELECT 1 FROM public.scraper_runs sr
+            WHERE sr.scraper_id = scraper_record.id
+              AND sr.status IN ('pending', 'initializing', 'running')
+        ) THEN
+            -- Create new scraper run job
+            INSERT INTO public.scraper_runs (
+                id,
+                scraper_id,
+                user_id,
+                status,
+                started_at,
+                is_test_run,
+                scraper_type,
+                created_at
+            ) VALUES (
+                gen_random_uuid(),
+                scraper_record.id,
+                scraper_record.user_id,
+                'pending',
+                current_timestamp,
+                false, -- This is a scheduled run, not a test
+                scraper_record.scraper_type,
+                current_timestamp
+            ) RETURNING id INTO new_job_id;
+
+            job_count := job_count + 1;
+
+            -- Update worker capacity counters
+            IF scraper_record.scraper_type = 'python' THEN
+                current_python_jobs := current_python_jobs + 1;
+            ELSIF scraper_record.scraper_type = 'typescript' THEN
+                current_typescript_jobs := current_typescript_jobs + 1;
+            END IF;
+
+            -- Log the job creation
+            RAISE NOTICE 'Created scheduled job % for scraper % (%) - Priority: %',
+                new_job_id, scraper_record.name, scraper_record.scraper_type,
+                CASE
+                    WHEN scraper_record.last_run IS NULL THEN 'Never run'
+                    ELSE extract(epoch from (current_timestamp - scraper_record.last_run))/3600 || ' hours ago'
+                END;
+        END IF;
+    END LOOP;
+
+    RETURN QUERY SELECT job_count, format('Created %s scheduled scraper jobs (Python: %/%, TypeScript: %/%)',
+        job_count, current_python_jobs, max_python_jobs, current_typescript_jobs, max_typescript_jobs);
+END;
+$$;
+
+
+--
 -- Name: create_user_for_nextauth(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1080,6 +1481,110 @@ BEGIN
   ON CONFLICT (id) DO NOTHING;
   
   -- The trigger create_profile_for_user will automatically create a profile
+END;
+$$;
+
+
+--
+-- Name: create_utility_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_utility_jobs() RETURNS TABLE(jobs_created integer, message text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    job_count integer := 0;
+    current_time timestamp with time zone := now();
+    last_cleanup_check timestamp with time zone;
+BEGIN
+    -- Check when we last ran cleanup tasks
+    SELECT COALESCE(MAX(created_at), '1970-01-01'::timestamp with time zone)
+    INTO last_cleanup_check
+    FROM public.debug_logs
+    WHERE message LIKE '%cleanup_utility_job%'
+      AND created_at > current_time - interval '1 day';
+
+    -- Run cleanup tasks once per day
+    IF last_cleanup_check < current_time - interval '23 hours' THEN
+        -- Log that we're running cleanup (this serves as our utility job queue for now)
+        INSERT INTO public.debug_logs (
+            user_id,
+            level,
+            message,
+            details,
+            created_at
+        ) VALUES (
+            NULL, -- System job
+            'INFO',
+            'cleanup_utility_job',
+            jsonb_build_object(
+                'task_type', 'daily_cleanup',
+                'scheduled_at', current_time
+            ),
+            current_time
+        );
+
+        job_count := job_count + 1;
+
+        -- Perform actual cleanup tasks
+        PERFORM cleanup_old_scraper_runs();
+        PERFORM cleanup_old_debug_logs();
+        PERFORM process_scraper_timeouts();
+
+        RAISE NOTICE 'Created utility cleanup job at %', current_time;
+    END IF;
+
+    RETURN QUERY SELECT job_count, format('Created %s utility jobs', job_count);
+END;
+$$;
+
+
+--
+-- Name: debug_create_scheduled_scraper_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.debug_create_scheduled_scraper_jobs() RETURNS TABLE(scraper_id uuid, scraper_name text, should_run boolean, has_pending_job boolean, job_created boolean)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    scraper_record record;
+    current_time timestamp with time zone := now();
+    should_run_flag boolean;
+    has_pending_job_flag boolean;
+    job_created_flag boolean;
+BEGIN
+    -- Process all active scrapers
+    FOR scraper_record IN
+        SELECT
+            s.id,
+            s.user_id,
+            s.name,
+            s.scraper_type,
+            s.schedule,
+            s.last_run,
+            s.competitor_id
+        FROM public.scrapers s
+        WHERE s.is_active = true
+          AND s.schedule IS NOT NULL
+    LOOP
+        -- Check if scraper should run
+        should_run_flag := (scraper_record.last_run IS NULL OR scraper_record.last_run < current_time - interval '23 hours');
+        
+        -- Check if there's already a pending job
+        SELECT EXISTS (
+            SELECT 1 FROM public.scraper_runs sr
+            WHERE sr.scraper_id = scraper_record.id
+              AND sr.status IN ('pending', 'initializing', 'running')
+        ) INTO has_pending_job_flag;
+        
+        job_created_flag := false;
+        
+        IF should_run_flag AND NOT has_pending_job_flag THEN
+            job_created_flag := true;
+        END IF;
+        
+        RETURN QUERY SELECT scraper_record.id, scraper_record.name, should_run_flag, has_pending_job_flag, job_created_flag;
+    END LOOP;
 END;
 $$;
 
@@ -1259,6 +1764,34 @@ BEGIN
     ORDER BY group_id, product_id;
 END;
 $$;
+
+
+--
+-- Name: get_admin_user_stats(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_admin_user_stats() RETURNS TABLE(total_users bigint, active_users_last_30_days bigint, new_users_last_30_days bigint, free_users bigint, premium_users bigint, enterprise_users bigint, suspended_users bigint)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        (SELECT COUNT(*) FROM public.user_profiles) as total_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE updated_at >= NOW() - INTERVAL '30 days') as active_users_last_30_days,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE created_at >= NOW() - INTERVAL '30 days') as new_users_last_30_days,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE subscription_tier = 'free') as free_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE subscription_tier = 'premium') as premium_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE subscription_tier = 'enterprise') as enterprise_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE is_suspended = true) as suspended_users;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_admin_user_stats(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_admin_user_stats() IS 'Returns overview statistics for admin dashboard including user counts by subscription tier and activity.';
 
 
 --
@@ -1450,6 +1983,36 @@ BEGIN
     brand_counts bc ON c.id = bc.competitor_id
   WHERE
     c.user_id = p_user_id;
+END;
+$$;
+
+
+--
+-- Name: get_cron_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_cron_jobs() RETURNS TABLE(jobid bigint, schedule text, command text, nodename text, nodeport integer, database text, username text, active boolean, jobname text)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+    -- Return cron jobs data
+    RETURN QUERY
+    SELECT 
+        j.jobid,
+        j.schedule,
+        j.command,
+        j.nodename,
+        j.nodeport,
+        j.database,
+        j.username,
+        j.active,
+        j.jobname
+    FROM cron.job j
+    ORDER BY j.jobname;
+EXCEPTION
+    WHEN OTHERS THEN
+        -- If any error occurs, return empty result
+        RETURN;
 END;
 $$;
 
@@ -2025,6 +2588,84 @@ $$;
 
 
 --
+-- Name: get_scheduling_stats(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_scheduling_stats() RETURNS TABLE(metric_name text, metric_value bigint, description text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        'active_scrapers'::text,
+        COUNT(*)::bigint,
+        'Number of active scrapers'::text
+    FROM public.scrapers 
+    WHERE is_active = true
+    
+    UNION ALL
+    
+    SELECT 
+        'active_integrations'::text,
+        COUNT(*)::bigint,
+        'Number of active integrations'::text
+    FROM public.integrations 
+    WHERE status = 'active'
+    
+    UNION ALL
+    
+    SELECT 
+        'pending_scraper_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of pending scraper jobs'::text
+    FROM public.scraper_runs 
+    WHERE status = 'pending'
+    
+    UNION ALL
+    
+    SELECT 
+        'running_scraper_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of running scraper jobs'::text
+    FROM public.scraper_runs 
+    WHERE status = 'running'
+    
+    UNION ALL
+    
+    SELECT 
+        'pending_integration_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of pending integration jobs'::text
+    FROM public.integration_runs 
+    WHERE status = 'pending'
+    
+    UNION ALL
+    
+    SELECT 
+        'processing_integration_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of processing integration jobs'::text
+    FROM public.integration_runs 
+    WHERE status = 'processing'
+    
+    UNION ALL
+    
+    SELECT 
+        'jobs_completed_today'::text,
+        COUNT(*)::bigint,
+        'Number of jobs completed today'::text
+    FROM (
+        SELECT completed_at FROM public.scraper_runs 
+        WHERE status = 'completed' AND completed_at >= date_trunc('day', now())
+        UNION ALL
+        SELECT completed_at FROM public.integration_runs 
+        WHERE status = 'completed' AND completed_at >= date_trunc('day', now())
+    ) completed_jobs;
+END;
+$$;
+
+
+--
 -- Name: get_unique_competitor_products(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -2069,6 +2710,174 @@ CREATE FUNCTION public.get_unique_integration_products(p_user_id uuid, p_integra
           OR pc2.competitor_id IS NOT NULL
         )
     );
+$$;
+
+
+--
+-- Name: get_user_growth_stats(integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_growth_stats(period_days integer DEFAULT 30) RETURNS TABLE(date date, new_users bigint, cumulative_users bigint)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH date_series AS (
+        SELECT generate_series(
+            CURRENT_DATE - INTERVAL '1 day' * period_days,
+            CURRENT_DATE,
+            INTERVAL '1 day'
+        )::DATE as date
+    ),
+    daily_signups AS (
+        SELECT 
+            created_at::DATE as signup_date,
+            COUNT(*) as new_users
+        FROM public.user_profiles
+        WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' * period_days
+        GROUP BY created_at::DATE
+    )
+    SELECT 
+        ds.date,
+        COALESCE(daily_signups.new_users, 0) as new_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE created_at::DATE <= ds.date) as cumulative_users
+    FROM date_series ds
+    LEFT JOIN daily_signups ON ds.date = daily_signups.signup_date
+    ORDER BY ds.date;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_user_growth_stats(period_days integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_user_growth_stats(period_days integer) IS 'Returns user growth statistics over a specified period in days.';
+
+
+--
+-- Name: get_user_workload(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_workload() RETURNS TABLE(user_id uuid, user_name text, user_email text, active_scrapers bigint, active_integrations bigint, jobs_today bigint, avg_execution_time_ms numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        u.id as user_id,
+        u.name as user_name,
+        u.email as user_email,
+        COALESCE(s.scraper_count, 0) as active_scrapers,
+        COALESCE(i.integration_count, 0) as active_integrations,
+        COALESCE(j.jobs_today, 0) as jobs_today,
+        COALESCE(j.avg_execution_time, 0) as avg_execution_time_ms
+    FROM public.user_profiles u
+    LEFT JOIN (
+        SELECT scrapers.user_id, COUNT(*) as scraper_count
+        FROM public.scrapers
+        WHERE is_active = true
+        GROUP BY scrapers.user_id
+    ) s ON u.id = s.user_id
+    LEFT JOIN (
+        SELECT integrations.user_id, COUNT(*) as integration_count
+        FROM public.integrations
+        WHERE status = 'active'
+        GROUP BY integrations.user_id
+    ) i ON u.id = i.user_id
+    LEFT JOIN (
+        SELECT
+            scraper_runs.user_id,
+            COUNT(*) as jobs_today,
+            AVG(scraper_runs.execution_time_ms) as avg_execution_time  -- Fixed: changed from execution_time to execution_time_ms
+        FROM public.scraper_runs
+        WHERE scraper_runs.created_at >= CURRENT_DATE
+        GROUP BY scraper_runs.user_id
+    ) j ON u.id = j.user_id
+    ORDER BY u.name;
+END;
+$$;
+
+
+--
+-- Name: get_user_workload_stats(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_workload_stats() RETURNS TABLE(user_id uuid, user_name text, user_email text, active_scrapers bigint, active_integrations bigint, jobs_today bigint, avg_execution_time_ms numeric)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        u.id as user_id,
+        u.name as user_name,
+        u.email as user_email,
+        COALESCE(s.scraper_count, 0) as active_scrapers,
+        COALESCE(i.integration_count, 0) as active_integrations,
+        COALESCE(j.jobs_today, 0) as jobs_today,
+        COALESCE(j.avg_execution_time, 0) as avg_execution_time_ms
+    FROM public.user_profiles u
+    LEFT JOIN (
+        SELECT scrapers.user_id, COUNT(*) as scraper_count
+        FROM public.scrapers
+        WHERE is_active = true AND is_approved = true
+        GROUP BY scrapers.user_id
+    ) s ON u.id = s.user_id
+    LEFT JOIN (
+        SELECT integrations.user_id, COUNT(*) as integration_count
+        FROM public.integrations
+        WHERE status = 'active'
+        GROUP BY integrations.user_id
+    ) i ON u.id = i.user_id
+    LEFT JOIN (
+        SELECT
+            scraper_runs.user_id,
+            COUNT(*) as jobs_today,
+            AVG(execution_time_ms) as avg_execution_time
+        FROM public.scraper_runs
+        WHERE created_at >= date_trunc('day', now())
+        GROUP BY scraper_runs.user_id
+    ) j ON u.id = j.user_id
+    ORDER BY u.id;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_user_workload_stats(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_user_workload_stats() IS 'Returns user workload distribution with active scrapers, integrations, and job statistics. Fixed ambiguous column references.';
+
+
+--
+-- Name: get_worker_capacity_config(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_worker_capacity_config() RETURNS TABLE(worker_type text, max_concurrent_jobs integer, current_jobs integer, description text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Return current worker capacity configuration
+    RETURN QUERY
+    SELECT
+        'python'::text as worker_type,
+        1 as max_concurrent_jobs,
+        (SELECT COUNT(*)::integer FROM scraper_runs WHERE status IN ('pending', 'initializing', 'running') AND scraper_type = 'python') as current_jobs,
+        'Python scraper worker (py-worker)'::text as description
+    UNION ALL
+    SELECT
+        'typescript'::text as worker_type,
+        1 as max_concurrent_jobs,
+        (SELECT COUNT(*)::integer FROM scraper_runs WHERE status IN ('pending', 'initializing', 'running') AND scraper_type = 'typescript') as current_jobs,
+        'TypeScript scraper worker (ts-worker)'::text as description
+    UNION ALL
+    SELECT
+        'integration'::text as worker_type,
+        1 as max_concurrent_jobs,
+        (SELECT COUNT(*)::integer FROM integration_runs WHERE status IN ('pending', 'initializing', 'running')) as current_jobs,
+        'Integration worker (ts-util-worker)'::text as description;
+END;
 $$;
 
 
@@ -2267,6 +3076,74 @@ COMMENT ON FUNCTION public.merge_products_api(primary_id uuid, duplicate_id uuid
 
 
 --
+-- Name: optimize_scraper_schedules(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.optimize_scraper_schedules() RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    scraper_record record;
+    update_count integer := 0;
+    time_slot integer := 0;
+    total_scrapers integer;
+    minutes_per_slot integer;
+BEGIN
+    -- Count total active scrapers
+    SELECT COUNT(*) INTO total_scrapers
+    FROM public.scrapers
+    WHERE is_active = true;
+
+    -- Calculate minutes per slot to spread across 24 hours
+    -- Leave some buffer time between jobs
+    minutes_per_slot := GREATEST(5, (24 * 60) / GREATEST(total_scrapers, 1));
+
+    -- Update scraper schedules to distribute load
+    FOR scraper_record IN
+        SELECT id, schedule, user_id
+        FROM public.scrapers
+        WHERE is_active = true
+        ORDER BY user_id, id -- Group by user to keep their scrapers together
+    LOOP
+        -- Calculate new time slot (distribute across 24 hours)
+        DECLARE
+            new_hour integer := (time_slot * minutes_per_slot) / 60;
+            new_minute integer := (time_slot * minutes_per_slot) % 60;
+            new_time text := format('%02d:%02d', new_hour % 24, new_minute);
+            updated_schedule jsonb;
+        BEGIN
+            -- Update the schedule with new time
+            updated_schedule := jsonb_set(
+                scraper_record.schedule,
+                '{time}',
+                to_jsonb(new_time)
+            );
+
+            UPDATE public.scrapers
+            SET
+                schedule = updated_schedule,
+                updated_at = now()
+            WHERE id = scraper_record.id;
+
+            update_count := update_count + 1;
+            time_slot := time_slot + 1;
+        END;
+    END LOOP;
+
+    INSERT INTO public.debug_logs (level, message, details)
+    VALUES ('INFO', 'Optimized scraper schedules',
+            jsonb_build_object(
+                'updated_scrapers', update_count,
+                'total_scrapers', total_scrapers,
+                'minutes_per_slot', minutes_per_slot
+            ));
+
+    RETURN update_count;
+END;
+$$;
+
+
+--
 -- Name: process_pending_integration_products(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -2288,6 +3165,49 @@ BEGIN
     PERFORM update_integration_run_status(run_id);
 
     RETURN stats;
+END;
+$$;
+
+
+--
+-- Name: process_scraper_timeouts(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_scraper_timeouts() RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    timeout_count integer := 0;
+    timeout_record record;
+BEGIN
+    -- Find scraper runs that have been running for more than 2 hours
+    FOR timeout_record IN
+        SELECT sr.id, sr.scraper_id, sr.started_at
+        FROM public.scraper_runs sr
+        WHERE sr.status = 'running'
+          AND sr.started_at < now() - interval '2 hours'
+    LOOP
+        -- Mark as failed due to timeout
+        UPDATE public.scraper_runs
+        SET
+            status = 'failed',
+            completed_at = now(),
+            error_message = 'Job timed out after 2 hours'
+        WHERE id = timeout_record.id;
+
+        timeout_count := timeout_count + 1;
+
+        -- Log the timeout
+        INSERT INTO public.debug_logs (level, message, details)
+        VALUES ('WARN', 'Scraper run timed out',
+                jsonb_build_object(
+                    'run_id', timeout_record.id,
+                    'scraper_id', timeout_record.scraper_id,
+                    'started_at', timeout_record.started_at
+                ));
+    END LOOP;
+
+    RETURN timeout_count;
 END;
 $$;
 
@@ -2857,6 +3777,41 @@ BEGIN
             last_sync_status = 'success'
         WHERE id = integration_record.integration_id;
     END IF;
+END;
+$$;
+
+
+--
+-- Name: update_scheduling_config(integer, integer, integer, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_scheduling_config(p_max_python_workers integer DEFAULT 1, p_max_typescript_workers integer DEFAULT 1, p_max_integration_workers integer DEFAULT 1, p_max_jobs_per_run integer DEFAULT 2) RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- This function serves as documentation for the current limits
+    -- In the future, these could be stored in a configuration table
+    -- For now, it just returns the current configuration
+
+    RETURN format('Worker capacity configuration:
+- Python workers: %s (handles scraper_type = ''python'')
+- TypeScript workers: %s (handles scraper_type = ''typescript'')
+- Integration workers: %s (handles integration jobs)
+- Max jobs created per scheduling run: %s
+
+To increase capacity:
+1. Deploy additional worker instances on Railway
+2. Update the scheduling functions with new limits
+3. Monitor performance and adjust as needed
+
+Current pg_cron schedule:
+- Scraper jobs: Every 5 minutes
+- Integration jobs: Every 10 minutes
+- Utility jobs: Every hour',
+        p_max_python_workers,
+        p_max_typescript_workers,
+        p_max_integration_workers,
+        p_max_jobs_per_run);
 END;
 $$;
 
@@ -4415,6 +5370,45 @@ CREATE TABLE next_auth.verification_tokens (
 
 
 --
+-- Name: admin_communication_log; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.admin_communication_log (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    admin_user_id uuid NOT NULL,
+    target_user_id uuid NOT NULL,
+    communication_type text DEFAULT 'email'::text NOT NULL,
+    subject text,
+    message_content text NOT NULL,
+    sent_at timestamp with time zone DEFAULT now(),
+    status text DEFAULT 'sent'::text,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: TABLE admin_communication_log; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.admin_communication_log IS 'Logs communications sent by admins to users.';
+
+
+--
+-- Name: COLUMN admin_communication_log.admin_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.admin_communication_log.admin_user_id IS 'The ID of the admin who sent the communication.';
+
+
+--
+-- Name: COLUMN admin_communication_log.target_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.admin_communication_log.target_user_id IS 'The ID of the user who received the communication.';
+
+
+--
 -- Name: brand_aliases; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4726,69 +5720,6 @@ COMMENT ON COLUMN public.scraper_ai_sessions.assembly_data IS 'Data from the scr
 
 
 --
--- Name: scraper_analysis; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraper_analysis (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    competitor_id uuid NOT NULL,
-    url text NOT NULL,
-    base_url text NOT NULL,
-    hostname text NOT NULL,
-    title text,
-    sitemap_urls text[] DEFAULT '{}'::text[],
-    brand_pages text[] DEFAULT '{}'::text[],
-    category_pages text[] DEFAULT '{}'::text[],
-    product_listing_pages text[] DEFAULT '{}'::text[],
-    api_endpoints jsonb DEFAULT '[]'::jsonb,
-    proposed_strategy text NOT NULL,
-    strategy_description text,
-    html_sample text,
-    product_selectors jsonb,
-    created_at timestamp with time zone DEFAULT now()
-);
-
-
---
--- Name: scraper_data_extraction; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraper_data_extraction (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    competitor_id uuid NOT NULL,
-    url_collection_id uuid,
-    products jsonb DEFAULT '[]'::jsonb,
-    execution_log text[] DEFAULT '{}'::text[],
-    generated_code text,
-    error text,
-    created_at timestamp with time zone DEFAULT now()
-);
-
-
---
--- Name: scraper_run_timeouts; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraper_run_timeouts (
-    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
-    run_id uuid NOT NULL,
-    timeout_at timestamp with time zone NOT NULL,
-    processed boolean DEFAULT false NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    processed_at timestamp with time zone
-);
-
-
---
--- Name: TABLE scraper_run_timeouts; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.scraper_run_timeouts IS 'Stores timeout information for scraper runs';
-
-
---
 -- Name: scraper_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4816,76 +5747,6 @@ CREATE TABLE public.scraper_runs (
 
 
 --
--- Name: COLUMN scraper_runs.progress_messages; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraper_runs.progress_messages IS 'Array to store progress messages or logs during a scraper run';
-
-
---
--- Name: COLUMN scraper_runs.execution_time_ms; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraper_runs.execution_time_ms IS 'Total execution time of the scraper run in milliseconds (calculated from completed_at - started_at).';
-
-
---
--- Name: COLUMN scraper_runs.products_per_second; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraper_runs.products_per_second IS 'Calculated metric: product_count / (execution_time_ms / 1000.0). Null if execution time is zero or product_count is null.';
-
-
---
--- Name: COLUMN scraper_runs.error_details; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraper_runs.error_details IS 'Detailed error information including stack traces';
-
-
---
--- Name: COLUMN scraper_runs.current_phase; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraper_runs.current_phase IS 'Current phase of the scraper run (1 = URL collection, 2 = Processing products, etc.)';
-
-
---
--- Name: scraper_script_assembly; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraper_script_assembly (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    competitor_id uuid NOT NULL,
-    data_extraction_id uuid,
-    assembled_script text,
-    validation_result jsonb,
-    scraper_id uuid,
-    created_at timestamp with time zone DEFAULT now()
-);
-
-
---
--- Name: scraper_url_collection; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraper_url_collection (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    competitor_id uuid NOT NULL,
-    analysis_id uuid,
-    urls text[] DEFAULT '{}'::text[],
-    total_count integer DEFAULT 0,
-    sample_urls text[] DEFAULT '{}'::text[],
-    execution_log text[] DEFAULT '{}'::text[],
-    generated_code text,
-    error text,
-    created_at timestamp with time zone DEFAULT now()
-);
-
-
---
 -- Name: scrapers; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4905,7 +5766,6 @@ CREATE TABLE public.scrapers (
     scraper_type character varying(20) DEFAULT 'ai'::character varying NOT NULL,
     python_script text,
     script_metadata jsonb,
-    is_approved boolean DEFAULT false,
     test_results jsonb,
     execution_time bigint,
     last_products_per_second numeric(10,2),
@@ -4997,8 +5857,24 @@ CREATE TABLE public.user_profiles (
     subscription_tier text DEFAULT 'free'::text,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    email text
+    email text,
+    admin_role text,
+    is_suspended boolean DEFAULT false
 );
+
+
+--
+-- Name: COLUMN user_profiles.admin_role; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_profiles.admin_role IS 'Defines the admin role for the user, if any (e.g., super_admin, support_admin).';
+
+
+--
+-- Name: COLUMN user_profiles.is_suspended; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_profiles.is_suspended IS 'Indicates if the user account is currently suspended by an admin.';
 
 
 --
@@ -5474,6 +6350,14 @@ ALTER TABLE ONLY next_auth.verification_tokens
 
 
 --
+-- Name: admin_communication_log admin_communication_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_communication_log
+    ADD CONSTRAINT admin_communication_log_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: brand_aliases brand_aliases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5578,51 +6462,11 @@ ALTER TABLE ONLY public.scraper_ai_sessions
 
 
 --
--- Name: scraper_analysis scraper_analysis_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_analysis
-    ADD CONSTRAINT scraper_analysis_pkey PRIMARY KEY (id);
-
-
---
--- Name: scraper_data_extraction scraper_data_extraction_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_data_extraction
-    ADD CONSTRAINT scraper_data_extraction_pkey PRIMARY KEY (id);
-
-
---
--- Name: scraper_run_timeouts scraper_run_timeouts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_run_timeouts
-    ADD CONSTRAINT scraper_run_timeouts_pkey PRIMARY KEY (id);
-
-
---
 -- Name: scraper_runs scraper_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.scraper_runs
     ADD CONSTRAINT scraper_runs_pkey PRIMARY KEY (id);
-
-
---
--- Name: scraper_script_assembly scraper_script_assembly_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_script_assembly
-    ADD CONSTRAINT scraper_script_assembly_pkey PRIMARY KEY (id);
-
-
---
--- Name: scraper_url_collection scraper_url_collection_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_url_collection
-    ADD CONSTRAINT scraper_url_collection_pkey PRIMARY KEY (id);
 
 
 --
@@ -6058,6 +6902,27 @@ CREATE INDEX users_is_anonymous_idx ON auth.users USING btree (is_anonymous);
 
 
 --
+-- Name: idx_admin_communication_log_admin_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_admin_communication_log_admin_user_id ON public.admin_communication_log USING btree (admin_user_id);
+
+
+--
+-- Name: idx_admin_communication_log_sent_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_admin_communication_log_sent_at ON public.admin_communication_log USING btree (sent_at);
+
+
+--
+-- Name: idx_admin_communication_log_target_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_admin_communication_log_target_user_id ON public.admin_communication_log USING btree (target_user_id);
+
+
+--
 -- Name: idx_brand_aliases_alias_name; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6254,24 +7119,10 @@ CREATE INDEX idx_scraper_ai_sessions_user_id ON public.scraper_ai_sessions USING
 
 
 --
--- Name: idx_scraper_run_timeouts_lookup; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_scraper_runs_created_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_scraper_run_timeouts_lookup ON public.scraper_run_timeouts USING btree (timeout_at, processed);
-
-
---
--- Name: idx_scraper_run_timeouts_run_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_scraper_run_timeouts_run_id ON public.scraper_run_timeouts USING btree (run_id);
-
-
---
--- Name: idx_scraper_runs_is_test_run; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_scraper_runs_is_test_run ON public.scraper_runs USING btree (is_test_run);
+CREATE INDEX idx_scraper_runs_created_at ON public.scraper_runs USING btree (created_at);
 
 
 --
@@ -6285,7 +7136,7 @@ CREATE INDEX idx_scraper_runs_scraper_id ON public.scraper_runs USING btree (scr
 -- Name: idx_scraper_runs_started_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_scraper_runs_started_at ON public.scraper_runs USING btree (started_at DESC);
+CREATE INDEX idx_scraper_runs_started_at ON public.scraper_runs USING btree (started_at);
 
 
 --
@@ -6293,6 +7144,13 @@ CREATE INDEX idx_scraper_runs_started_at ON public.scraper_runs USING btree (sta
 --
 
 CREATE INDEX idx_scraper_runs_status ON public.scraper_runs USING btree (status);
+
+
+--
+-- Name: idx_scraper_runs_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_runs_user_id ON public.scraper_runs USING btree (user_id);
 
 
 --
@@ -6349,6 +7207,34 @@ CREATE INDEX idx_staged_integration_products_sku_brand ON public.staged_integrat
 --
 
 CREATE INDEX idx_staged_integration_products_status ON public.staged_integration_products USING btree (status);
+
+
+--
+-- Name: idx_user_profiles_admin_role; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_admin_role ON public.user_profiles USING btree (admin_role) WHERE (admin_role IS NOT NULL);
+
+
+--
+-- Name: idx_user_profiles_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_created_at ON public.user_profiles USING btree (created_at);
+
+
+--
+-- Name: idx_user_profiles_is_suspended; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_is_suspended ON public.user_profiles USING btree (is_suspended) WHERE (is_suspended = true);
+
+
+--
+-- Name: idx_user_profiles_subscription_tier; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_subscription_tier ON public.user_profiles USING btree (subscription_tier);
 
 
 --
@@ -6443,13 +7329,6 @@ CREATE TRIGGER process_staged_integration_product_trigger BEFORE UPDATE ON publi
 
 
 --
--- Name: scraper_runs retry_fetch_failed_trigger; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER retry_fetch_failed_trigger AFTER UPDATE ON public.scraper_runs FOR EACH ROW EXECUTE FUNCTION public.retry_fetch_failed_runs();
-
-
---
 -- Name: products set_product_brand_id_trigger; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6468,20 +7347,6 @@ CREATE TRIGGER sync_brand_id_trigger BEFORE INSERT OR UPDATE OF brand ON public.
 --
 
 CREATE TRIGGER sync_brand_name_trigger BEFORE INSERT OR UPDATE OF brand_id ON public.products FOR EACH ROW EXECUTE FUNCTION public.sync_brand_name();
-
-
---
--- Name: scraper_runs trg_auto_trim_progress_messages; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_auto_trim_progress_messages BEFORE UPDATE ON public.scraper_runs FOR EACH ROW WHEN ((new.progress_messages IS NOT NULL)) EXECUTE FUNCTION public.auto_trim_progress_messages();
-
-
---
--- Name: scraper_runs update_scraper_status_trigger; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER update_scraper_status_trigger AFTER UPDATE ON public.scraper_runs FOR EACH ROW EXECUTE FUNCTION public.update_scraper_status_from_run();
 
 
 --
@@ -6600,6 +7465,22 @@ ALTER TABLE ONLY next_auth.accounts
 
 ALTER TABLE ONLY next_auth.sessions
     ADD CONSTRAINT "sessions_userId_fkey" FOREIGN KEY ("userId") REFERENCES next_auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: admin_communication_log admin_communication_log_admin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_communication_log
+    ADD CONSTRAINT admin_communication_log_admin_user_id_fkey FOREIGN KEY (admin_user_id) REFERENCES next_auth.users(id);
+
+
+--
+-- Name: admin_communication_log admin_communication_log_target_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_communication_log
+    ADD CONSTRAINT admin_communication_log_target_user_id_fkey FOREIGN KEY (target_user_id) REFERENCES next_auth.users(id);
 
 
 --
@@ -6803,54 +7684,6 @@ ALTER TABLE ONLY public.scraper_ai_sessions
 
 
 --
--- Name: scraper_analysis scraper_analysis_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_analysis
-    ADD CONSTRAINT scraper_analysis_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
-
-
---
--- Name: scraper_analysis scraper_analysis_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_analysis
-    ADD CONSTRAINT scraper_analysis_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-
-
---
--- Name: scraper_data_extraction scraper_data_extraction_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_data_extraction
-    ADD CONSTRAINT scraper_data_extraction_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
-
-
---
--- Name: scraper_data_extraction scraper_data_extraction_url_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_data_extraction
-    ADD CONSTRAINT scraper_data_extraction_url_collection_id_fkey FOREIGN KEY (url_collection_id) REFERENCES public.scraper_url_collection(id);
-
-
---
--- Name: scraper_data_extraction scraper_data_extraction_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_data_extraction
-    ADD CONSTRAINT scraper_data_extraction_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-
-
---
--- Name: scraper_run_timeouts scraper_run_timeouts_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_run_timeouts
-    ADD CONSTRAINT scraper_run_timeouts_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.scraper_runs(id) ON DELETE CASCADE;
-
-
---
 -- Name: scraper_runs scraper_runs_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6864,62 +7697,6 @@ ALTER TABLE ONLY public.scraper_runs
 
 ALTER TABLE ONLY public.scraper_runs
     ADD CONSTRAINT scraper_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-
-
---
--- Name: scraper_script_assembly scraper_script_assembly_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_script_assembly
-    ADD CONSTRAINT scraper_script_assembly_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
-
-
---
--- Name: scraper_script_assembly scraper_script_assembly_data_extraction_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_script_assembly
-    ADD CONSTRAINT scraper_script_assembly_data_extraction_id_fkey FOREIGN KEY (data_extraction_id) REFERENCES public.scraper_data_extraction(id);
-
-
---
--- Name: scraper_script_assembly scraper_script_assembly_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_script_assembly
-    ADD CONSTRAINT scraper_script_assembly_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
-
-
---
--- Name: scraper_script_assembly scraper_script_assembly_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_script_assembly
-    ADD CONSTRAINT scraper_script_assembly_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-
-
---
--- Name: scraper_url_collection scraper_url_collection_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_url_collection
-    ADD CONSTRAINT scraper_url_collection_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.scraper_analysis(id);
-
-
---
--- Name: scraper_url_collection scraper_url_collection_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_url_collection
-    ADD CONSTRAINT scraper_url_collection_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
-
-
---
--- Name: scraper_url_collection scraper_url_collection_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraper_url_collection
-    ADD CONSTRAINT scraper_url_collection_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 
 --
@@ -7178,34 +7955,6 @@ CREATE POLICY "Users can delete their own scraper AI sessions" ON public.scraper
 
 
 --
--- Name: scraper_url_collection Users can delete their own scraper URL collection; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can delete their own scraper URL collection" ON public.scraper_url_collection FOR DELETE USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_analysis Users can delete their own scraper analysis; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can delete their own scraper analysis" ON public.scraper_analysis FOR DELETE USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_data_extraction Users can delete their own scraper data extraction; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can delete their own scraper data extraction" ON public.scraper_data_extraction FOR DELETE USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_script_assembly Users can delete their own scraper script assembly; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can delete their own scraper script assembly" ON public.scraper_script_assembly FOR DELETE USING ((auth.uid() = user_id));
-
-
---
 -- Name: scrapers Users can delete their own scrapers; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -7304,41 +8053,6 @@ CREATE POLICY "Users can insert their own scraper AI sessions" ON public.scraper
 
 
 --
--- Name: scraper_url_collection Users can insert their own scraper URL collection; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraper URL collection" ON public.scraper_url_collection FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
-
---
--- Name: scraper_analysis Users can insert their own scraper analysis; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraper analysis" ON public.scraper_analysis FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
-
---
--- Name: scraper_data_extraction Users can insert their own scraper data extraction; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraper data extraction" ON public.scraper_data_extraction FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
-
---
--- Name: scraper_runs Users can insert their own scraper runs; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraper runs" ON public.scraper_runs FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
-
---
--- Name: scraper_script_assembly Users can insert their own scraper script assembly; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraper script assembly" ON public.scraper_script_assembly FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
-
---
 -- Name: scrapers Users can insert their own scrapers; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -7413,41 +8127,6 @@ CREATE POLICY "Users can update their own profile" ON public.user_profiles FOR U
 --
 
 CREATE POLICY "Users can update their own scraper AI sessions" ON public.scraper_ai_sessions FOR UPDATE USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_url_collection Users can update their own scraper URL collection; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own scraper URL collection" ON public.scraper_url_collection FOR UPDATE USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_analysis Users can update their own scraper analysis; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own scraper analysis" ON public.scraper_analysis FOR UPDATE USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_data_extraction Users can update their own scraper data extraction; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own scraper data extraction" ON public.scraper_data_extraction FOR UPDATE USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_runs Users can update their own scraper runs; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own scraper runs" ON public.scraper_runs FOR UPDATE USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_script_assembly Users can update their own scraper script assembly; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own scraper script assembly" ON public.scraper_script_assembly FOR UPDATE USING ((auth.uid() = user_id));
 
 
 --
@@ -7556,41 +8235,6 @@ CREATE POLICY "Users can view their own scraper AI sessions" ON public.scraper_a
 
 
 --
--- Name: scraper_url_collection Users can view their own scraper URL collection; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraper URL collection" ON public.scraper_url_collection FOR SELECT USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_analysis Users can view their own scraper analysis; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraper analysis" ON public.scraper_analysis FOR SELECT USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_data_extraction Users can view their own scraper data extraction; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraper data extraction" ON public.scraper_data_extraction FOR SELECT USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_runs Users can view their own scraper runs; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraper runs" ON public.scraper_runs FOR SELECT USING ((auth.uid() = user_id));
-
-
---
--- Name: scraper_script_assembly Users can view their own scraper script assembly; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraper script assembly" ON public.scraper_script_assembly FOR SELECT USING ((auth.uid() = user_id));
-
-
---
 -- Name: scrapers Users can view their own scrapers; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -7609,6 +8253,30 @@ CREATE POLICY "Users can view their own staged integration products" ON public.s
 --
 
 CREATE POLICY "Users can view their own subscriptions" ON public.user_subscriptions FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: admin_communication_log; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.admin_communication_log ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: admin_communication_log admin_communication_log_insert_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY admin_communication_log_insert_policy ON public.admin_communication_log FOR INSERT WITH CHECK ((EXISTS ( SELECT 1
+   FROM public.user_profiles
+  WHERE ((user_profiles.id = auth.uid()) AND (user_profiles.admin_role = ANY (ARRAY['super_admin'::text, 'support_admin'::text]))))));
+
+
+--
+-- Name: admin_communication_log admin_communication_log_select_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY admin_communication_log_select_policy ON public.admin_communication_log FOR SELECT USING ((EXISTS ( SELECT 1
+   FROM public.user_profiles
+  WHERE ((user_profiles.id = auth.uid()) AND (user_profiles.admin_role = ANY (ARRAY['super_admin'::text, 'support_admin'::text]))))));
 
 
 --
@@ -7690,40 +8358,10 @@ ALTER TABLE public.scraped_products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scraper_ai_sessions ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: scraper_analysis; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraper_analysis ENABLE ROW LEVEL SECURITY;
-
---
--- Name: scraper_data_extraction; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraper_data_extraction ENABLE ROW LEVEL SECURITY;
-
---
--- Name: scraper_run_timeouts; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraper_run_timeouts ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: scraper_runs; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.scraper_runs ENABLE ROW LEVEL SECURITY;
-
---
--- Name: scraper_script_assembly; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraper_script_assembly ENABLE ROW LEVEL SECURITY;
-
---
--- Name: scraper_url_collection; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraper_url_collection ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: scrapers; Type: ROW SECURITY; Schema: public; Owner: -

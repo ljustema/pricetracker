@@ -5,7 +5,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/server';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   // In NextJS 13+, we need to await params
   const { id: integrationId } = await params;

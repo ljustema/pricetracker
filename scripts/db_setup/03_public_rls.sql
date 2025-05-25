@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Row Level Security policies
 -- =========================================================================
--- Generated: 2025-05-24 16:55:21
+-- Generated: 2025-05-25 12:05:14
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -58,30 +58,6 @@ CREATE POLICY "Users can delete their own products" ON public.products FOR DELET
 --
 
 CREATE POLICY "Users can delete their own scraper AI sessions" ON public.scraper_ai_sessions FOR DELETE USING ((auth.uid() = user_id));
-
---
--- Name: scraper_url_collection Users can delete their own scraper URL collection; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can delete their own scraper URL collection" ON public.scraper_url_collection FOR DELETE USING ((auth.uid() = user_id));
-
---
--- Name: scraper_analysis Users can delete their own scraper analysis; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can delete their own scraper analysis" ON public.scraper_analysis FOR DELETE USING ((auth.uid() = user_id));
-
---
--- Name: scraper_data_extraction Users can delete their own scraper data extraction; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can delete their own scraper data extraction" ON public.scraper_data_extraction FOR DELETE USING ((auth.uid() = user_id));
-
---
--- Name: scraper_script_assembly Users can delete their own scraper script assembly; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can delete their own scraper script assembly" ON public.scraper_script_assembly FOR DELETE USING ((auth.uid() = user_id));
 
 --
 -- Name: scrapers Users can delete their own scrapers; Type: POLICY; Schema: public; Owner: -
@@ -168,36 +144,6 @@ CREATE POLICY "Users can insert their own scraped products" ON public.scraped_pr
 CREATE POLICY "Users can insert their own scraper AI sessions" ON public.scraper_ai_sessions FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
--- Name: scraper_url_collection Users can insert their own scraper URL collection; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraper URL collection" ON public.scraper_url_collection FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
---
--- Name: scraper_analysis Users can insert their own scraper analysis; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraper analysis" ON public.scraper_analysis FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
---
--- Name: scraper_data_extraction Users can insert their own scraper data extraction; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraper data extraction" ON public.scraper_data_extraction FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
---
--- Name: scraper_runs Users can insert their own scraper runs; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraper runs" ON public.scraper_runs FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
---
--- Name: scraper_script_assembly Users can insert their own scraper script assembly; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraper script assembly" ON public.scraper_script_assembly FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
---
 -- Name: scrapers Users can insert their own scrapers; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -262,36 +208,6 @@ CREATE POLICY "Users can update their own profile" ON public.user_profiles FOR U
 --
 
 CREATE POLICY "Users can update their own scraper AI sessions" ON public.scraper_ai_sessions FOR UPDATE USING ((auth.uid() = user_id));
-
---
--- Name: scraper_url_collection Users can update their own scraper URL collection; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own scraper URL collection" ON public.scraper_url_collection FOR UPDATE USING ((auth.uid() = user_id));
-
---
--- Name: scraper_analysis Users can update their own scraper analysis; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own scraper analysis" ON public.scraper_analysis FOR UPDATE USING ((auth.uid() = user_id));
-
---
--- Name: scraper_data_extraction Users can update their own scraper data extraction; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own scraper data extraction" ON public.scraper_data_extraction FOR UPDATE USING ((auth.uid() = user_id));
-
---
--- Name: scraper_runs Users can update their own scraper runs; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own scraper runs" ON public.scraper_runs FOR UPDATE USING ((auth.uid() = user_id));
-
---
--- Name: scraper_script_assembly Users can update their own scraper script assembly; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own scraper script assembly" ON public.scraper_script_assembly FOR UPDATE USING ((auth.uid() = user_id));
 
 --
 -- Name: scrapers Users can update their own scrapers; Type: POLICY; Schema: public; Owner: -
@@ -384,36 +300,6 @@ CREATE POLICY "Users can view their own scraped products" ON public.scraped_prod
 CREATE POLICY "Users can view their own scraper AI sessions" ON public.scraper_ai_sessions FOR SELECT USING ((auth.uid() = user_id));
 
 --
--- Name: scraper_url_collection Users can view their own scraper URL collection; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraper URL collection" ON public.scraper_url_collection FOR SELECT USING ((auth.uid() = user_id));
-
---
--- Name: scraper_analysis Users can view their own scraper analysis; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraper analysis" ON public.scraper_analysis FOR SELECT USING ((auth.uid() = user_id));
-
---
--- Name: scraper_data_extraction Users can view their own scraper data extraction; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraper data extraction" ON public.scraper_data_extraction FOR SELECT USING ((auth.uid() = user_id));
-
---
--- Name: scraper_runs Users can view their own scraper runs; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraper runs" ON public.scraper_runs FOR SELECT USING ((auth.uid() = user_id));
-
---
--- Name: scraper_script_assembly Users can view their own scraper script assembly; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraper script assembly" ON public.scraper_script_assembly FOR SELECT USING ((auth.uid() = user_id));
-
---
 -- Name: scrapers Users can view their own scrapers; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -430,4 +316,20 @@ CREATE POLICY "Users can view their own staged integration products" ON public.s
 --
 
 CREATE POLICY "Users can view their own subscriptions" ON public.user_subscriptions FOR SELECT USING ((auth.uid() = user_id));
+
+--
+-- Name: admin_communication_log admin_communication_log_insert_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY admin_communication_log_insert_policy ON public.admin_communication_log FOR INSERT WITH CHECK ((EXISTS ( SELECT 1
+   FROM public.user_profiles
+  WHERE ((user_profiles.id = auth.uid()) AND (user_profiles.admin_role = ANY (ARRAY['super_admin'::text, 'support_admin'::text]))))));
+
+--
+-- Name: admin_communication_log admin_communication_log_select_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY admin_communication_log_select_policy ON public.admin_communication_log FOR SELECT USING ((EXISTS ( SELECT 1
+   FROM public.user_profiles
+  WHERE ((user_profiles.id = auth.uid()) AND (user_profiles.admin_role = ANY (ARRAY['super_admin'::text, 'support_admin'::text]))))));
 

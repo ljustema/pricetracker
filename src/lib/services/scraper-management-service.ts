@@ -4,41 +4,9 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
  * Service for managing scrapers (approval, activation)
  */
 export class ScraperManagementService {
-  /**
-   * Check if a scraper exists and is eligible for approval (basic check).
-   * The actual approval update is handled by the API route.
-   */
-  static async checkScraperExistsForApproval(scraperId: string) {
-    const supabase = await createSupabaseServerClient();
-    
-    // Get the scraper to ensure it has been tested
-    const { data: scraper } = await supabase
-      .from('scrapers')
-      .select('*')
-      .eq('id', scraperId)
-      .single();
-    
-    if (!scraper) {
-      throw new Error('Scraper not found');
-    }
-    
-    // Removed check for scraper.test_results as it might be obsolete.
-    // The new flow relies on reviewing a successful Test Run (via scraper_runs table),
-    // which should be checked in the API route if desired.
+  // Note: Approval logic removed since scrapers can only be saved to database if already approved
+  // The approval process now happens in the UI before saving to database
 
-    if (scraper.is_approved) {
-      // Optional: Decide if this should throw an error or just return info
-      console.log(`Scraper ${scraperId} is already approved.`);
-      // throw new Error('Scraper is already approved');
-    }
-
-    // Removed the database update logic. The API route /api/scrapers/[scraperId]/approve handles the update.
-    // This method now only serves to verify existence and potentially basic status.
-
-    // Return minimal info or just void if only used for checks
-    return { id: scraper.id, is_approved: scraper.is_approved };
-  }
-  
   /**
    * Activate a scraper (deactivating others for the same competitor)
    */

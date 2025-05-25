@@ -46,7 +46,7 @@ interface ClaimedIntegrationJobData {
   configuration: any | null; // JSONB
 }
 
-const POLLING_INTERVAL_MS = 5000; // Poll every 5 seconds (adjust as needed)
+const POLLING_INTERVAL_MS = 30000; // Poll every 30 seconds (reduced from 5 seconds)
 const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 
 console.log(`Starting TypeScript Utility Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
@@ -66,11 +66,21 @@ let lastPollMessageTime = 0;
 let lastJobTime = Date.now();
 let lastHealthCheckTime = Date.now();
 
+// Job processing state to prevent race conditions
+let isProcessingJob = false;
+let currentJobId: string | null = null;
+
 // Function to fetch and process integration jobs
 async function fetchAndProcessIntegrationJob() {
   let job: any = null; // Define job variable in the outer scope for the catch block
 
   try {
+    // RACE CONDITION PROTECTION: Skip if already processing a job
+    if (isProcessingJob) {
+      console.log(`Skipping poll - already processing integration job ${currentJobId}`);
+      return;
+    }
+
     // Periodically check for long periods of inactivity and log health status
     const currentTime = Date.now();
     if (currentTime - lastHealthCheckTime > HEALTH_CHECK_INTERVAL_MS) {
@@ -105,6 +115,10 @@ async function fetchAndProcessIntegrationJob() {
     }
 
     job = claimedJobs[0]; // Assign the first (and should be only) claimed job
+
+    // SET JOB PROCESSING STATE - Prevent race conditions
+    isProcessingJob = true;
+    currentJobId = job.id;
 
     // The job status is already 'processing' and started_at is set by the RPC function.
     console.log(`Integration job ${job.id} claimed successfully via RPC. Integration ID: ${job.integration_id}`);
@@ -271,6 +285,10 @@ async function fetchAndProcessIntegrationJob() {
         console.error(`Failed to update job ${job.id} status after unhandled error:`, updateError);
       }
     }
+  } finally {
+    // ALWAYS reset job processing state to prevent race conditions
+    isProcessingJob = false;
+    currentJobId = null;
   }
 }
 

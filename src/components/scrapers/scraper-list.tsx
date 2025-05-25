@@ -45,23 +45,7 @@ export default function ScraperList({
     }
   }, [onRefresh]);
 
-  const [approvingId, setApprovingId] = useState<string | null>(null);
-
-  const handleApproveScraper = useCallback(async (scraperId: string) => {
-    try {
-      setApprovingId(scraperId);
-      await ScraperClientService.approveScraper(scraperId);
-      console.log(`Scraper ${scraperId} approved successfully, refreshing list...`);
-      // Force a small delay to ensure the database has updated
-      await new Promise(resolve => setTimeout(resolve, 500));
-      onRefresh();
-    } catch (error) {
-      console.error("Error approving scraper:", error);
-      alert(error instanceof Error ? error.message : "Failed to approve scraper");
-    } finally {
-      setApprovingId(null);
-    }
-  }, [onRefresh]);
+  // Note: Approval logic removed since scrapers can only be saved to database if already approved
 
   // Handle starting a test run
   const handleTestRun = useCallback(async (scraperId: string) => {
@@ -185,7 +169,7 @@ export default function ScraperList({
         <ul className="divide-y divide-gray-200">
           {scrapers.map((scraper) => { // Changed to curly braces for explicit return
             // Debug: Log scraper data before rendering the list item
-            console.log(`Rendering item for ${scraper.name} (ID: ${scraper.id}): Type=${scraper.scraper_type}, Approved=${scraper.is_approved}`);
+            console.log(`Rendering item for ${scraper.name} (ID: ${scraper.id}): Type=${scraper.scraper_type}, Active=${scraper.is_active}`);
             return ( // Added explicit return
               <li key={scraper.id} className="px-4 py-4 sm:px-6">
               <div className="flex items-center justify-between">
@@ -193,8 +177,6 @@ export default function ScraperList({
                   <div className="flex-shrink-0">
                     {scraper.is_active ? (
                       <CheckCircleIcon className="h-8 w-8 text-green-500" />
-                    ) : !scraper.is_approved ? (
-                      <XCircleIcon className="h-8 w-8 text-yellow-500" />
                     ) : (
                       <CheckCircleIcon className="h-8 w-8 text-gray-300" />
                     )}
@@ -218,8 +200,8 @@ export default function ScraperList({
                   </div>
                 </div>
                 <div className="flex space-x-2">
-                  {/* Show test run button for approved scrapers */}
-                  {(scraper.scraper_type === 'python' || scraper.scraper_type === 'typescript') && scraper.is_approved && testingId !== scraper.id && (
+                  {/* Show test run button for all scrapers */}
+                  {(scraper.scraper_type === 'python' || scraper.scraper_type === 'typescript') && testingId !== scraper.id && (
                     <button
                       type="button"
                       onClick={() => handleTestRun(scraper.id!)}
@@ -230,18 +212,7 @@ export default function ScraperList({
                     </button>
                   )}
 
-                  {/* Approve Scraper button, only if not approved */}
-                  {!scraper.is_approved && (
-                    <button
-                      type="button"
-                      onClick={() => handleApproveScraper(scraper.id!)}
-                      disabled={approvingId === scraper.id}
-                      className="inline-flex items-center rounded-md border border-green-500 bg-green-50 px-3 py-2 text-sm font-medium text-green-700 shadow-sm hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50"
-                    >
-                      <CheckCircleIcon className="h-4 w-4 mr-1" />
-                      {approvingId === scraper.id ? "Approving..." : "Approve Scraper"}
-                    </button>
-                  )}
+                  {/* Note: Approval button removed since scrapers can only be saved to database if already approved */}
 
                   {/* Show progress when a test run is in progress */}
                   {testingId === scraper.id && testRunId && (
