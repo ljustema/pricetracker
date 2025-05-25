@@ -920,8 +920,10 @@ async function fetchAndProcessJob() {
       }
 
       // Clear the timer and delete the batch
-      if (LOG_BATCHES[job.id].timer) {
-        clearInterval(LOG_BATCHES[job.id].timer);
+      const timer = LOG_BATCHES[job.id].timer;
+      if (timer !== null) {
+        clearInterval(timer);
+        LOG_BATCHES[job.id].timer = null;
       }
       delete LOG_BATCHES[job.id];
     }
