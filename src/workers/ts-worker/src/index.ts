@@ -90,6 +90,21 @@ const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 
 console.log(`Starting TypeScript Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
 
+// Memory monitoring
+function logMemoryUsage(context: string) {
+  const memUsage = process.memoryUsage();
+  const memMB = {
+    rss: Math.round(memUsage.rss / 1024 / 1024),
+    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+    heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+    external: Math.round(memUsage.external / 1024 / 1024)
+  };
+  console.log(`[MEMORY] ${context}: RSS=${memMB.rss}MB, Heap=${memMB.heapUsed}/${memMB.heapTotal}MB, External=${memMB.external}MB`);
+}
+
+// Log initial memory usage
+logMemoryUsage('Worker startup');
+
 // Track last successful job time and last health check time
 let lastJobTime = Date.now();
 let lastHealthCheckTime = Date.now();
@@ -114,6 +129,7 @@ async function fetchAndProcessJob() {
     if (currentTime - lastHealthCheckTime > HEALTH_CHECK_INTERVAL_MS) {
       const inactivityDuration = (currentTime - lastJobTime) / 1000; // Convert to seconds
       console.log(`Worker health check: ${inactivityDuration.toFixed(1)} seconds since last job processed. Worker is still running.`);
+      logMemoryUsage('Health check');
       lastHealthCheckTime = currentTime;
     }
 
@@ -153,6 +169,7 @@ async function fetchAndProcessJob() {
     // The job status is already 'running' and started_at is set by the RPC function.
     console.log(`Job ${job.id} claimed successfully via RPC. Scraper ID: ${job.scraper_id}`);
     logStructured(job.id, 'info', 'JOB_CLAIMED', `Job ${job.id} claimed successfully via RPC.`);
+    logMemoryUsage(`Job ${job.id} start`);
 
     // Update last job time when a job is successfully claimed
     lastJobTime = Date.now();
@@ -910,6 +927,11 @@ async function fetchAndProcessJob() {
     isProcessingJob = false;
     currentJobId = null;
 
+    // Log memory usage after job completion
+    if (job && job.id) {
+      logMemoryUsage(`Job ${job.id} complete`);
+    }
+
     // Clean up log batch for this job to prevent memory leaks
     if (job && job.id && LOG_BATCHES[job.id]) {
       // Flush any remaining messages
@@ -926,6 +948,12 @@ async function fetchAndProcessJob() {
         LOG_BATCHES[job.id].timer = null;
       }
       delete LOG_BATCHES[job.id];
+    }
+
+    // Force garbage collection if available (helps with memory cleanup)
+    if (global.gc) {
+      global.gc();
+      logMemoryUsage('After garbage collection');
     }
   }
 }

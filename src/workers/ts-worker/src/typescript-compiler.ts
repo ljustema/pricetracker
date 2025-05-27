@@ -6,6 +6,10 @@ import os from 'os';
 import { randomUUID } from 'crypto';
 import { debugLog } from './debug-logger';
 
+// Cache for shared dependencies to reduce memory usage
+const SHARED_DEPS_DIR = path.join(os.tmpdir(), 'ts-worker-shared-deps');
+let sharedDepsInitialized = false;
+
 // Interface for compiler options
 interface CompilerOptions {
   timeout?: number;
@@ -20,6 +24,71 @@ interface CompilerResult {
 }
 
 /**
+ * Initialize shared dependencies to reduce memory usage
+ */
+async function initializeSharedDependencies(): Promise<void> {
+  if (sharedDepsInitialized) {
+    return;
+  }
+
+  try {
+    debugLog('Initializing shared dependencies cache...');
+
+    // Create shared dependencies directory
+    await fsPromises.mkdir(SHARED_DEPS_DIR, { recursive: true });
+
+    // Create package.json for shared dependencies
+    const packageJson = {
+      name: "ts-worker-shared-deps",
+      version: "1.0.0",
+      private: true,
+      dependencies: {
+        "crawlee": "^3.13.3",
+        "playwright": "^1.30.0",
+        "node-fetch": "^2.6.7",
+        "jsdom": "^21.1.0",
+        "yargs": "^17.6.2",
+        "typescript": "^4.9.5",
+        "@types/node": "^18.15.0",
+        "fast-xml-parser": "^5.2.0"
+      }
+    };
+
+    const packageJsonPath = path.join(SHARED_DEPS_DIR, 'package.json');
+    await fsPromises.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf-8');
+
+    // Install dependencies once
+    const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    debugLog('Installing shared dependencies (one-time setup)...');
+
+    execSync(`${npmCommand} install --no-package-lock --no-save`, {
+      cwd: SHARED_DEPS_DIR,
+      stdio: 'pipe',
+      timeout: 300000 // 5 minutes timeout
+    });
+
+    // Install Playwright browsers once
+    debugLog('Installing Playwright browsers in shared cache...');
+    try {
+      execSync('npx playwright install --with-deps chromium', {
+        cwd: SHARED_DEPS_DIR,
+        stdio: 'pipe',
+        timeout: 300000
+      });
+      debugLog('Shared Playwright browsers installed successfully');
+    } catch (playwrightError: any) {
+      debugLog(`Playwright installation warning in shared cache: ${playwrightError.message}`);
+    }
+
+    sharedDepsInitialized = true;
+    debugLog('Shared dependencies cache initialized successfully');
+  } catch (error: any) {
+    debugLog(`Failed to initialize shared dependencies: ${error.message}`);
+    // Continue without shared cache
+  }
+}
+
+/**
  * Compiles a TypeScript scraper script to JavaScript
  * @param scriptContent The TypeScript script content
  * @param options Compiler options
@@ -30,6 +99,9 @@ export async function compileTypeScriptScraper(
   options: CompilerOptions = {}
 ): Promise<CompilerResult> {
   const TIMEOUT_MS = options.timeout || 60000; // Default to 60 seconds
+
+  // Initialize shared dependencies first
+  await initializeSharedDependencies();
 
   // Create a unique temporary directory
   const uuid = randomUUID();
@@ -46,77 +118,68 @@ export async function compileTypeScriptScraper(
     await fsPromises.writeFile(tempTsFilePath, scriptContent, 'utf-8');
     debugLog(`Temporary TypeScript script written to ${tempTsFilePath}`);
 
-    // Create a package.json file for dependencies
-    const packageJson = {
-      name: "temp-scraper-execution",
-      version: "1.0.0",
-      private: true,
-      dependencies: {
-        "crawlee": "^3.13.3",
-        "playwright": "^1.30.0",
-        "node-fetch": "^2.6.7",
-        "jsdom": "^21.1.0",
-        "yargs": "^17.6.2",
-        "typescript": "^4.9.5",
-        "@types/node": "^18.15.0",
-        "fast-xml-parser": "^5.2.0"
+    // Use shared dependencies if available, otherwise fall back to individual installation
+    if (sharedDepsInitialized && fs.existsSync(path.join(SHARED_DEPS_DIR, 'node_modules'))) {
+      debugLog('Using shared dependencies cache...');
+
+      // Create symlink to shared node_modules
+      const sharedNodeModules = path.join(SHARED_DEPS_DIR, 'node_modules');
+      const tempNodeModules = path.join(tempDir, 'node_modules');
+
+      try {
+        // Create symlink to shared node_modules (much faster than copying)
+        if (process.platform === 'win32') {
+          // On Windows, use junction for directories
+          execSync(`mklink /J "${tempNodeModules}" "${sharedNodeModules}"`, { stdio: 'pipe' });
+        } else {
+          // On Unix-like systems, use symlink
+          await fsPromises.symlink(sharedNodeModules, tempNodeModules, 'dir');
+        }
+        debugLog('Successfully linked to shared dependencies');
+      } catch (linkError: any) {
+        debugLog(`Failed to create symlink, falling back to copy: ${linkError.message}`);
+        // Fall back to copying if symlink fails
+        try {
+          execSync(`cp -r "${sharedNodeModules}" "${tempNodeModules}"`, { stdio: 'pipe' });
+          debugLog('Successfully copied shared dependencies');
+        } catch (copyError: any) {
+          debugLog(`Failed to copy shared dependencies: ${copyError.message}`);
+          throw new Error('Failed to set up dependencies');
+        }
       }
-    };
+    } else {
+      // Fall back to individual installation
+      debugLog('Shared dependencies not available, installing individually...');
 
-    const packageJsonPath = path.join(tempDir, 'package.json');
-    await fsPromises.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf-8');
-    debugLog(`Created package.json at ${packageJsonPath}`);
+      // Create a package.json file for dependencies
+      const packageJson = {
+        name: "temp-scraper-execution",
+        version: "1.0.0",
+        private: true,
+        dependencies: {
+          "crawlee": "^3.13.3",
+          "playwright": "^1.30.0",
+          "node-fetch": "^2.6.7",
+          "jsdom": "^21.1.0",
+          "yargs": "^17.6.2",
+          "typescript": "^4.9.5",
+          "@types/node": "^18.15.0",
+          "fast-xml-parser": "^5.2.0"
+        }
+      };
 
-    // Install dependencies
-    debugLog('Installing dependencies (this may take a moment)...');
-    try {
-      // Use a more robust approach to find npm
+      const packageJsonPath = path.join(tempDir, 'package.json');
+      await fsPromises.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf-8');
+      debugLog(`Created package.json at ${packageJsonPath}`);
+
+      // Install dependencies
       const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-
-      // Log the command we're about to execute
-      debugLog(`Executing: ${npmCommand} install --no-package-lock --no-save in ${tempDir}`);
-
-      // Execute npm install in the temporary directory using the imported execSync
       execSync(`${npmCommand} install --no-package-lock --no-save`, {
         cwd: tempDir,
         stdio: 'pipe',
         timeout: 300000 // 5 minutes timeout for npm install
       });
-
       debugLog('Dependencies installed successfully');
-
-      // Install Playwright browsers for TypeScript scrapers that use PlaywrightCrawler
-      debugLog('Installing Playwright browsers (this may take a moment)...');
-      try {
-        execSync('npx playwright install --with-deps chromium', {
-          cwd: tempDir,
-          stdio: 'pipe',
-          timeout: 300000 // 5 minutes timeout for Playwright install
-        });
-        debugLog('Playwright browsers installed successfully');
-      } catch (playwrightError: any) {
-        const errorMessage = playwrightError instanceof Error ? playwrightError.message : String(playwrightError);
-        debugLog(`Playwright browser installation warning: ${errorMessage}`);
-
-        if (playwrightError && typeof playwrightError === 'object' && 'stderr' in playwrightError && playwrightError.stderr) {
-          const stderr = playwrightError.stderr.toString();
-          debugLog(`Playwright installation stderr: ${stderr.trim()}`);
-        }
-
-        // Continue even if Playwright installation has warnings
-        debugLog('Continuing with compilation despite Playwright installation issues');
-      }
-    } catch (npmError: any) {
-      const errorMessage = npmError instanceof Error ? npmError.message : String(npmError);
-      debugLog(`npm install error: ${errorMessage}`);
-
-      if (npmError && typeof npmError === 'object' && 'stderr' in npmError && npmError.stderr) {
-        const stderr = npmError.stderr.toString();
-        debugLog(`npm install stderr: ${stderr.trim()}`);
-      }
-
-      // Fail the compilation if npm install fails
-      throw new Error(`Failed to install dependencies: ${errorMessage}`);
     }
 
     // Create a tsconfig.json file with very permissive settings to effectively skip type checking
