@@ -27,8 +27,16 @@ export function NotificationBadge({
   // Check if user is admin by trying to access admin API
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminCheckComplete, setAdminCheckComplete] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+
+  // Ensure component is mounted before doing admin check
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   useEffect(() => {
+    if (!isMounted) return;
+
     const checkAdminStatus = async () => {
       try {
         const response = await fetch('/api/admin/auth/check');
@@ -45,7 +53,7 @@ export function NotificationBadge({
     } else {
       setAdminCheckComplete(true);
     }
-  }, [session, status]);
+  }, [session, status, isMounted]);
 
   // Don't show anything if user is not authenticated or admin check is not complete
   if (status !== 'authenticated' || !session?.user || !adminCheckComplete) {
@@ -142,9 +150,17 @@ export function SimpleNotificationBadge({ className = '' }: { className?: string
   const router = useRouter();
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminCheckComplete, setAdminCheckComplete] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+
+  // Ensure component is mounted before doing admin check
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Check if user is admin
   useEffect(() => {
+    if (!isMounted) return;
+
     const checkAdminStatus = async () => {
       try {
         const response = await fetch('/api/admin/auth/check');
@@ -161,7 +177,7 @@ export function SimpleNotificationBadge({ className = '' }: { className?: string
     } else {
       setAdminCheckComplete(true);
     }
-  }, [session, status]);
+  }, [session, status, isMounted]);
 
   // Don't show anything if user is not authenticated or admin check is not complete
   if (status !== 'authenticated' || !session?.user || !adminCheckComplete) {

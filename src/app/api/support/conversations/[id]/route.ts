@@ -65,18 +65,19 @@ export async function GET(
     console.log(`Found ${unreadAdminMessages.length} unread admin messages`);
 
     if (unreadAdminMessages.length > 0) {
-      const messageIds = unreadAdminMessages.map(msg => msg.id);
-      console.log(`Marking admin messages as read:`, messageIds);
+      console.log(`Marking admin messages as read using database function`);
 
-      const { error: markReadError } = await supabase
-        .from('support_messages')
-        .update({ read_by_recipient: true })
-        .in('id', messageIds);
+      // Use database function to mark messages as read (bypasses RLS)
+      const { data: updateCount, error: markReadError } = await supabase
+        .rpc('mark_conversation_messages_read', {
+          conversation_uuid: conversationId,
+          reader_type: 'user'
+        });
 
       if (markReadError) {
         console.error('Error marking admin messages as read:', markReadError);
       } else {
-        console.log(`Successfully marked ${messageIds.length} admin messages as read`);
+        console.log(`Successfully marked ${updateCount} admin messages as read`);
       }
     }
 
