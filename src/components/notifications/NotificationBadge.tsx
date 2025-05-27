@@ -38,11 +38,26 @@ export function NotificationBadge({
     if (!isMounted) return;
 
     const checkAdminStatus = async () => {
+      // Check if we already have a cached result for this session
+      const cacheKey = `admin_status_${session?.user?.id}`;
+      const cached = sessionStorage.getItem(cacheKey);
+
+      if (cached) {
+        setIsAdmin(cached === 'true');
+        setAdminCheckComplete(true);
+        return;
+      }
+
       try {
         const response = await fetch('/api/admin/auth/check');
-        setIsAdmin(response.status === 200);
+        const isAdminUser = response.status === 200;
+        setIsAdmin(isAdminUser);
+
+        // Cache the result for this session
+        sessionStorage.setItem(cacheKey, isAdminUser.toString());
       } catch {
         setIsAdmin(false);
+        sessionStorage.setItem(cacheKey, 'false');
       } finally {
         setAdminCheckComplete(true);
       }
@@ -55,8 +70,8 @@ export function NotificationBadge({
     }
   }, [session, status, isMounted]);
 
-  // Don't show anything if user is not authenticated or admin check is not complete
-  if (status !== 'authenticated' || !session?.user || !adminCheckComplete) {
+  // Don't show anything if user is not authenticated, not mounted, or admin check is not complete
+  if (!isMounted || status !== 'authenticated' || !session?.user || !adminCheckComplete) {
     return null;
   }
 
@@ -162,11 +177,26 @@ export function SimpleNotificationBadge({ className = '' }: { className?: string
     if (!isMounted) return;
 
     const checkAdminStatus = async () => {
+      // Check if we already have a cached result for this session
+      const cacheKey = `admin_status_${session?.user?.id}`;
+      const cached = sessionStorage.getItem(cacheKey);
+
+      if (cached) {
+        setIsAdmin(cached === 'true');
+        setAdminCheckComplete(true);
+        return;
+      }
+
       try {
         const response = await fetch('/api/admin/auth/check');
-        setIsAdmin(response.status === 200);
+        const isAdminUser = response.status === 200;
+        setIsAdmin(isAdminUser);
+
+        // Cache the result for this session
+        sessionStorage.setItem(cacheKey, isAdminUser.toString());
       } catch {
         setIsAdmin(false);
+        sessionStorage.setItem(cacheKey, 'false');
       } finally {
         setAdminCheckComplete(true);
       }
@@ -179,8 +209,8 @@ export function SimpleNotificationBadge({ className = '' }: { className?: string
     }
   }, [session, status, isMounted]);
 
-  // Don't show anything if user is not authenticated or admin check is not complete
-  if (status !== 'authenticated' || !session?.user || !adminCheckComplete) {
+  // Don't show anything if user is not authenticated, not mounted, or admin check is not complete
+  if (!isMounted || status !== 'authenticated' || !session?.user || !adminCheckComplete) {
     return null;
   }
 
