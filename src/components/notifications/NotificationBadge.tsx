@@ -30,8 +30,8 @@ export function NotificationBadge({
   useEffect(() => {
     const checkAdminStatus = async () => {
       try {
-        const response = await fetch('/api/admin/support/unread-count');
-        setIsAdmin(response.ok);
+        const response = await fetch('/api/admin/auth/check');
+        setIsAdmin(response.status === 200);
       } catch {
         setIsAdmin(false);
       }
@@ -141,8 +141,8 @@ export function SimpleNotificationBadge({ className = '' }: { className?: string
   useEffect(() => {
     const checkAdminStatus = async () => {
       try {
-        const response = await fetch('/api/admin/support/unread-count');
-        setIsAdmin(response.ok);
+        const response = await fetch('/api/admin/auth/check');
+        setIsAdmin(response.status === 200);
       } catch {
         setIsAdmin(false);
       }

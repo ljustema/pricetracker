@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, Send, ArrowLeft, User, Clock, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
+import { useNotifications } from "@/hooks/useNotifications";
 
 interface User {
   id: string;
@@ -64,6 +65,7 @@ export function ConversationView({
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { refreshNotifications } = useNotifications();
 
   const fetchConversation = async () => {
     setLoading(true);
@@ -72,6 +74,8 @@ export function ConversationView({
       if (response.ok) {
         const data = await response.json();
         setConversation(data.conversation);
+        // Refresh notification count since messages may have been marked as read
+        refreshNotifications();
       } else {
         setError("Failed to load conversation");
       }
@@ -219,8 +223,8 @@ export function ConversationView({
                   <div className="flex items-center gap-2 mb-2">
                     <User className="h-4 w-4" />
                     <span className="font-medium text-sm">
-                      {message.sender_type === 'user' 
-                        ? 'You' 
+                      {message.sender_type === 'user'
+                        ? 'You'
                         : message.user_profiles?.name || 'Support Team'
                       }
                     </span>

@@ -26,16 +26,18 @@ export function useNotifications() {
     }
 
     try {
-      // Use a simpler admin check endpoint that just validates admin access
-      const response = await fetch('/api/admin/users?limit=1', {
+      // Use a lightweight admin check - just try to access admin auth validation
+      const response = await fetch('/api/admin/auth/check', {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
         },
       });
 
-      // If the admin API responds successfully, user is an admin
-      setIsAdmin(response.ok);
+      // If the admin auth check responds with 200, user is an admin
+      // If it responds with 403, user is not an admin
+      // Any other error means we should default to non-admin
+      setIsAdmin(response.status === 200);
     } catch (error) {
       setIsAdmin(false);
     }
