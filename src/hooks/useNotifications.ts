@@ -16,6 +16,30 @@ export function useNotifications() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasNotificationPermission, setHasNotificationPermission] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // Check if user is admin
+  const checkAdminStatus = useCallback(async () => {
+    if (status !== 'authenticated' || !session?.user) {
+      setIsAdmin(false);
+      return;
+    }
+
+    try {
+      // Use a simpler admin check endpoint that just validates admin access
+      const response = await fetch('/api/admin/users?limit=1', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      // If the admin API responds successfully, user is an admin
+      setIsAdmin(response.ok);
+    } catch (error) {
+      setIsAdmin(false);
+    }
+  }, [session, status]);
 
   const checkForNewMessages = useCallback(async () => {
     // Only check if user is authenticated
@@ -27,7 +51,10 @@ export function useNotifications() {
     setError(null);
 
     try {
-      const response = await fetch('/api/support/unread-count', {
+      // Use admin API if user is admin, otherwise use regular user API
+      const apiEndpoint = isAdmin ? '/api/admin/support/unread-count' : '/api/support/unread-count';
+
+      const response = await fetch(apiEndpoint, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -47,14 +74,17 @@ export function useNotifications() {
       // Show toast notification if count increased (new messages)
       if (data.count > previousCount && previousCount > 0) {
         const newMessages = data.count - previousCount;
+        const messageType = isAdmin ? 'support message' : 'message';
+        const redirectUrl = isAdmin ? '/app-routes/admin/communication' : '/app-routes/support';
+
         toast.info(
-          `You have ${newMessages} new message${newMessages > 1 ? 's' : ''}`,
+          `You have ${newMessages} new ${messageType}${newMessages > 1 ? 's' : ''}`,
           {
             action: {
               label: 'View',
               onClick: () => {
                 if (typeof window !== 'undefined') {
-                  window.location.href = '/app-routes/support';
+                  window.location.href = redirectUrl;
                 }
               },
             },
@@ -65,7 +95,7 @@ export function useNotifications() {
         // Request browser notification permission and show notification
         if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
           new Notification('New Support Message', {
-            body: `You have ${newMessages} new message${newMessages > 1 ? 's' : ''} in your support conversations.`,
+            body: `You have ${newMessages} new ${messageType}${newMessages > 1 ? 's' : ''}.`,
             icon: '/favicon.ico',
             tag: 'support-notification',
           });
@@ -77,7 +107,7 @@ export function useNotifications() {
     } finally {
       setIsLoading(false);
     }
-  }, [session, status, unreadCount]);
+  }, [session, status, unreadCount, isAdmin]);
 
   // Request notification permission
   const requestNotificationPermission = useCallback(async () => {
@@ -108,8 +138,11 @@ export function useNotifications() {
     }
 
     try {
+      // Use admin API if user is admin, otherwise use regular user API
+      const apiEndpoint = isAdmin ? '/api/admin/support/mark-all-read' : '/api/support/mark-all-read';
+
       // Call API to mark all messages as read in database
-      const response = await fetch('/api/support/mark-all-read', {
+      const response = await fetch(apiEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -125,7 +158,12 @@ export function useNotifications() {
     } catch (error) {
       console.error('Error marking messages as read:', error);
     }
-  }, [session, status, unreadCount]);
+  }, [session, status, unreadCount, isAdmin]);
+
+  // Check admin status when session changes
+  useEffect(() => {
+    checkAdminStatus();
+  }, [checkAdminStatus]);
 
   useEffect(() => {
     // Only set up polling if user is authenticated

@@ -17,18 +17,37 @@ export async function POST(request: NextRequest) {
 
     const supabase = await createSupabaseServerClient();
 
+    // First get the conversation IDs for this user
+    const { data: conversations, error: conversationError } = await supabase
+      .from('support_conversations')
+      .select('id')
+      .eq('user_id', session.user.id);
+
+    if (conversationError) {
+      console.error('Error fetching user conversations:', conversationError);
+      return NextResponse.json(
+        { error: 'Failed to fetch conversations' },
+        { status: 500 }
+      );
+    }
+
+    if (!conversations || conversations.length === 0) {
+      // No conversations, nothing to mark as read
+      return NextResponse.json({
+        success: true,
+        message: 'No conversations found for user'
+      });
+    }
+
+    const conversationIds = conversations.map(c => c.id);
+
     // Mark all unread admin messages for this user as read
     const { error: updateError } = await supabase
       .from('support_messages')
       .update({ read_by_recipient: true })
       .eq('sender_type', 'admin')
       .eq('read_by_recipient', false)
-      .in('conversation_id', 
-        supabase
-          .from('support_conversations')
-          .select('id')
-          .eq('user_id', session.user.id)
-      );
+      .in('conversation_id', conversationIds);
 
     if (updateError) {
       console.error('Error marking all messages as read:', updateError);

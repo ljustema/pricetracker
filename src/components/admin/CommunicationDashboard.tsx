@@ -5,12 +5,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { MessageSquare, Mail, History, Users, Send, Wrench, TrendingUp } from "lucide-react";
+import { MessageSquare, Mail, History, Users, Send, Wrench, TrendingUp, HeadphonesIcon } from "lucide-react";
 import { EmailComposer } from "./EmailComposer";
 import { CommunicationHistory } from "./CommunicationHistory";
 import { BulkEmailSender } from "./BulkEmailSender";
 import ProfessionalScraperRequests from "./ProfessionalScraperRequests";
 import { MarketingDashboard } from "./MarketingDashboard";
+import { AdminSupportManager } from "./AdminSupportManager";
 
 interface AdminUser {
   id: string;
@@ -24,7 +25,7 @@ interface CommunicationDashboardProps {
 }
 
 export function CommunicationDashboard({ adminUser }: CommunicationDashboardProps) {
-  const [activeTab, setActiveTab] = useState("compose");
+  const [activeTab, setActiveTab] = useState("support");
 
   return (
     <div className="space-y-6">
@@ -100,7 +101,11 @@ export function CommunicationDashboard({ adminUser }: CommunicationDashboardProp
         </CardHeader>
         <CardContent>
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-5">
+            <TabsList className="grid w-full grid-cols-6">
+              <TabsTrigger value="support">
+                <HeadphonesIcon className="h-4 w-4 mr-2" />
+                Support Tickets
+              </TabsTrigger>
               <TabsTrigger value="compose">
                 <Mail className="h-4 w-4 mr-2" />
                 Compose Email
@@ -122,6 +127,10 @@ export function CommunicationDashboard({ adminUser }: CommunicationDashboardProp
                 History
               </TabsTrigger>
             </TabsList>
+
+            <TabsContent value="support" className="mt-6">
+              <AdminSupportManager adminUser={adminUser} />
+            </TabsContent>
 
             <TabsContent value="compose" className="mt-6">
               <EmailComposer adminUser={adminUser} />

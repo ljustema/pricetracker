@@ -131,7 +131,7 @@ export default async function AdminLayout({
       </aside>
 
       {/* Main Content */}
-      <div className="flex flex-1 flex-col md:pl-64">
+      <div className="flex flex-1 flex-col" style={{ marginLeft: '10px' }}>
         {/* Top Header */}
         <header className="bg-white shadow-sm border-b border-gray-200">
           <div className="flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -153,7 +153,7 @@ export default async function AdminLayout({
         {/* Page Content */}
         <main className="flex-1 overflow-y-auto">
           <div className="py-6">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="max-w-[95%] mx-auto px-4 sm:px-6 lg:px-8">
               {children}
             </div>
           </div>

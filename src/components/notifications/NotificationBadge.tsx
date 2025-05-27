@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from 'react';
 import { useNotifications } from '@/hooks/useNotifications';
 import { Bell, BellRing } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -14,14 +15,32 @@ interface NotificationBadgeProps {
   showTooltip?: boolean;
 }
 
-export function NotificationBadge({ 
-  className = '', 
-  showIcon = true, 
-  showTooltip = true 
+export function NotificationBadge({
+  className = '',
+  showIcon = true,
+  showTooltip = true
 }: NotificationBadgeProps) {
   const { data: session, status } = useSession();
   const { unreadCount, isLoading, requestNotificationPermission, hasNotificationPermission } = useNotifications();
   const router = useRouter();
+
+  // Check if user is admin by trying to access admin API
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    const checkAdminStatus = async () => {
+      try {
+        const response = await fetch('/api/admin/support/unread-count');
+        setIsAdmin(response.ok);
+      } catch {
+        setIsAdmin(false);
+      }
+    };
+
+    if (status === 'authenticated' && session?.user) {
+      checkAdminStatus();
+    }
+  }, [session, status]);
 
   // Don't show anything if user is not authenticated
   if (status !== 'authenticated' || !session?.user) {
@@ -29,7 +48,8 @@ export function NotificationBadge({
   }
 
   const handleClick = () => {
-    router.push('/app-routes/support');
+    const redirectUrl = isAdmin ? '/app-routes/admin/communication' : '/app-routes/support';
+    router.push(redirectUrl);
   };
 
   const handleRequestPermission = async (e: React.MouseEvent) => {
@@ -55,10 +75,10 @@ export function NotificationBadge({
             )}
           </>
         )}
-        
+
         {unreadCount > 0 && (
-          <Badge 
-            variant="destructive" 
+          <Badge
+            variant="destructive"
             className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-xs font-bold min-w-[20px]"
           >
             {unreadCount > 99 ? '99+' : unreadCount}
@@ -99,7 +119,7 @@ export function NotificationBadge({
         </TooltipTrigger>
         <TooltipContent>
           <p>
-            {unreadCount > 0 
+            {unreadCount > 0
               ? `${unreadCount} unread message${unreadCount > 1 ? 's' : ''}`
               : 'No new messages'
             }
@@ -115,6 +135,23 @@ export function SimpleNotificationBadge({ className = '' }: { className?: string
   const { data: session, status } = useSession();
   const { unreadCount } = useNotifications();
   const router = useRouter();
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // Check if user is admin
+  useEffect(() => {
+    const checkAdminStatus = async () => {
+      try {
+        const response = await fetch('/api/admin/support/unread-count');
+        setIsAdmin(response.ok);
+      } catch {
+        setIsAdmin(false);
+      }
+    };
+
+    if (status === 'authenticated' && session?.user) {
+      checkAdminStatus();
+    }
+  }, [session, status]);
 
   // Don't show anything if user is not authenticated
   if (status !== 'authenticated' || !session?.user) {
@@ -125,11 +162,16 @@ export function SimpleNotificationBadge({ className = '' }: { className?: string
     return null;
   }
 
+  const handleClick = () => {
+    const redirectUrl = isAdmin ? '/app-routes/admin/communication' : '/app-routes/support';
+    router.push(redirectUrl);
+  };
+
   return (
-    <Badge 
-      variant="destructive" 
+    <Badge
+      variant="destructive"
       className={`cursor-pointer hover:bg-red-600 ${className}`}
-      onClick={() => router.push('/app-routes/support')}
+      onClick={handleClick}
     >
       {unreadCount > 99 ? '99+' : unreadCount}
     </Badge>

@@ -78,12 +78,7 @@ export default function SupportDashboard({ user }: SupportDashboardProps) {
 
   useEffect(() => {
     fetchConversations();
-    // Mark notifications as viewed when user visits support page
-    const markViewed = async () => {
-      await markAsViewed();
-    };
-    markViewed();
-  }, [markAsViewed]);
+  }, []);
 
   const handleConversationSelect = (conversationId: string) => {
     setSelectedConversation(conversationId);

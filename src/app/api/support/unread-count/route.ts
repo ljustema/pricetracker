@@ -29,19 +29,38 @@ export async function GET(request: NextRequest) {
 
     if (error) {
       console.error('Error getting unread message count:', error);
-      
+
       // Fallback query if the function doesn't exist yet
+      // First get the conversation IDs for this user
+      const { data: conversations, error: conversationError } = await supabase
+        .from('support_conversations')
+        .select('id')
+        .eq('user_id', session.user.id);
+
+      if (conversationError) {
+        console.error('Error fetching user conversations:', conversationError);
+        return NextResponse.json(
+          { error: 'Failed to fetch conversations' },
+          { status: 500 }
+        );
+      }
+
+      if (!conversations || conversations.length === 0) {
+        // No conversations, no unread messages
+        return NextResponse.json({
+          count: 0,
+          lastCheck: new Date().toISOString()
+        });
+      }
+
+      const conversationIds = conversations.map(c => c.id);
+
       const { count, error: fallbackError } = await supabase
         .from('support_messages')
         .select('*', { count: 'exact', head: true })
         .eq('sender_type', 'admin')
         .eq('read_by_recipient', false)
-        .in('conversation_id', 
-          supabase
-            .from('support_conversations')
-            .select('id')
-            .eq('user_id', session.user.id)
-        );
+        .in('conversation_id', conversationIds);
 
       if (fallbackError) {
         console.error('Error with fallback query:', fallbackError);
