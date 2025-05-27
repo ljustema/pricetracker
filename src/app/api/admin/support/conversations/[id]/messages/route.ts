@@ -89,10 +89,53 @@ export async function POST(
       .update(updateData)
       .eq('id', conversationId);
 
-    // TODO: Send email notification to user if not internal message
+    // Send email notification to user if not internal message
     if (!is_internal) {
-      // Email notification logic would go here
       console.log(`Should send email notification to user for conversation ${conversationId}`);
+
+      try {
+        const { sendEmail } = await import("@/lib/services/email-service");
+
+        // Get user email from conversation
+        const { data: userProfile, error: userError } = await supabase
+          .from('user_profiles')
+          .select('email, name')
+          .eq('id', conversation.user_id)
+          .single();
+
+        if (userError || !userProfile) {
+          console.error('Error getting user profile for email notification:', userError);
+        } else {
+          await sendEmail({
+            to: userProfile.email,
+            subject: `Support Update: ${conversation.subject}`,
+            content: `Hello ${userProfile.name || 'there'},
+
+You have received a new response to your support ticket:
+
+Subject: ${conversation.subject}
+Conversation ID: ${conversationId}
+
+New Message from Support Team:
+${message_content}
+
+You can view and respond to this message by logging into your PriceTracker account and visiting the Support section.
+
+Best regards,
+The PriceTracker Support Team
+
+---
+PriceTracker - Your Competitive Pricing Solution
+https://www.pricetracker.se`,
+            fromName: 'PriceTracker Support'
+          });
+
+          console.log(`Email notification sent to user ${userProfile.email} for conversation ${conversationId}`);
+        }
+      } catch (emailError) {
+        console.error('Error sending email notification to user:', emailError);
+        // Don't fail the request if email fails
+      }
     }
 
     return NextResponse.json({ message });

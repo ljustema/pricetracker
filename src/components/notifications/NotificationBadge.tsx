@@ -26,6 +26,7 @@ export function NotificationBadge({
 
   // Check if user is admin by trying to access admin API
   const [isAdmin, setIsAdmin] = useState(false);
+  const [adminCheckComplete, setAdminCheckComplete] = useState(false);
 
   useEffect(() => {
     const checkAdminStatus = async () => {
@@ -34,16 +35,20 @@ export function NotificationBadge({
         setIsAdmin(response.status === 200);
       } catch {
         setIsAdmin(false);
+      } finally {
+        setAdminCheckComplete(true);
       }
     };
 
     if (status === 'authenticated' && session?.user) {
       checkAdminStatus();
+    } else {
+      setAdminCheckComplete(true);
     }
   }, [session, status]);
 
-  // Don't show anything if user is not authenticated
-  if (status !== 'authenticated' || !session?.user) {
+  // Don't show anything if user is not authenticated or admin check is not complete
+  if (status !== 'authenticated' || !session?.user || !adminCheckComplete) {
     return null;
   }
 
@@ -136,6 +141,7 @@ export function SimpleNotificationBadge({ className = '' }: { className?: string
   const { unreadCount } = useNotifications();
   const router = useRouter();
   const [isAdmin, setIsAdmin] = useState(false);
+  const [adminCheckComplete, setAdminCheckComplete] = useState(false);
 
   // Check if user is admin
   useEffect(() => {
@@ -145,16 +151,20 @@ export function SimpleNotificationBadge({ className = '' }: { className?: string
         setIsAdmin(response.status === 200);
       } catch {
         setIsAdmin(false);
+      } finally {
+        setAdminCheckComplete(true);
       }
     };
 
     if (status === 'authenticated' && session?.user) {
       checkAdminStatus();
+    } else {
+      setAdminCheckComplete(true);
     }
   }, [session, status]);
 
-  // Don't show anything if user is not authenticated
-  if (status !== 'authenticated' || !session?.user) {
+  // Don't show anything if user is not authenticated or admin check is not complete
+  if (status !== 'authenticated' || !session?.user || !adminCheckComplete) {
     return null;
   }
 

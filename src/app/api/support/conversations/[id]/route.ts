@@ -10,7 +10,7 @@ export async function GET(
 ) {
   try {
     const { id: conversationId } = await params;
-    
+
     // Get user session
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
@@ -57,20 +57,31 @@ export async function GET(
     const publicMessages = conversation.support_messages?.filter(msg => !msg.is_internal) || [];
 
     // Mark admin messages as read
-    const unreadAdminMessages = publicMessages.filter(msg => 
+    const unreadAdminMessages = publicMessages.filter(msg =>
       msg.sender_type === 'admin' && !msg.read_by_recipient
     );
 
+    console.log(`User ${session.user.id} viewing conversation ${conversationId}`);
+    console.log(`Found ${unreadAdminMessages.length} unread admin messages`);
+
     if (unreadAdminMessages.length > 0) {
       const messageIds = unreadAdminMessages.map(msg => msg.id);
-      await supabase
+      console.log(`Marking admin messages as read:`, messageIds);
+
+      const { error: markReadError } = await supabase
         .from('support_messages')
         .update({ read_by_recipient: true })
         .in('id', messageIds);
+
+      if (markReadError) {
+        console.error('Error marking admin messages as read:', markReadError);
+      } else {
+        console.log(`Successfully marked ${messageIds.length} admin messages as read`);
+      }
     }
 
     // Sort messages by creation time
-    const sortedMessages = publicMessages.sort((a, b) => 
+    const sortedMessages = publicMessages.sort((a, b) =>
       new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     );
 
@@ -97,7 +108,7 @@ export async function POST(
 ) {
   try {
     const { id: conversationId } = await params;
-    
+
     // Get user session
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
@@ -188,7 +199,7 @@ export async function POST(
     // Send email notification to admin
     try {
       const { sendEmail } = await import("@/lib/services/email-service");
-      
+
       await sendEmail({
         to: 'admin@info.pricetracker.se', // Replace with actual admin email
         subject: `Support Reply: ${conversation.subject}`,
