@@ -121,7 +121,7 @@ export default function RunScraperPage() {
       if (err instanceof Error && err.name === 'AbortError') {
         setError(
           "Connection timed out when starting the scraper. This is often due to the worker not being ready yet. " +
-          "Try again in a few seconds. If the problem persists, check that the Python worker is running properly."
+          "Try again in a few seconds. If the problem persists, check that the worker is running properly."
         );
       } else if (err instanceof Error && err.message.includes('Network error')) {
         // Handle the common "Network error" case
@@ -132,13 +132,13 @@ export default function RunScraperPage() {
       } else if (err instanceof Error && err.message.includes('Worker did not pick up the job')) {
         // Handle the case where the worker didn't pick up the job
         setError(
-          "The Python worker did not pick up the job. This could be because the worker is not running " +
-          "or is busy with other tasks. Please check that the Python worker is running and try again."
+          "The worker did not pick up the job. This could be because the worker is not running " +
+          "or is busy with other tasks. Please check that the worker is running and try again."
         );
-      } else if (err instanceof Error && err.message.includes('Waiting for Python worker')) {
+      } else if (err instanceof Error && err.message.includes('Waiting for worker')) {
         // Handle the case where we're waiting for the worker to pick up the job
         setError(
-          "Waiting for the Python worker to pick up the job. The worker may be busy or starting up. " +
+          "Waiting for the worker to pick up the job. The worker may be busy or starting up. " +
           "Please try again in a few moments."
         );
       } else {

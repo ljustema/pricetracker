@@ -237,7 +237,7 @@ export class ScraperExecutionService {
             .from('scraper_runs')
             .update({
               status: 'initializing',
-              error_message: 'Waiting for Python worker to pick up the job. If this persists, check that the worker is running.'
+              error_message: 'Waiting for worker to pick up the job. If this persists, check that the worker is running.'
             })
             .eq('id', actualRunId);
 

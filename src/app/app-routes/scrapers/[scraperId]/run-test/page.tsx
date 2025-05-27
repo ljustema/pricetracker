@@ -156,7 +156,7 @@ export default function RunTestScraperPage() {
               );
 
               setError('The worker did not pick up the job. This could be because the worker is not running or is busy with other tasks. Please check that the appropriate worker is running and try again.');
-            } else if (status.errorMessage && (status.errorMessage.includes('Waiting for Python worker') || status.errorMessage.includes('Waiting for TypeScript worker'))) {
+            } else if (status.errorMessage && (status.errorMessage.includes('Waiting for worker') || status.errorMessage.includes('Waiting for TypeScript worker'))) {
               // Handle the case where we're waiting for the worker to pick up the job
               logClientError(
                 status.errorMessage,
