@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { validateAdminApiAccess } from "@/lib/admin/auth";
 
 // PATCH /api/admin/marketing/contacts/[id] - Update contact status
@@ -24,7 +24,7 @@ export async function PATCH(
       );
     }
 
-    const supabase = createClient();
+    const supabase = createSupabaseAdminClient();
 
     // Update contact status
     const { data, error } = await supabase
@@ -73,7 +73,7 @@ export async function GET(
     const adminUser = await validateAdminApiAccess();
 
     const { id } = params;
-    const supabase = createClient();
+    const supabase = createSupabaseAdminClient();
 
     const { data: contact, error } = await supabase
       .from('marketing_contacts')

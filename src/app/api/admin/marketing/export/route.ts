@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { validateAdminApiAccess } from "@/lib/admin/auth";
 
 // GET /api/admin/marketing/export - Export marketing data as CSV
@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const supabase = createClient();
+    const supabase = createSupabaseAdminClient();
 
     if (type === 'contacts') {
       // Export marketing contacts
