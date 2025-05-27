@@ -6,6 +6,8 @@ import Image from "next/image";
 import { Metadata } from "next";
 import DashboardPreviewWrapper from "../components/marketing/DashboardPreviewWrapper";
 import MobileMenu from "../components/layout/mobile-menu";
+import { ContactForm } from "../components/marketing/ContactForm";
+import { NewsletterSignup } from "../components/marketing/NewsletterSignup";
 
 export const metadata: Metadata = {
   title: "PriceTracker | Monitor Competitor Prices",
@@ -34,6 +36,9 @@ function LandingPageContent() {
             </Link>
             <Link href="/marketing-routes/about" className="text-sm font-semibold leading-6 text-gray-900">
               About
+            </Link>
+            <Link href="/marketing-routes/contact" className="text-sm font-semibold leading-6 text-gray-900">
+              Contact
             </Link>
           </div>
           <div className="hidden lg:flex lg:flex-1 lg:justify-end">
@@ -272,6 +277,27 @@ function LandingPageContent() {
             </div>
           </div>
 
+        {/* Contact and Newsletter section */}
+        <div className="mx-auto mt-32 max-w-7xl px-6 sm:mt-40 lg:px-8">
+          <div className="mx-auto max-w-2xl lg:text-center mb-16">
+            <h2 className="text-base font-semibold leading-7 text-indigo-600">Get in Touch</h2>
+            <p className="mt-2 text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">
+              Ready to start tracking competitor prices?
+            </p>
+            <p className="mt-6 text-lg leading-8 text-gray-600">
+              Contact us to learn more about PriceTracker or subscribe to our newsletter for the latest pricing insights.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+            {/* Contact Form */}
+            <ContactForm />
+
+            {/* Newsletter Signup */}
+            <NewsletterSignup />
+          </div>
+        </div>
+
         {/* CTA section */}
          <div className="mx-auto mt-32 max-w-7xl sm:mt-56">
             <div className="relative isolate overflow-hidden bg-gray-900 px-6 py-24 text-center shadow-2xl sm:rounded-3xl sm:px-16">
@@ -310,6 +336,15 @@ function LandingPageContent() {
 
         {/* Footer */}
          <footer className="mx-auto mt-32 max-w-7xl overflow-hidden px-6 pb-20 sm:mt-40 sm:pb-24 lg:px-8">
+            {/* Newsletter signup in footer */}
+            <div className="mb-16 max-w-md mx-auto">
+              <NewsletterSignup
+                inline={true}
+                showTitle={true}
+                className="text-center"
+              />
+            </div>
+
             <nav className="-mb-6 columns-2 sm:flex sm:justify-center sm:space-x-12" aria-label="Footer">
               <div className="pb-6">
                 <Link href="/marketing-routes/pricing" className="text-sm leading-6 text-gray-600 hover:text-gray-900">

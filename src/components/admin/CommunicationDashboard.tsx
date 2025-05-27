@@ -5,11 +5,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { MessageSquare, Mail, History, Users, Send, Wrench } from "lucide-react";
+import { MessageSquare, Mail, History, Users, Send, Wrench, TrendingUp } from "lucide-react";
 import { EmailComposer } from "./EmailComposer";
 import { CommunicationHistory } from "./CommunicationHistory";
 import { BulkEmailSender } from "./BulkEmailSender";
 import ProfessionalScraperRequests from "./ProfessionalScraperRequests";
+import { MarketingDashboard } from "./MarketingDashboard";
 
 interface AdminUser {
   id: string;
@@ -99,7 +100,7 @@ export function CommunicationDashboard({ adminUser }: CommunicationDashboardProp
         </CardHeader>
         <CardContent>
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-4">
+            <TabsList className="grid w-full grid-cols-5">
               <TabsTrigger value="compose">
                 <Mail className="h-4 w-4 mr-2" />
                 Compose Email
@@ -111,6 +112,10 @@ export function CommunicationDashboard({ adminUser }: CommunicationDashboardProp
               <TabsTrigger value="scrapers">
                 <Wrench className="h-4 w-4 mr-2" />
                 Scraper Requests
+              </TabsTrigger>
+              <TabsTrigger value="marketing">
+                <TrendingUp className="h-4 w-4 mr-2" />
+                Marketing
               </TabsTrigger>
               <TabsTrigger value="history">
                 <History className="h-4 w-4 mr-2" />
@@ -128,6 +133,10 @@ export function CommunicationDashboard({ adminUser }: CommunicationDashboardProp
 
             <TabsContent value="scrapers" className="mt-6">
               <ProfessionalScraperRequests adminUser={adminUser} />
+            </TabsContent>
+
+            <TabsContent value="marketing" className="mt-6">
+              <MarketingDashboard adminUser={adminUser} />
             </TabsContent>
 
             <TabsContent value="history" className="mt-6">

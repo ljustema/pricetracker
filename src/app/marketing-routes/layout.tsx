@@ -32,6 +32,9 @@ export default async function MarketingLayout({
             <Link href="/marketing-routes/about" className="text-sm font-semibold leading-6 text-gray-900">
               About
             </Link>
+            <Link href="/marketing-routes/contact" className="text-sm font-semibold leading-6 text-gray-900">
+              Contact
+            </Link>
           </div>
           <div className="hidden lg:flex lg:flex-1 lg:justify-end">
             {session?.user ? (
