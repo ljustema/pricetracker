@@ -16,32 +16,8 @@ export function useNotifications() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasNotificationPermission, setHasNotificationPermission] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-
-  // Check if user is admin
-  const checkAdminStatus = useCallback(async () => {
-    if (status !== 'authenticated' || !session?.user) {
-      setIsAdmin(false);
-      return;
-    }
-
-    try {
-      // Use a lightweight admin check - just try to access admin auth validation
-      const response = await fetch('/api/admin/auth/check', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-
-      // If the admin auth check responds with 200, user is an admin
-      // If it responds with 403, user is not an admin
-      // Any other error means we should default to non-admin
-      setIsAdmin(response.status === 200);
-    } catch (error) {
-      setIsAdmin(false);
-    }
-  }, [session, status]);
+  // Get admin status directly from session
+  const isAdmin = session?.user?.isAdmin || false;
 
   const checkForNewMessages = useCallback(async () => {
     // Only check if user is authenticated
@@ -162,10 +138,7 @@ export function useNotifications() {
     }
   }, [session, status, unreadCount, isAdmin]);
 
-  // Check admin status when session changes
-  useEffect(() => {
-    checkAdminStatus();
-  }, [checkAdminStatus]);
+  // Admin status is now available directly from session, no need for separate check
 
   useEffect(() => {
     // Only set up polling if user is authenticated

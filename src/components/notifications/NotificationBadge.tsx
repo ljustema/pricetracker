@@ -24,56 +24,20 @@ export function NotificationBadge({
   const { unreadCount, isLoading, requestNotificationPermission, hasNotificationPermission } = useNotifications();
   const router = useRouter();
 
-  // Check if user is admin by trying to access admin API
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [adminCheckComplete, setAdminCheckComplete] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
 
-  // Ensure component is mounted before doing admin check
+  // Ensure component is mounted before rendering
   useEffect(() => {
     setIsMounted(true);
   }, []);
 
-  useEffect(() => {
-    if (!isMounted) return;
-
-    const checkAdminStatus = async () => {
-      // Check if we already have a cached result for this session
-      const cacheKey = `admin_status_${session?.user?.id}`;
-      const cached = sessionStorage.getItem(cacheKey);
-
-      if (cached) {
-        setIsAdmin(cached === 'true');
-        setAdminCheckComplete(true);
-        return;
-      }
-
-      try {
-        const response = await fetch('/api/admin/auth/check');
-        const isAdminUser = response.status === 200;
-        setIsAdmin(isAdminUser);
-
-        // Cache the result for this session
-        sessionStorage.setItem(cacheKey, isAdminUser.toString());
-      } catch {
-        setIsAdmin(false);
-        sessionStorage.setItem(cacheKey, 'false');
-      } finally {
-        setAdminCheckComplete(true);
-      }
-    };
-
-    if (status === 'authenticated' && session?.user) {
-      checkAdminStatus();
-    } else {
-      setAdminCheckComplete(true);
-    }
-  }, [session, status, isMounted]);
-
-  // Don't show anything if user is not authenticated, not mounted, or admin check is not complete
-  if (!isMounted || status !== 'authenticated' || !session?.user || !adminCheckComplete) {
+  // Don't show anything if user is not authenticated or not mounted
+  if (!isMounted || status !== 'authenticated' || !session?.user) {
     return null;
   }
+
+  // Get admin status directly from session
+  const isAdmin = session.user.isAdmin || false;
 
   const handleClick = () => {
     const redirectUrl = isAdmin ? '/app-routes/admin/communication' : '/app-routes/support';
@@ -163,60 +127,24 @@ export function SimpleNotificationBadge({ className = '' }: { className?: string
   const { data: session, status } = useSession();
   const { unreadCount } = useNotifications();
   const router = useRouter();
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [adminCheckComplete, setAdminCheckComplete] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
 
-  // Ensure component is mounted before doing admin check
+  // Ensure component is mounted before rendering
   useEffect(() => {
     setIsMounted(true);
   }, []);
 
-  // Check if user is admin
-  useEffect(() => {
-    if (!isMounted) return;
-
-    const checkAdminStatus = async () => {
-      // Check if we already have a cached result for this session
-      const cacheKey = `admin_status_${session?.user?.id}`;
-      const cached = sessionStorage.getItem(cacheKey);
-
-      if (cached) {
-        setIsAdmin(cached === 'true');
-        setAdminCheckComplete(true);
-        return;
-      }
-
-      try {
-        const response = await fetch('/api/admin/auth/check');
-        const isAdminUser = response.status === 200;
-        setIsAdmin(isAdminUser);
-
-        // Cache the result for this session
-        sessionStorage.setItem(cacheKey, isAdminUser.toString());
-      } catch {
-        setIsAdmin(false);
-        sessionStorage.setItem(cacheKey, 'false');
-      } finally {
-        setAdminCheckComplete(true);
-      }
-    };
-
-    if (status === 'authenticated' && session?.user) {
-      checkAdminStatus();
-    } else {
-      setAdminCheckComplete(true);
-    }
-  }, [session, status, isMounted]);
-
-  // Don't show anything if user is not authenticated, not mounted, or admin check is not complete
-  if (!isMounted || status !== 'authenticated' || !session?.user || !adminCheckComplete) {
+  // Don't show anything if user is not authenticated or not mounted
+  if (!isMounted || status !== 'authenticated' || !session?.user) {
     return null;
   }
 
   if (unreadCount === 0) {
     return null;
   }
+
+  // Get admin status directly from session
+  const isAdmin = session.user.isAdmin || false;
 
   const handleClick = () => {
     const redirectUrl = isAdmin ? '/app-routes/admin/communication' : '/app-routes/support';

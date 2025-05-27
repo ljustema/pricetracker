@@ -1,25 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { validateAdminApiAccess } from '@/lib/admin/auth';
+import { checkAdminAccess } from '@/lib/admin/auth';
 
-// GET /api/admin/auth/check - Lightweight admin access check
+// GET /api/admin/auth/check - Check admin status without throwing errors for non-admins
+// This endpoint is now primarily for server-side validation and debugging
 export async function GET(request: NextRequest) {
   try {
-    // Validate admin access
-    await validateAdminApiAccess();
+    // Check admin access without throwing errors
+    const adminUser = await checkAdminAccess();
 
-    return NextResponse.json({
-      isAdmin: true,
-      message: 'Admin access confirmed'
-    });
-
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('Unauthorized')) {
-      return NextResponse.json(
-        { isAdmin: false, error: error.message },
-        { status: 403 }
-      );
+    if (adminUser) {
+      return NextResponse.json({
+        isAdmin: true,
+        adminRole: adminUser.adminRole,
+        message: 'Admin access confirmed'
+      });
+    } else {
+      // Return 200 with isAdmin: false instead of 403 for non-admins
+      return NextResponse.json({
+        isAdmin: false,
+        message: 'User is not an admin'
+      });
     }
 
+  } catch (error) {
+    console.error('Error in admin auth check:', error);
     return NextResponse.json(
       { isAdmin: false, error: 'Internal server error' },
       { status: 500 }

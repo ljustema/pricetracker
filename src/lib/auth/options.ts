@@ -152,26 +152,52 @@ export const authOptions: NextAuthOptions = {
       return !!profile?.email;
     },
 
-    // Include user.id on session
+    // Include user.id and admin role on session
     async session({ session, token }) {
       if (token?.sub && session.user) {
         session.user.id = token.sub;
+
+        // Add admin role information from token
+        if (token.adminRole !== undefined) {
+          session.user.adminRole = token.adminRole as string | null;
+          session.user.isAdmin = !!token.adminRole;
+          session.user.isSuspended = token.isSuspended as boolean;
+        }
       }
       return session;
     },
 
-    // Include user.id on token
+    // Include user.id and admin role on token
     async jwt({ token, user, account, profile: _profile }) {
       // Initial sign in
       if (account && _profile) {
         token.provider = account.provider;
-        // You can add additional profile info to the token if needed
-        // e.g., token.picture = profile.picture;
       }
 
       // On subsequent calls, user is undefined
       if (user?.id) {
         token.sub = user.id;
+      }
+
+      // Fetch admin role information if we have a user ID and don't already have it
+      if (token.sub && token.adminRole === undefined) {
+        try {
+          const supabase = createClient(supabaseUrl!, supabaseServiceRoleKey!);
+          const { data: userProfile } = await supabase
+            .from('user_profiles')
+            .select('admin_role, is_suspended')
+            .eq('id', token.sub)
+            .single();
+
+          // Store admin role info in token
+          token.adminRole = userProfile?.admin_role || null;
+          token.isSuspended = userProfile?.is_suspended || false;
+        } catch (error) {
+          console.error('Error fetching admin role for JWT:', error);
+          // Set defaults if query fails
+          token.adminRole = null;
+          token.isSuspended = false;
+        }
       }
 
       return token;
