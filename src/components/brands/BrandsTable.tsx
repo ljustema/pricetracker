@@ -7,6 +7,7 @@ import { Database } from '@/lib/supabase/database.types';
 
 type Brand = Database['public']['Tables']['brands']['Row'] & {
   product_count?: number;
+  our_products_count?: number;
   competitor_count?: number;
   aliases?: string[];
   competitor_names?: string[];

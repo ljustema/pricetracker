@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
 
     // Get user workload distribution
     const { data: userWorkload, error: workloadError } = await supabase
-      .rpc('get_user_workload');
+      .rpc('get_user_workload_stats');
 
     if (workloadError) {
       console.error('Error fetching user workload:', workloadError);
@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get recent job execution history
-    const { data: recentJobs, error: jobsError } = await supabase
+    const { data: recentJobsRaw, error: jobsError } = await supabase
       .from('scraper_runs')
       .select(`
         id,
@@ -72,8 +72,32 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Get user profiles for recent jobs
+    const recentJobUserIds = recentJobsRaw?.map(job => job.scrapers.user_id) || [];
+    const { data: recentJobUserProfiles, error: recentJobUsersError } = await supabase
+      .from('user_profiles')
+      .select('id, name, email')
+      .in('id', recentJobUserIds);
+
+    if (recentJobUsersError) {
+      console.error('Error fetching recent job user profiles:', recentJobUsersError);
+      return NextResponse.json(
+        { error: 'Failed to fetch recent job user profiles' },
+        { status: 500 }
+      );
+    }
+
+    // Combine recent jobs with user profiles
+    const recentJobs = recentJobsRaw?.map(job => ({
+      ...job,
+      scrapers: {
+        ...job.scrapers,
+        user_profiles: recentJobUserProfiles?.find(u => u.id === job.scrapers.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
+      }
+    }));
+
     // Get recent integration runs
-    const { data: recentIntegrations, error: integrationsError } = await supabase
+    const { data: recentIntegrationsRaw, error: integrationsError } = await supabase
       .from('integration_runs')
       .select(`
         id,
@@ -94,6 +118,30 @@ export async function GET(request: NextRequest) {
         { status: 500 }
       );
     }
+
+    // Get user profiles for recent integration runs
+    const integrationRunUserIds = recentIntegrationsRaw?.map(run => run.integrations.user_id) || [];
+    const { data: integrationRunUserProfiles, error: integrationRunUsersError } = await supabase
+      .from('user_profiles')
+      .select('id, name, email')
+      .in('id', integrationRunUserIds);
+
+    if (integrationRunUsersError) {
+      console.error('Error fetching integration run user profiles:', integrationRunUsersError);
+      return NextResponse.json(
+        { error: 'Failed to fetch integration run user profiles' },
+        { status: 500 }
+      );
+    }
+
+    // Combine recent integration runs with user profiles
+    const recentIntegrations = recentIntegrationsRaw?.map(run => ({
+      ...run,
+      integrations: {
+        ...run.integrations,
+        user_profiles: integrationRunUserProfiles?.find(u => u.id === run.integrations.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
+      }
+    }));
 
     // Get scheduled scrapers with their next run times and user information
     const { data: scheduledScrapersRaw, error: scheduledError } = await supabase

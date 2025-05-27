@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-05-25 12:05:14
+-- Generated: 2025-05-27 10:02:57
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -322,7 +322,7 @@ DECLARE
 -- Name: FUNCTION claim_next_scraper_job(worker_type_filter text); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.claim_next_scraper_job(worker_type_filter text) IS 'Atomically claims the next pending scraper job for a given worker type. It selects, locks, updates the job status, and then returns the claimed job''s details including the competitor_id from the associated scraper. Uses FOR UPDATE SKIP LOCKED for improved concurrency.';
+COMMENT ON FUNCTION public.claim_next_scraper_job(worker_type_filter text) IS 'Atomically claims the next pending or initializing scraper job for a given worker type. It selects, locks, updates the job status, and then returns the claimed job''s details including the competitor_id from the associated scraper. Uses FOR UPDATE SKIP LOCKED for improved concurrency.';
 
 --
 -- Name: cleanup_old_debug_logs(); Type: FUNCTION; Schema: public; Owner: -
@@ -340,9 +340,18 @@ DECLARE
 
 CREATE FUNCTION public.cleanup_old_scraper_runs() RETURNS integer
     LANGUAGE plpgsql
+    AS $$ DECLARE deleted_count integer; BEGIN DELETE FROM public.scraper_runs WHERE created_at < now() - interval '30 days' AND status IN ('completed', 'failed'); GET DIAGNOSTICS deleted_count = ROW_COUNT; INSERT INTO public.debug_logs (message, created_at) VALUES ('Cleaned up ' || deleted_count || ' old scraper runs', now()); RETURN deleted_count; END; $$;
+
+--
+-- Name: cleanup_rate_limit_logs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_rate_limit_logs() RETURNS void
+    LANGUAGE plpgsql
     AS $$
-DECLARE
-    deleted_count integer;
+BEGIN
+  DELETE FROM rate_limit_log 
+  WHERE created_at < NOW() - INTERVAL '24 hours';
 
 --
 -- Name: cleanup_scraped_products(); Type: FUNCTION; Schema: public; Owner: -
@@ -404,9 +413,7 @@ DECLARE
 
 CREATE FUNCTION public.create_scheduled_scraper_jobs() RETURNS TABLE(jobs_created integer, message text)
     LANGUAGE plpgsql
-    AS $$
-DECLARE
-    scraper_record record;
+    AS $$ DECLARE scraper_record record; job_count integer := 0; new_job_id uuid; current_timestamp timestamp with time zone := now(); max_python_jobs integer := 1; max_typescript_jobs integer := 1; current_python_jobs integer; current_typescript_jobs integer; max_jobs_per_run integer := 2; BEGIN SELECT COUNT(*) INTO current_python_jobs FROM public.scraper_runs sr WHERE sr.status IN ('pending', 'initializing', 'running') AND sr.scraper_type = 'python'; SELECT COUNT(*) INTO current_typescript_jobs FROM public.scraper_runs sr WHERE sr.status IN ('pending', 'initializing', 'running') AND sr.scraper_type = 'typescript'; RAISE NOTICE 'Current jobs - Python: %/%, TypeScript: %/%, Max per run: %', current_python_jobs, max_python_jobs, current_typescript_jobs, max_typescript_jobs, max_jobs_per_run; IF current_python_jobs >= max_python_jobs AND current_typescript_jobs >= max_typescript_jobs THEN RETURN QUERY SELECT 0, 'All workers busy - Python: ' || current_python_jobs || '/' || max_python_jobs || ', TypeScript: ' || current_typescript_jobs || '/' || max_typescript_jobs; RETURN; END IF; FOR scraper_record IN SELECT s.id, s.user_id, s.name, s.scraper_type, s.schedule, s.last_run, s.competitor_id FROM public.scrapers s WHERE s.is_active = true AND s.schedule IS NOT NULL AND (s.last_run IS NULL OR s.last_run < current_timestamp - interval '23 hours') ORDER BY COALESCE(s.last_run, '1970-01-01'::timestamp with time zone) ASC LIMIT 20 LOOP IF job_count >= max_jobs_per_run THEN RAISE NOTICE 'Reached max jobs per run limit (%)', max_jobs_per_run; EXIT; END IF; IF scraper_record.scraper_type = 'python' AND current_python_jobs >= max_python_jobs THEN CONTINUE; END IF; IF scraper_record.scraper_type = 'typescript' AND current_typescript_jobs >= max_typescript_jobs THEN CONTINUE; END IF; IF NOT EXISTS ( SELECT 1 FROM public.scraper_runs sr WHERE sr.scraper_id = scraper_record.id AND sr.status IN ('pending', 'initializing', 'running') ) THEN INSERT INTO public.scraper_runs ( id, scraper_id, user_id, status, started_at, is_test_run, scraper_type, created_at ) VALUES ( gen_random_uuid(), scraper_record.id, scraper_record.user_id, 'pending', current_timestamp, false, scraper_record.scraper_type, current_timestamp ) RETURNING id INTO new_job_id; job_count := job_count + 1; IF scraper_record.scraper_type = 'python' THEN current_python_jobs := current_python_jobs + 1; ELSIF scraper_record.scraper_type = 'typescript' THEN current_typescript_jobs := current_typescript_jobs + 1; END IF; RAISE NOTICE 'Created scheduled job % for scraper % (%) - Priority: %', new_job_id, scraper_record.name, scraper_record.scraper_type, CASE WHEN scraper_record.last_run IS NULL THEN 'Never run' ELSE extract(epoch from (current_timestamp - scraper_record.last_run))/3600 || ' hours ago' END; END IF; END LOOP; RETURN QUERY SELECT job_count, 'Created ' || job_count || ' scheduled scraper jobs (Python: ' || current_python_jobs || '/' || max_python_jobs || ', TypeScript: ' || current_typescript_jobs || '/' || max_typescript_jobs || ')'; END; $$;
 
 --
 -- Name: FUNCTION create_user_for_nextauth(); Type: COMMENT; Schema: public; Owner: -
@@ -445,9 +452,7 @@ BEGIN
 
 CREATE FUNCTION public.create_utility_jobs() RETURNS TABLE(jobs_created integer, message text)
     LANGUAGE plpgsql
-    AS $$
-DECLARE
-    job_count integer := 0;
+    AS $$ DECLARE job_count integer := 0; last_cleanup_check timestamp with time zone; BEGIN SELECT COALESCE(MAX(dl.created_at), '1970-01-01'::timestamp with time zone) INTO last_cleanup_check FROM public.debug_logs dl WHERE dl.message LIKE '%cleanup_utility_job%' AND dl.created_at > now() - interval '1 day'; IF last_cleanup_check < now() - interval '23 hours' THEN INSERT INTO public.debug_logs (message, created_at) VALUES ('cleanup_utility_job - daily_cleanup at ' || now(), now()); job_count := job_count + 1; PERFORM cleanup_old_scraper_runs(); PERFORM cleanup_old_debug_logs(); PERFORM process_scraper_timeouts(); RAISE NOTICE 'Created utility cleanup job at %', now(); END IF; RETURN QUERY SELECT job_count, 'Created ' || job_count || ' utility jobs'; END; $$;
 
 --
 -- Name: debug_create_scheduled_scraper_jobs(); Type: FUNCTION; Schema: public; Owner: -
@@ -618,7 +623,7 @@ BEGIN
 -- Name: get_brand_analytics(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.get_brand_analytics(p_user_id uuid, p_brand_id uuid DEFAULT NULL::uuid) RETURNS TABLE(id uuid, name text, is_active boolean, needs_review boolean, created_at timestamp with time zone, updated_at timestamp with time zone, product_count bigint, competitor_count bigint)
+CREATE FUNCTION public.get_brand_analytics(p_user_id uuid, p_brand_id uuid DEFAULT NULL::uuid) RETURNS TABLE(id uuid, name text, is_active boolean, needs_review boolean, created_at timestamp with time zone, updated_at timestamp with time zone, product_count bigint, our_products_count bigint, competitor_count bigint)
     LANGUAGE plpgsql
     AS $$
 BEGIN
@@ -626,7 +631,8 @@ BEGIN
   WITH product_counts AS (
     SELECT
       b.id AS brand_id,
-      COUNT(p.id) AS product_count
+      COUNT(p.id) AS product_count,
+      COUNT(CASE WHEN p.our_price IS NOT NULL THEN 1 END) AS our_products_count
     FROM
       brands b
     LEFT JOIN
@@ -661,6 +667,7 @@ BEGIN
     b.created_at,
     b.updated_at,
     COALESCE(pc.product_count, 0) AS product_count,
+    COALESCE(pc.our_products_count, 0) AS our_products_count,
     COALESCE(cc.competitor_count, 0) AS competitor_count
   FROM
     brands b
@@ -673,6 +680,12 @@ BEGIN
     AND (p_brand_id IS NULL OR b.id = p_brand_id)
   ORDER BY
     b.name ASC;
+
+--
+-- Name: FUNCTION get_brand_analytics(p_user_id uuid, p_brand_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brand_analytics(p_user_id uuid, p_brand_id uuid) IS 'Enhanced brand analytics function that includes our_products_count (products with our_price IS NOT NULL)';
 
 --
 -- Name: get_brands_for_competitor(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -772,6 +785,52 @@ BEGIN
     brand_counts bc ON c.id = bc.competitor_id
   WHERE
     c.user_id = p_user_id;
+
+--
+-- Name: get_conversation_summary(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_conversation_summary(user_uuid uuid) RETURNS TABLE(conversation_id uuid, subject text, status text, category text, priority text, created_at timestamp with time zone, updated_at timestamp with time zone, total_messages bigint, unread_messages bigint, last_message_content text, last_message_sender text, last_message_time timestamp with time zone)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  RETURN QUERY
+  SELECT 
+    sc.id as conversation_id,
+    sc.subject,
+    sc.status,
+    sc.category,
+    sc.priority,
+    sc.created_at,
+    sc.updated_at,
+    COUNT(sm.id) as total_messages,
+    COUNT(CASE WHEN sm.sender_type = 'admin' AND sm.read_by_recipient = FALSE THEN 1 END) as unread_messages,
+    (
+      SELECT sm2.message_content 
+      FROM support_messages sm2 
+      WHERE sm2.conversation_id = sc.id 
+      ORDER BY sm2.created_at DESC 
+      LIMIT 1
+    ) as last_message_content,
+    (
+      SELECT sm2.sender_type 
+      FROM support_messages sm2 
+      WHERE sm2.conversation_id = sc.id 
+      ORDER BY sm2.created_at DESC 
+      LIMIT 1
+    ) as last_message_sender,
+    (
+      SELECT sm2.created_at 
+      FROM support_messages sm2 
+      WHERE sm2.conversation_id = sc.id 
+      ORDER BY sm2.created_at DESC 
+      LIMIT 1
+    ) as last_message_time
+  FROM support_conversations sc
+  LEFT JOIN support_messages sm ON sc.id = sm.conversation_id
+  WHERE sc.user_id = user_uuid
+  GROUP BY sc.id, sc.subject, sc.status, sc.category, sc.priority, sc.created_at, sc.updated_at
+  ORDER BY sc.updated_at DESC;
 
 --
 -- Name: get_cron_jobs(); Type: FUNCTION; Schema: public; Owner: -
@@ -1168,6 +1227,23 @@ CREATE FUNCTION public.get_unique_integration_products(p_user_id uuid, p_integra
     );
 
 --
+-- Name: get_unread_message_count(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_unread_message_count(user_uuid uuid) RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  RETURN (
+    SELECT COUNT(*)
+    FROM support_messages sm
+    JOIN support_conversations sc ON sm.conversation_id = sc.id
+    WHERE sc.user_id = user_uuid
+    AND sm.sender_type = 'admin'
+    AND sm.read_by_recipient = FALSE
+  );
+
+--
 -- Name: get_user_growth_stats(integer); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1250,7 +1326,7 @@ BEGIN
 -- Name: get_user_workload_stats(); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.get_user_workload_stats() RETURNS TABLE(user_id uuid, user_name text, user_email text, active_scrapers bigint, active_integrations bigint, jobs_today bigint, avg_execution_time_ms numeric)
+CREATE FUNCTION public.get_user_workload_stats() RETURNS TABLE(user_id uuid, user_name text, user_email text, active_scrapers bigint, active_integrations bigint, jobs_today bigint, jobs_this_week bigint, jobs_this_month bigint, avg_execution_time_ms numeric)
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
 BEGIN
@@ -1262,12 +1338,14 @@ BEGIN
         COALESCE(s.scraper_count, 0) as active_scrapers,
         COALESCE(i.integration_count, 0) as active_integrations,
         COALESCE(j.jobs_today, 0) as jobs_today,
+        COALESCE(j.jobs_this_week, 0) as jobs_this_week,
+        COALESCE(j.jobs_this_month, 0) as jobs_this_month,
         COALESCE(j.avg_execution_time, 0) as avg_execution_time_ms
     FROM public.user_profiles u
     LEFT JOIN (
         SELECT scrapers.user_id, COUNT(*) as scraper_count
         FROM public.scrapers
-        WHERE is_active = true AND is_approved = true
+        WHERE is_active = true
         GROUP BY scrapers.user_id
     ) s ON u.id = s.user_id
     LEFT JOIN (
@@ -1279,10 +1357,12 @@ BEGIN
     LEFT JOIN (
         SELECT
             scraper_runs.user_id,
-            COUNT(*) as jobs_today,
+            COUNT(*) FILTER (WHERE created_at >= date_trunc('day', now())) as jobs_today,
+            COUNT(*) FILTER (WHERE created_at >= date_trunc('week', now())) as jobs_this_week,
+            COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now())) as jobs_this_month,
             AVG(execution_time_ms) as avg_execution_time
         FROM public.scraper_runs
-        WHERE created_at >= date_trunc('day', now())
+        WHERE created_at >= date_trunc('month', now())
         GROUP BY scraper_runs.user_id
     ) j ON u.id = j.user_id
     ORDER BY u.id;
@@ -1291,7 +1371,7 @@ BEGIN
 -- Name: FUNCTION get_user_workload_stats(); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.get_user_workload_stats() IS 'Returns user workload distribution with active scrapers, integrations, and job statistics. Fixed ambiguous column references.';
+COMMENT ON FUNCTION public.get_user_workload_stats() IS 'Returns user workload distribution with active scrapers, integrations, and job statistics including daily, weekly, and monthly counts. Removed is_approved column reference.';
 
 --
 -- Name: get_worker_capacity_config(); Type: FUNCTION; Schema: public; Owner: -
@@ -1349,6 +1429,16 @@ BEGIN
 COMMENT ON FUNCTION public.handle_worker_error() IS 'Handles worker timeouts by marking pending jobs as failed if they have been pending for too long and have not been claimed by a worker.';
 
 --
+-- Name: mark_conversation_messages_read(uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.mark_conversation_messages_read(conversation_uuid uuid, reader_type text) RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  updated_count INTEGER;
+
+--
 -- Name: merge_products_api(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1370,9 +1460,7 @@ COMMENT ON FUNCTION public.merge_products_api(primary_id uuid, duplicate_id uuid
 
 CREATE FUNCTION public.optimize_scraper_schedules() RETURNS integer
     LANGUAGE plpgsql
-    AS $$
-DECLARE
-    scraper_record record;
+    AS $$ DECLARE scraper_record record; update_count integer := 0; time_slot integer := 0; total_scrapers integer; minutes_per_slot integer; new_hour integer; new_minute integer; new_time text; updated_schedule jsonb; BEGIN SELECT COUNT(*) INTO total_scrapers FROM public.scrapers WHERE is_active = true; minutes_per_slot := GREATEST(5, (24 * 60) / GREATEST(total_scrapers, 1)); FOR scraper_record IN SELECT id, schedule, user_id FROM public.scrapers WHERE is_active = true ORDER BY user_id, id LOOP new_hour := (time_slot * minutes_per_slot) / 60; new_minute := (time_slot * minutes_per_slot) % 60; new_time := LPAD((new_hour % 24)::text, 2, '0') || ':' || LPAD(new_minute::text, 2, '0'); updated_schedule := jsonb_set( scraper_record.schedule, '{time}', to_jsonb(new_time) ); UPDATE public.scrapers SET schedule = updated_schedule, updated_at = now() WHERE id = scraper_record.id; update_count := update_count + 1; time_slot := time_slot + 1; END LOOP; INSERT INTO public.debug_logs (message, created_at) VALUES ('Optimized scraper schedules - updated_scrapers: ' || update_count || ', total_scrapers: ' || total_scrapers || ', minutes_per_slot: ' || minutes_per_slot, now()); RETURN update_count; END; $$;
 
 --
 -- Name: process_pending_integration_products(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -1390,9 +1478,7 @@ DECLARE
 
 CREATE FUNCTION public.process_scraper_timeouts() RETURNS integer
     LANGUAGE plpgsql
-    AS $$
-DECLARE
-    timeout_count integer := 0;
+    AS $$ DECLARE timeout_count integer := 0; timeout_record record; BEGIN FOR timeout_record IN SELECT sr.id, sr.scraper_id, sr.started_at FROM public.scraper_runs sr WHERE sr.status = 'running' AND sr.started_at < now() - interval '2 hours' LOOP UPDATE public.scraper_runs SET status = 'failed', completed_at = now(), error_message = 'Job timed out after 2 hours' WHERE id = timeout_record.id; timeout_count := timeout_count + 1; INSERT INTO public.debug_logs (message, created_at) VALUES ('Scraper run timed out - run_id: ' || timeout_record.id || ', scraper_id: ' || timeout_record.scraper_id || ', started_at: ' || timeout_record.started_at, now()); END LOOP; RETURN timeout_count; END; $$;
 
 --
 -- Name: process_staged_integration_product(); Type: FUNCTION; Schema: public; Owner: -
@@ -1505,6 +1591,18 @@ DECLARE
 COMMENT ON FUNCTION public.trim_progress_messages(p_run_id uuid, p_max_messages integer) IS 'Trims the progress_messages array to prevent database bloat';
 
 --
+-- Name: update_conversation_timestamp(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_conversation_timestamp() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  UPDATE support_conversations 
+  SET updated_at = NOW() 
+  WHERE id = NEW.conversation_id;
+
+--
 -- Name: update_integration_run_status(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1568,6 +1666,16 @@ BEGIN
 --
 
 COMMENT ON FUNCTION public.update_scraper_status_from_run() IS 'Modified to remove debug logging to debug_logs table';
+
+--
+-- Name: update_updated_at_column(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_updated_at_column() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    NEW.updated_at = NOW();
 
 --
 -- Name: apply_rls(jsonb, integer); Type: FUNCTION; Schema: realtime; Owner: -
@@ -2082,6 +2190,30 @@ CREATE TRIGGER sync_brand_id_trigger BEFORE INSERT OR UPDATE OF brand ON public.
 --
 
 CREATE TRIGGER sync_brand_name_trigger BEFORE INSERT OR UPDATE OF brand_id ON public.products FOR EACH ROW EXECUTE FUNCTION public.sync_brand_name();
+
+--
+-- Name: support_messages trigger_update_conversation_timestamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trigger_update_conversation_timestamp AFTER INSERT ON public.support_messages FOR EACH ROW EXECUTE FUNCTION public.update_conversation_timestamp();
+
+--
+-- Name: professional_scraper_requests update_professional_scraper_requests_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER update_professional_scraper_requests_updated_at BEFORE UPDATE ON public.professional_scraper_requests FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+--
+-- Name: scraper_runs update_scraper_status_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER update_scraper_status_trigger AFTER UPDATE ON public.scraper_runs FOR EACH ROW EXECUTE FUNCTION public.update_scraper_status_from_run();
+
+--
+-- Name: support_conversations update_support_conversations_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER update_support_conversations_updated_at BEFORE UPDATE ON public.support_conversations FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 --
 -- Name: subscription tr_check_filters; Type: TRIGGER; Schema: realtime; Owner: -

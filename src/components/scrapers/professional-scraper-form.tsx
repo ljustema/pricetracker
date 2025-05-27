@@ -19,6 +19,7 @@ export default function ProfessionalScraperForm({
     website: "",
     requirements: "",
     additionalInfo: "",
+    honeypot: "", // Spam protection honeypot field
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
@@ -71,11 +72,7 @@ export default function ProfessionalScraperForm({
     setError(null);
 
     try {
-      // In a real implementation, you would send this data to your backend
-      // For now, we'll simulate a successful submission
-      
-      // Example API call (commented out)
-      /*
+      // Call the real API
       const response = await fetch('/api/professional-scraper-request', {
         method: 'POST',
         headers: {
@@ -88,15 +85,12 @@ export default function ProfessionalScraperForm({
         }),
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        const data = await response.json();
         throw new Error(data.error || 'Failed to submit request');
       }
-      */
 
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
       // Set submitted state to show success message
       setIsSubmitted(true);
     } catch (err) {
@@ -146,7 +140,7 @@ export default function ProfessionalScraperForm({
           Let our expert team build a custom scraper for your specific needs
         </p>
       </div>
-      
+
       <div className="px-6 py-4">
         <div className="mb-6 rounded-lg bg-blue-50 p-4 text-blue-800">
           <div className="flex">
@@ -174,6 +168,17 @@ export default function ProfessionalScraperForm({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Honeypot field for spam protection - hidden from users */}
+          <input
+            type="text"
+            name="honeypot"
+            value={formData.honeypot}
+            onChange={handleChange}
+            style={{ display: 'none' }}
+            tabIndex={-1}
+            autoComplete="off"
+          />
+
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <div>
               <label htmlFor="name" className="block text-sm font-medium text-gray-700">

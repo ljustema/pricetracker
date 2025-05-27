@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils';
 
 type Brand = Database['public']['Tables']['brands']['Row'] & {
   product_count?: number;
+  our_products_count?: number;
   competitor_count?: number;
 };
 type BrandInsert = Database['public']['Tables']['brands']['Insert'];
@@ -34,6 +35,8 @@ export default function BrandsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const competitorId = searchParams.get('competitor');
+  const ourProductsFilter = searchParams.get('our_products') === 'true';
+  const notOurProductsFilter = searchParams.get('our_products') === 'false';
 
   const [brands, setBrands] = useState<Brand[]>([]);
   const [duplicates, setDuplicates] = useState<Brand[]>([]);
@@ -44,14 +47,19 @@ export default function BrandsPage() {
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [competitorDropdownOpen, setCompetitorDropdownOpen] = useState(false);
   const [competitorSearch, setCompetitorSearch] = useState('');
-  const dropdownRef = React.useRef<HTMLDivElement>(null);
+  const [productTypeDropdownOpen, setProductTypeDropdownOpen] = useState(false);
+  const competitorDropdownRef = React.useRef<HTMLDivElement>(null);
+  const productTypeDropdownRef = React.useRef<HTMLDivElement>(null);
 
-  // Handle click outside to close dropdown
+  // Handle click outside to close dropdowns
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      if (competitorDropdownRef.current && !competitorDropdownRef.current.contains(event.target as Node)) {
         setCompetitorDropdownOpen(false);
         setCompetitorSearch(''); // Clear search when closing dropdown
+      }
+      if (productTypeDropdownRef.current && !productTypeDropdownRef.current.contains(event.target as Node)) {
+        setProductTypeDropdownOpen(false);
       }
     }
 
@@ -85,7 +93,7 @@ export default function BrandsPage() {
       // Add cache-busting timestamp to ensure fresh data after operations
       const cacheBuster = `_t=${Date.now()}`;
 
-      // Fetch all brands with analytics, duplicates, and those needing review in parallel
+      // Always fetch all brands with analytics, duplicates, and those needing review
       const [analyticsRes, duplicatesRes, reviewRes] = await Promise.all([
         fetch(`/api/brands/analytics?${cacheBuster}`),
         fetch(`/api/brands/duplicates?${cacheBuster}`),
@@ -96,39 +104,12 @@ export default function BrandsPage() {
       if (!duplicatesRes.ok) throw new Error(`Failed to fetch duplicates: ${duplicatesRes.statusText}`);
       if (!reviewRes.ok) throw new Error(`Failed to fetch brands needing review: ${reviewRes.statusText}`);
 
-
       const brandsWithAnalytics: Brand[] = await analyticsRes.json();
       const duplicatesData: Brand[] = await duplicatesRes.json();
       const reviewData: Brand[] = await reviewRes.json();
 
-      // If competitorId is provided, fetch brands for that competitor
-      if (competitorId) {
-        // Use the new API endpoint to get brands for this competitor
-        const brandsForCompetitorRes = await fetch(`/api/brands/by-competitor?competitorId=${competitorId}`);
-
-        if (brandsForCompetitorRes.ok) {
-          const brandsForCompetitor = await brandsForCompetitorRes.json();
-
-          // Merge the analytics data with the competitor-specific brands
-          const brandsWithStats = brandsForCompetitor.map((brand: Brand) => {
-            // Find the matching brand in brandsWithAnalytics to get the stats
-            const brandWithAnalytics = brandsWithAnalytics.find(b => b.id === brand.id);
-            return {
-              ...brand,
-              product_count: brandWithAnalytics?.product_count || 0,
-              competitor_count: brandWithAnalytics?.competitor_count || 0
-            };
-          });
-
-          setBrands(brandsWithStats);
-        } else {
-          console.error('Error fetching brands for competitor:', await brandsForCompetitorRes.text());
-          setBrands(brandsWithAnalytics); // Fallback to all brands
-        }
-      } else {
-        setBrands(brandsWithAnalytics);
-      }
-
+      // Always set all brands - filtering will be handled in the useEffect
+      setBrands(brandsWithAnalytics);
       setDuplicates(duplicatesData);
       setNeedsReview(reviewData);
 
@@ -159,19 +140,67 @@ export default function BrandsPage() {
     fetchCompetitors();
   }, [fetchBrandData, fetchCompetitors]); // Fetch data on initial component mount
 
-  // Update filtered brands when brands or active filter changes
+  // State to store competitor brand IDs
+  const [competitorBrandIds, setCompetitorBrandIds] = useState<string[]>([]);
+
+  // Fetch competitor brand IDs when competitorId changes
   useEffect(() => {
+    const fetchCompetitorBrands = async () => {
+      if (competitorId) {
+        try {
+          const response = await fetch(`/api/brands/by-competitor?competitorId=${competitorId}`);
+          if (response.ok) {
+            const competitorBrands = await response.json();
+            setCompetitorBrandIds(competitorBrands.map((brand: Brand) => brand.id));
+          } else {
+            console.error('Error fetching competitor brands');
+            setCompetitorBrandIds([]);
+          }
+        } catch (error) {
+          console.error('Error fetching competitor brands:', error);
+          setCompetitorBrandIds([]);
+        }
+      } else {
+        setCompetitorBrandIds([]);
+      }
+    };
+
+    fetchCompetitorBrands();
+  }, [competitorId]);
+
+  // Update filtered brands when brands, active filter, or our products filter changes
+  useEffect(() => {
+    let filtered = brands;
+
+    // Apply competitor filter first
+    if (competitorId && competitorBrandIds.length > 0) {
+      filtered = filtered.filter(brand => competitorBrandIds.includes(brand.id));
+    }
+
+    // Apply our products filter
+    if (ourProductsFilter) {
+      // Filter brands that have products with our_price (our products)
+      filtered = filtered.filter(brand => {
+        return (brand.our_products_count || 0) > 0;
+      });
+    } else if (notOurProductsFilter) {
+      // Filter brands that don't have products with our_price (not our products)
+      filtered = filtered.filter(brand => {
+        return (brand.our_products_count || 0) === 0;
+      });
+    }
+
+    // Apply product count filter
     if (activeFilter) {
       const { min, max } = activeFilter;
-      const filtered = brands.filter(brand => {
+      filtered = filtered.filter(brand => {
         const productCount = brand.product_count || 0;
         return productCount >= min && (max === null || productCount <= max);
       });
-      setFilteredBrands(filtered);
-    } else {
-      setFilteredBrands(brands);
     }
-  }, [brands, activeFilter]);
+
+    setFilteredBrands(filtered);
+  }, [brands, activeFilter, ourProductsFilter, notOurProductsFilter, competitorId, competitorBrandIds]);
 
   // Handle filtering by product count
   const handleFilterByProductCount = (min: number, max: number | null) => {
@@ -462,86 +491,7 @@ export default function BrandsPage() {
   return (
     <div className="container mx-auto p-4 space-y-8">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">
-          {competitorId && competitorName ? `Brands for ${competitorName}` : 'Brands Management'}
-        </h1>
-        <div className="flex items-center space-x-2">
-          <div className="relative" ref={dropdownRef}>
-            <Button
-              variant="outline"
-              onClick={() => setCompetitorDropdownOpen(!competitorDropdownOpen)}
-              className="w-[200px] justify-between"
-            >
-              {competitorId
-                ? competitors.find((competitor) => competitor.id === competitorId)?.name || "Select competitor"
-                : "Filter by competitor"}
-              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-            </Button>
-
-            {competitorDropdownOpen && (
-              <div className="absolute z-10 mt-1 w-[200px] rounded-md bg-white shadow-lg">
-                <div className="py-1">
-                  <input
-                    className="block w-full px-4 py-2 text-sm border-b"
-                    placeholder="Search competitor..."
-                    value={competitorSearch}
-                    onChange={(e) => setCompetitorSearch(e.target.value)}
-                  />
-                  <div className="max-h-60 overflow-auto">
-                    {(() => {
-                      if (competitors.length === 0) {
-                        return <div className="px-4 py-2 text-sm text-gray-500">No competitor found.</div>;
-                      }
-
-                      const filteredCompetitors = competitors.filter(competitor =>
-                        competitor.name.toLowerCase().includes(competitorSearch.toLowerCase())
-                      );
-
-                      if (filteredCompetitors.length === 0) {
-                        return <div className="px-4 py-2 text-sm text-gray-500">No results found</div>;
-                      }
-
-                      return filteredCompetitors.map((competitor) => (
-                        <div
-                          key={competitor.id}
-                          className={`px-4 py-2 text-sm cursor-pointer flex items-center ${competitorId === competitor.id ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
-                          onClick={() => {
-                            if (competitor.id === competitorId) {
-                              // Clear filter if clicking the same competitor
-                              router.push('/app-routes/brands');
-                            } else {
-                              router.push(`/app-routes/brands?competitor=${competitor.id}`);
-                            }
-                            setCompetitorDropdownOpen(false);
-                            setCompetitorSearch(''); // Clear search
-                          }}
-                        >
-                          <Check
-                            className={cn(
-                              "mr-2 h-4 w-4",
-                              competitorId === competitor.id ? "opacity-100" : "opacity-0"
-                            )}
-                          />
-                          {competitor.name}
-                        </div>
-                      ));
-                    })()}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {competitorId && (
-            <Button
-              variant="outline"
-              onClick={() => router.push('/app-routes/brands')}
-              className="px-3 py-1 text-sm"
-            >
-              Clear Filter
-            </Button>
-          )}
-        </div>
+        <h1 className="text-2xl font-bold">Brands Management</h1>
       </div>
 
       <Button
@@ -578,35 +528,243 @@ export default function BrandsPage() {
         />
       </section>
 
+      {/* Filter Brands Section */}
       <section>
-        <h2 className="text-xl font-semibold mb-4">
-          {activeFilter || competitorId ? (
-            <div className="flex items-center">
-              <span>
-                {activeFilter && competitorId
-                  ? `Brands for ${competitorName} (${activeFilter.min}${activeFilter.max ? `-${activeFilter.max}` : '+'} products)`
-                  : activeFilter
-                    ? `Brands with ${activeFilter.min}${activeFilter.max ? `-${activeFilter.max}` : '+'} products`
-                    : competitorId
-                      ? `Brands for ${competitorName}`
-                      : 'Filtered Brands'}
-              </span>
-              <button
-                onClick={() => {
-                  setActiveFilter(null);
-                  if (competitorId) {
-                    router.push('/app-routes/brands');
-                  }
-                }}
-                className="ml-3 px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 rounded transition-colors"
-              >
-                Clear All Filters
-              </button>
+        <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Filter Brands</h3>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Competitor Filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">By Competitor</label>
+              <div className="relative" ref={competitorDropdownRef}>
+                <Button
+                  variant="outline"
+                  onClick={() => setCompetitorDropdownOpen(!competitorDropdownOpen)}
+                  className="w-full justify-between"
+                >
+                  {competitorId
+                    ? competitors.find((competitor) => competitor.id === competitorId)?.name || "Select competitor"
+                    : "All competitors"}
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+
+                {competitorDropdownOpen && (
+                  <div className="absolute z-50 mt-1 w-full rounded-md bg-white shadow-lg border border-gray-200">
+                    <div className="py-1">
+                      <input
+                        className="block w-full px-4 py-2 text-sm border-b"
+                        placeholder="Search competitor..."
+                        value={competitorSearch}
+                        onChange={(e) => setCompetitorSearch(e.target.value)}
+                      />
+                      <div className="max-h-60 overflow-auto">
+                        {/* Clear option */}
+                        <div
+                          className={`px-4 py-2 text-sm cursor-pointer flex items-center ${!competitorId ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
+                          onClick={() => {
+                            const params = new URLSearchParams(window.location.search);
+                            params.delete('competitor');
+                            router.push(`/app-routes/brands?${params.toString()}`);
+                            setCompetitorDropdownOpen(false);
+                            setCompetitorSearch('');
+                          }}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              !competitorId ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          All competitors
+                        </div>
+
+                        {(() => {
+                          if (competitors.length === 0) {
+                            return <div className="px-4 py-2 text-sm text-gray-500">No competitors found.</div>;
+                          }
+
+                          const filteredCompetitors = competitors.filter(competitor =>
+                            competitor.name.toLowerCase().includes(competitorSearch.toLowerCase())
+                          );
+
+                          if (filteredCompetitors.length === 0) {
+                            return <div className="px-4 py-2 text-sm text-gray-500">No results found</div>;
+                          }
+
+                          return filteredCompetitors.map((competitor) => (
+                            <div
+                              key={competitor.id}
+                              className={`px-4 py-2 text-sm cursor-pointer flex items-center ${competitorId === competitor.id ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
+                              onClick={() => {
+                                const params = new URLSearchParams(window.location.search);
+                                if (competitor.id === competitorId) {
+                                  params.delete('competitor');
+                                } else {
+                                  params.set('competitor', competitor.id);
+                                }
+                                router.push(`/app-routes/brands?${params.toString()}`);
+                                setCompetitorDropdownOpen(false);
+                                setCompetitorSearch('');
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  competitorId === competitor.id ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {competitor.name}
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-          ) : (
-            'All Brands'
-          )}
-        </h2>
+
+            {/* Our Products Filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">By Product Type</label>
+              <div className="relative" ref={productTypeDropdownRef}>
+                <Button
+                  variant="outline"
+                  onClick={() => setProductTypeDropdownOpen(!productTypeDropdownOpen)}
+                  className="w-full justify-between"
+                >
+                  {ourProductsFilter
+                    ? "Our brands only"
+                    : notOurProductsFilter
+                      ? "Not our brands"
+                      : "All brands"}
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+
+                {productTypeDropdownOpen && (
+                  <div className="absolute z-50 mt-1 w-full rounded-md bg-white shadow-lg border border-gray-200">
+                    <div className="py-1">
+                      <div className="max-h-60 overflow-auto">
+                        {/* All brands option */}
+                        <div
+                          className={`px-4 py-2 text-sm cursor-pointer flex items-center ${!ourProductsFilter && !notOurProductsFilter ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
+                          onClick={() => {
+                            const params = new URLSearchParams(window.location.search);
+                            params.delete('our_products');
+                            router.push(`/app-routes/brands?${params.toString()}`);
+                            setProductTypeDropdownOpen(false);
+                          }}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              !ourProductsFilter && !notOurProductsFilter ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          All brands
+                        </div>
+
+                        {/* Our brands only option */}
+                        <div
+                          className={`px-4 py-2 text-sm cursor-pointer flex items-center ${ourProductsFilter ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
+                          onClick={() => {
+                            const params = new URLSearchParams(window.location.search);
+                            params.set('our_products', 'true');
+                            router.push(`/app-routes/brands?${params.toString()}`);
+                            setProductTypeDropdownOpen(false);
+                          }}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              ourProductsFilter ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          Our brands only
+                        </div>
+
+                        {/* Not our brands option */}
+                        <div
+                          className={`px-4 py-2 text-sm cursor-pointer flex items-center ${notOurProductsFilter ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
+                          onClick={() => {
+                            const params = new URLSearchParams(window.location.search);
+                            params.set('our_products', 'false');
+                            router.push(`/app-routes/brands?${params.toString()}`);
+                            setProductTypeDropdownOpen(false);
+                          }}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              notOurProductsFilter ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          Not our brands
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Clear Filters */}
+            <div className="flex items-end">
+              {(competitorId || ourProductsFilter || notOurProductsFilter || activeFilter) && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setActiveFilter(null);
+                    router.push('/app-routes/brands');
+                  }}
+                  className="w-full"
+                >
+                  Clear All Filters
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">
+            {activeFilter || competitorId || ourProductsFilter || notOurProductsFilter ? (
+              <span>
+                {activeFilter && competitorId && ourProductsFilter
+                  ? `Our Brands for ${competitorName} (${activeFilter.min}${activeFilter.max ? `-${activeFilter.max}` : '+'} products)`
+                  : activeFilter && competitorId && notOurProductsFilter
+                    ? `Non-Our Brands for ${competitorName} (${activeFilter.min}${activeFilter.max ? `-${activeFilter.max}` : '+'} products)`
+                    : activeFilter && ourProductsFilter
+                      ? `Our Brands with ${activeFilter.min}${activeFilter.max ? `-${activeFilter.max}` : '+'} products`
+                      : activeFilter && notOurProductsFilter
+                        ? `Non-Our Brands with ${activeFilter.min}${activeFilter.max ? `-${activeFilter.max}` : '+'} products`
+                        : activeFilter && competitorId
+                          ? `Brands for ${competitorName} (${activeFilter.min}${activeFilter.max ? `-${activeFilter.max}` : '+'} products)`
+                          : ourProductsFilter && competitorId
+                            ? `Our Brands for ${competitorName}`
+                            : notOurProductsFilter && competitorId
+                              ? `Non-Our Brands for ${competitorName}`
+                              : activeFilter
+                                ? `Brands with ${activeFilter.min}${activeFilter.max ? `-${activeFilter.max}` : '+'} products`
+                                : ourProductsFilter
+                                  ? 'Our Brands'
+                                  : notOurProductsFilter
+                                    ? 'Non-Our Brands'
+                                    : competitorId
+                                      ? `Brands for ${competitorName}`
+                                      : 'Filtered Brands'}
+              </span>
+            ) : (
+              'All Brands'
+            )}
+          </h2>
+          <div className="text-sm text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
+            {filteredBrands.length > 0 ? filteredBrands.length : brands.length} brands
+          </div>
+        </div>
         <BrandsTable
           brands={filteredBrands.length > 0 ? filteredBrands : brands}
           onEdit={handleEditBrandClick}

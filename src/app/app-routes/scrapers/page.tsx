@@ -264,7 +264,7 @@ export default function ScrapersPage() {
                     <td className="whitespace-nowrap px-3 py-4">
                       <div className="text-sm text-gray-900">
                         {scraper.schedule.frequency.charAt(0).toUpperCase() +
-                          scraper.schedule.frequency.slice(1).substring(0, 3)}{" "}
+                          scraper.schedule.frequency.slice(1)}{" "}
                         {scraper.schedule.time}
                       </div>
                     </td>

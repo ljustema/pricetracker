@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-05-25 12:05:14
+-- Generated: 2025-05-27 10:02:57
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -564,19 +564,6 @@ END;
 
 $$;
 
-BEGIN
-    DELETE FROM public.scraper_runs
-    WHERE created_at < now() - interval '30 days'
-      AND status IN ('completed', 'failed');
-
-GET DIAGNOSTICS deleted_count = ROW_COUNT;
-
-INSERT INTO public.debug_logs (level, message, details)
-    VALUES ('INFO', 'Cleaned up old scraper runs',
-            jsonb_build_object('deleted_count', deleted_count));
-
-RETURN deleted_count;
-
 END;
 
 $$;
@@ -636,26 +623,6 @@ END;
 
 $$;
 
-current_timestamp timestamp with time zone := now();
-
-RETURN;
-
-END IF;
-
-EXIT;
-
-END IF;
-
-END IF;
-
-END IF;
-
-END LOOP;
-
-END;
-
-$$;
-
 RETURN NEW;
 
 END;
@@ -663,23 +630,6 @@ END;
 $$;
 
 -- The trigger create_profile_for_user will automatically create a profile
-END;
-
-$$;
-
-current_time timestamp with time zone := now();
-
-last_cleanup_check timestamp with time zone;
-
--- Perform actual cleanup tasks
-        PERFORM cleanup_old_scraper_runs();
-
-PERFORM cleanup_old_debug_logs();
-
-PERFORM process_scraper_timeouts();
-
-END IF;
-
 END;
 
 $$;
@@ -782,6 +732,10 @@ END IF;
 END IF;
 
 RETURN v_brand_id;
+
+END;
+
+$$;
 
 END;
 
@@ -1219,7 +1173,54 @@ END;
 
 $$;
 
+END;
+
+$$;
+
 RETURN NULL;
+
+END;
+
+$$;
+
+BEGIN
+  -- Mark messages as read based on reader type
+  IF reader_type = 'user' THEN
+    -- User reading admin messages
+    UPDATE support_messages 
+    SET read_by_recipient = TRUE
+    WHERE conversation_id = conversation_uuid
+    AND sender_type = 'admin'
+    AND read_by_recipient = FALSE;
+
+GET DIAGNOSTICS updated_count = ROW_COUNT;
+
+-- Update last read timestamp for user
+    UPDATE support_conversations
+    SET last_read_by_user = NOW()
+    WHERE id = conversation_uuid;
+
+ELSIF reader_type = 'admin' THEN
+    -- Admin reading user messages
+    UPDATE support_messages 
+    SET read_by_recipient = TRUE
+    WHERE conversation_id = conversation_uuid
+    AND sender_type = 'user'
+    AND read_by_recipient = FALSE;
+
+GET DIAGNOSTICS updated_count = ROW_COUNT;
+
+-- Update last read timestamp for admin
+    UPDATE support_conversations
+    SET last_read_by_admin = NOW()
+    WHERE id = conversation_uuid;
+
+ELSE
+    updated_count := 0;
+
+END IF;
+
+RETURN updated_count;
 
 END;
 
@@ -1384,73 +1385,6 @@ END;
 
 $$;
 
-update_count integer := 0;
-
-time_slot integer := 0;
-
-total_scrapers integer;
-
-minutes_per_slot integer;
-
-BEGIN
-    -- Count total active scrapers
-    SELECT COUNT(*) INTO total_scrapers
-    FROM public.scrapers
-    WHERE is_active = true;
-
--- Update scraper schedules to distribute load
-    FOR scraper_record IN
-        SELECT id, schedule, user_id
-        FROM public.scrapers
-        WHERE is_active = true
-        ORDER BY user_id, id -- Group by user to keep their scrapers together
-    LOOP
-        -- Calculate new time slot (distribute across 24 hours)
-        DECLARE
-            new_hour integer := (time_slot * minutes_per_slot) / 60;
-
-new_minute integer := (time_slot * minutes_per_slot) % 60;
-
-new_time text := format('%02d:%02d', new_hour % 24, new_minute);
-
-updated_schedule jsonb;
-
-BEGIN
-            -- Update the schedule with new time
-            updated_schedule := jsonb_set(
-                scraper_record.schedule,
-                '{time}',
-                to_jsonb(new_time)
-            );
-
-UPDATE public.scrapers
-            SET
-                schedule = updated_schedule,
-                updated_at = now()
-            WHERE id = scraper_record.id;
-
-update_count := update_count + 1;
-
-time_slot := time_slot + 1;
-
-END;
-
-END LOOP;
-
-INSERT INTO public.debug_logs (level, message, details)
-    VALUES ('INFO', 'Optimized scraper schedules',
-            jsonb_build_object(
-                'updated_scrapers', update_count,
-                'total_scrapers', total_scrapers,
-                'minutes_per_slot', minutes_per_slot
-            ));
-
-RETURN update_count;
-
-END;
-
-$$;
-
 BEGIN
     -- Force processing of any pending products by updating them in place
     UPDATE staged_integration_products
@@ -1464,27 +1398,6 @@ BEGIN
     PERFORM update_integration_run_status(run_id);
 
 RETURN stats;
-
-END;
-
-$$;
-
-timeout_record record;
-
-timeout_count := timeout_count + 1;
-
--- Log the timeout
-        INSERT INTO public.debug_logs (level, message, details)
-        VALUES ('WARN', 'Scraper run timed out',
-                jsonb_build_object(
-                    'run_id', timeout_record.id,
-                    'scraper_id', timeout_record.scraper_id,
-                    'started_at', timeout_record.started_at
-                ));
-
-END LOOP;
-
-RETURN timeout_count;
 
 END;
 
@@ -1961,6 +1874,12 @@ END;
 
 $$;
 
+RETURN NEW;
+
+END;
+
+$$;
+
 integration_record RECORD;
 
 BEGIN
@@ -2036,6 +1955,12 @@ UPDATE scrapers
     --         ', last_products_per_second: ' || NEW.products_per_second);
 
 END IF;
+
+RETURN NEW;
+
+END;
+
+$$;
 
 RETURN NEW;
 
@@ -3000,6 +2925,18 @@ CREATE INDEX idx_integrations_status ON public.integrations USING btree (status)
 CREATE INDEX idx_integrations_user_id ON public.integrations USING btree (user_id);
 
 --
+-- Name: idx_marketing_contacts_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_marketing_contacts_created_at ON public.marketing_contacts USING btree (created_at);
+
+--
+-- Name: idx_marketing_contacts_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_marketing_contacts_status ON public.marketing_contacts USING btree (status);
+
+--
 -- Name: idx_price_changes_competitor_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3016,6 +2953,78 @@ CREATE INDEX idx_price_changes_integration_id ON public.price_changes USING btre
 --
 
 CREATE INDEX idx_price_changes_product_id ON public.price_changes USING btree (product_id);
+
+--
+-- Name: idx_price_changes_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id ON public.price_changes USING btree (user_id);
+
+--
+-- Name: INDEX idx_price_changes_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id IS 'Optimizes user-based price_changes queries';
+
+--
+-- Name: idx_price_changes_user_id_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id_changed_at ON public.price_changes USING btree (user_id, changed_at DESC);
+
+--
+-- Name: INDEX idx_price_changes_user_id_changed_at; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id_changed_at IS 'Optimizes time-based price change queries';
+
+--
+-- Name: idx_price_changes_user_id_competitor_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id_competitor_id ON public.price_changes USING btree (user_id, competitor_id) WHERE (competitor_id IS NOT NULL);
+
+--
+-- Name: INDEX idx_price_changes_user_id_competitor_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id_competitor_id IS 'Optimizes competitor-based price queries';
+
+--
+-- Name: idx_price_changes_user_id_integration_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id_integration_id ON public.price_changes USING btree (user_id, integration_id) WHERE (integration_id IS NOT NULL);
+
+--
+-- Name: INDEX idx_price_changes_user_id_integration_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id_integration_id IS 'Optimizes integration-based price queries';
+
+--
+-- Name: idx_price_changes_user_id_percentage_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id_percentage_changed_at ON public.price_changes USING btree (user_id, price_change_percentage, changed_at DESC);
+
+--
+-- Name: INDEX idx_price_changes_user_id_percentage_changed_at; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id_percentage_changed_at IS 'Optimizes dashboard price drop queries';
+
+--
+-- Name: idx_price_changes_user_id_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id_product_id ON public.price_changes USING btree (user_id, product_id);
+
+--
+-- Name: INDEX idx_price_changes_user_id_product_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id_product_id IS 'Optimizes get_brand_analytics function joins';
 
 --
 -- Name: idx_products_brand; Type: INDEX; Schema: public; Owner: -
@@ -3040,6 +3049,60 @@ CREATE INDEX idx_products_brand_sku ON public.products USING btree (brand, sku);
 --
 
 CREATE INDEX idx_products_ean ON public.products USING btree (ean);
+
+--
+-- Name: idx_products_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_id ON public.products USING btree (user_id);
+
+--
+-- Name: INDEX idx_products_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_products_user_id IS 'Optimizes user-based product queries';
+
+--
+-- Name: idx_products_user_id_brand_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_id_brand_id ON public.products USING btree (user_id, brand_id);
+
+--
+-- Name: INDEX idx_products_user_id_brand_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_products_user_id_brand_id IS 'Optimizes product-brand joins in analytics';
+
+--
+-- Name: idx_professional_scraper_requests_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_professional_scraper_requests_created_at ON public.professional_scraper_requests USING btree (created_at);
+
+--
+-- Name: idx_professional_scraper_requests_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_professional_scraper_requests_status ON public.professional_scraper_requests USING btree (status);
+
+--
+-- Name: idx_professional_scraper_requests_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_professional_scraper_requests_user_id ON public.professional_scraper_requests USING btree (user_id);
+
+--
+-- Name: idx_rate_limit_log_ip_endpoint; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_rate_limit_log_ip_endpoint ON public.rate_limit_log USING btree (ip_address, endpoint);
+
+--
+-- Name: idx_rate_limit_log_window_start; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_rate_limit_log_window_start ON public.rate_limit_log USING btree (window_start);
 
 --
 -- Name: idx_scraped_products_brand_sku; Type: INDEX; Schema: public; Owner: -
@@ -3154,6 +3217,60 @@ CREATE INDEX idx_staged_integration_products_sku_brand ON public.staged_integrat
 --
 
 CREATE INDEX idx_staged_integration_products_status ON public.staged_integration_products USING btree (status);
+
+--
+-- Name: idx_support_conversations_admin_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_conversations_admin_user_id ON public.support_conversations USING btree (admin_user_id);
+
+--
+-- Name: idx_support_conversations_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_conversations_created_at ON public.support_conversations USING btree (created_at);
+
+--
+-- Name: idx_support_conversations_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_conversations_status ON public.support_conversations USING btree (status);
+
+--
+-- Name: idx_support_conversations_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_conversations_user_id ON public.support_conversations USING btree (user_id);
+
+--
+-- Name: idx_support_messages_conversation_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_messages_conversation_created ON public.support_messages USING btree (conversation_id, created_at);
+
+--
+-- Name: idx_support_messages_conversation_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_messages_conversation_id ON public.support_messages USING btree (conversation_id);
+
+--
+-- Name: idx_support_messages_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_messages_created_at ON public.support_messages USING btree (created_at);
+
+--
+-- Name: idx_support_messages_sender_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_messages_sender_id ON public.support_messages USING btree (sender_id);
+
+--
+-- Name: idx_support_messages_unread; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_messages_unread ON public.support_messages USING btree (conversation_id, sender_type, read_by_recipient);
 
 --
 -- Name: idx_user_profiles_admin_role; Type: INDEX; Schema: public; Owner: -

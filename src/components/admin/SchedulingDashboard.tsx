@@ -21,6 +21,8 @@ interface UserWorkload {
   active_scrapers: number;
   active_integrations: number;
   jobs_today: number;
+  jobs_this_week: number;
+  jobs_this_month: number;
   avg_execution_time_ms: number;
 }
 
@@ -44,6 +46,10 @@ interface RecentJob {
   scrapers: {
     name: string;
     user_id: string;
+    user_profiles: {
+      name: string;
+      email: string;
+    };
   };
 }
 
@@ -82,16 +88,59 @@ interface ScheduledIntegration {
   };
 }
 
+interface RecentIntegrationRun {
+  id: string;
+  status: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  products_processed: number | null;
+  integrations: {
+    name: string;
+    platform: string;
+    user_id: string;
+    user_profiles: {
+      name: string;
+      email: string;
+    };
+  };
+}
+
 interface SchedulingData {
   stats: SchedulingStats[];
   userWorkload: UserWorkload[];
   cronJobs: CronJob[];
   recentJobs: RecentJob[];
-  recentIntegrations: any[];
+  recentIntegrations: RecentIntegrationRun[];
   scheduledScrapers: ScheduledScraper[];
   scheduledIntegrations: ScheduledIntegration[];
   timestamp: string;
 }
+
+// Utility function to format execution time from milliseconds to minutes and seconds
+const formatExecutionTime = (ms: number | null): string => {
+  if (!ms) return 'N/A';
+
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  } else {
+    return `${seconds}s`;
+  }
+};
+
+// Utility function to calculate execution time for integration runs
+const calculateIntegrationExecutionTime = (startedAt: string | null, completedAt: string | null): number | null => {
+  if (!startedAt || !completedAt) return null;
+
+  const start = new Date(startedAt).getTime();
+  const end = new Date(completedAt).getTime();
+
+  return end - start;
+};
 
 export default function SchedulingDashboard() {
   const [data, setData] = useState<SchedulingData | null>(null);
@@ -558,32 +607,82 @@ export default function SchedulingDashboard() {
         <TabsContent value="jobs" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Recent Scraper Jobs</CardTitle>
-              <CardDescription>Latest 50 scraper job executions</CardDescription>
+              <CardTitle>Recent Jobs</CardTitle>
+              <CardDescription>Latest scraper and integration job executions</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
-                {data?.recentJobs.slice(0, 10).map((job) => (
-                  <div key={job.id} className="flex items-center justify-between p-3 border rounded">
-                    <div>
-                      <div className="font-medium">{job.scrapers.name}</div>
-                      <div className="text-sm text-muted-foreground">
-                        {job.scraper_type} • {new Date(job.created_at).toLocaleString()}
+                {(() => {
+                  // Combine scraper jobs and integration jobs, then sort by creation date
+                  const scraperJobs = (data?.recentJobs || []).map(job => ({
+                    ...job,
+                    type: 'scraper' as const,
+                    sortDate: new Date(job.created_at).getTime()
+                  }));
+
+                  const integrationJobs = (data?.recentIntegrations || []).map(run => ({
+                    ...run,
+                    type: 'integration' as const,
+                    sortDate: new Date(run.created_at).getTime()
+                  }));
+
+                  const allJobs = [...scraperJobs, ...integrationJobs]
+                    .sort((a, b) => b.sortDate - a.sortDate)
+                    .slice(0, 15);
+
+                  return allJobs.map((job) => (
+                    <div key={`${job.type}-${job.id}`} className="flex items-center justify-between p-3 border rounded">
+                      <div className="flex-1">
+                        {job.type === 'scraper' ? (
+                          <>
+                            <div className="font-medium">{job.scrapers.name}</div>
+                            <div className="text-sm text-muted-foreground">
+                              {job.scraper_type} • {new Date(job.created_at).toLocaleString()}
+                            </div>
+                            <div className="text-xs text-muted-foreground mt-1">
+                              Owner: {job.scrapers.user_profiles.name} ({job.scrapers.user_profiles.email})
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="font-medium">{job.integrations.name}</div>
+                            <div className="text-sm text-muted-foreground">
+                              {job.integrations.platform} Integration • {new Date(job.created_at).toLocaleString()}
+                            </div>
+                            <div className="text-xs text-muted-foreground mt-1">
+                              Owner: {job.integrations.user_profiles.name} ({job.integrations.user_profiles.email})
+                              {job.products_processed && ` • ${job.products_processed} products processed`}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <Badge variant={job.type === 'scraper' ? 'default' : 'secondary'}>
+                          {job.type === 'scraper' ? 'Scraper' : 'Integration'}
+                        </Badge>
+                        {job.type === 'scraper' && job.is_test_run && (
+                          <Badge variant="outline">Test</Badge>
+                        )}
+                        {getStatusBadge(job.status)}
+                        {job.type === 'scraper' && job.execution_time_ms && (
+                          <span className="text-sm text-muted-foreground">
+                            {formatExecutionTime(job.execution_time_ms)}
+                          </span>
+                        )}
+                        {job.type === 'integration' && (
+                          <span className="text-sm text-muted-foreground">
+                            {formatExecutionTime(calculateIntegrationExecutionTime(job.started_at, job.completed_at))}
+                          </span>
+                        )}
                       </div>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      {job.is_test_run && (
-                        <Badge variant="outline">Test</Badge>
-                      )}
-                      {getStatusBadge(job.status)}
-                      {job.execution_time_ms && (
-                        <span className="text-sm text-muted-foreground">
-                          {Math.round(job.execution_time_ms / 1000)}s
-                        </span>
-                      )}
-                    </div>
+                  ));
+                })()}
+                {(!data?.recentJobs || data.recentJobs.length === 0) && (!data?.recentIntegrations || data.recentIntegrations.length === 0) && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No recent jobs found
                   </div>
-                ))}
+                )}
               </div>
             </CardContent>
           </Card>
@@ -608,7 +707,10 @@ export default function SchedulingDashboard() {
                     <div className="text-right">
                       <div className="font-medium">{user.jobs_today} jobs today</div>
                       <div className="text-sm text-muted-foreground">
-                        Avg: {Math.round(user.avg_execution_time_ms / 1000)}s
+                        {user.jobs_this_week} jobs this week • {user.jobs_this_month} jobs this month
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Avg: {formatExecutionTime(user.avg_execution_time_ms)}
                       </div>
                     </div>
                   </div>

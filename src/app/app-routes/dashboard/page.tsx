@@ -96,6 +96,7 @@ export default async function DashboardPage() {
   // Define type for brand data
   type Brand = Database['public']['Tables']['brands']['Row'] & {
     product_count?: number;
+    our_products_count?: number;
     competitor_count?: number;
     aliases?: string[];
   };
@@ -128,13 +129,26 @@ export default async function DashboardPage() {
     .limit(5) as { data: PriceChange[] | null; error: Error | null };
 
   // Get brands with analytics data using the RPC function
-  const { data: brandsData, error: brandsError } = await supabase.rpc(
-    'get_brand_analytics',
-    {
-      p_user_id: userId,
-      p_brand_id: null
-    }
-  ) as { data: Brand[] | null; error: Error | null };
+  // Add timeout handling for the brands query that was causing issues
+  let brandsData: Brand[] | null = null;
+  let brandsError: Error | null = null;
+
+  try {
+    const { data, error } = await supabase.rpc(
+      'get_brand_analytics',
+      {
+        p_user_id: userId,
+        p_brand_id: null
+      }
+    ) as { data: Brand[] | null; error: Error | null };
+
+    brandsData = data;
+    brandsError = error;
+  } catch (error) {
+    console.error('Brands query failed:', error);
+    brandsError = error as Error;
+    brandsData = null;
+  }
 
   // Get top competitors for the dashboard
   const { data: competitorsData, error: _competitorsStatsError } = await supabase
@@ -146,30 +160,36 @@ export default async function DashboardPage() {
     .eq("user_id", userId)
     .order("name");
 
+  // Get competitor product counts using the same method as competitors page
+  // Use the get_competitor_statistics function for consistency
+  const { data: competitorStatsData, error: competitorStatsError } = await supabase
+    .rpc('get_competitor_statistics', { p_user_id: userId });
+
+  if (competitorStatsError) {
+    console.error('Error fetching competitor statistics:', competitorStatsError);
+  }
+
+  // Create a map of competitor_id to stats for quick lookup
+  const statsMap = new Map<string, { product_count: number, brand_count: number }>();
+  if (competitorStatsData) {
+    competitorStatsData.forEach((stat: any) => {
+      statsMap.set(stat.competitor_id, {
+        product_count: stat.product_count || 0,
+        brand_count: stat.brand_count || 0
+      });
+    });
+  }
+
   // Get competitor product counts
-  const topCompetitors = await Promise.all(
-    (competitorsData || []).map(async (competitor) => {
-      // Get total products for this competitor
-      const { count: totalCount, error: totalError } = await supabase
-        .from('price_changes')
-        .select('product_id', { count: 'exact', head: true })
-        .eq('user_id', userId)
-        .eq('competitor_id', competitor.id);
+  const topCompetitors = (competitorsData || []).map((competitor) => {
+    // Get stats from the map (consistent with competitors page)
+    const stats = statsMap.get(competitor.id) || { product_count: 0, brand_count: 0 };
 
-      if (totalError) {
-        console.error(`Error fetching product count for competitor ${competitor.id}:`, totalError);
-        return {
-          ...competitor,
-          totalProducts: 0
-        };
-      }
-
-      return {
-        ...competitor,
-        totalProducts: totalCount || 0
-      };
-    })
-  );
+    return {
+      ...competitor,
+      totalProducts: stats.product_count
+    };
+  });
 
   // Sort by product count and get top 5
   const top5Competitors = topCompetitors
@@ -192,6 +212,29 @@ export default async function DashboardPage() {
       <h1 className="mb-8 text-3xl font-bold">Dashboard</h1>
 
       {/* Brand Statistics */}
+      {brandsError && (
+        <div className="mb-6 rounded-lg bg-yellow-50 border border-yellow-200 p-4">
+          <div className="flex">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div className="ml-3">
+              <h3 className="text-sm font-medium text-yellow-800">
+                Brand Statistics Temporarily Unavailable
+              </h3>
+              <div className="mt-2 text-sm text-yellow-700">
+                <p>
+                  We're experiencing high database load. Brand statistics will be available shortly.
+                  Other dashboard features are working normally.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <BrandStatisticsServer
         brands={brandsData || []}
         topCompetitors={top5Competitors}

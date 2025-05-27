@@ -927,6 +927,7 @@ export class BrandService {
     is_active: boolean;
     needs_review: boolean;
     product_count: number;
+    our_products_count: number;
     competitor_count: number;
     aliases?: string[];
     competitor_names?: string[];
@@ -982,29 +983,65 @@ export class BrandService {
       const competitorNamesMap = new Map<string, string[]>();
 
       // Fetch competitor names for brands with competitors in parallel
+      // Make this optional to avoid breaking the entire function if it fails
       if (brandsWithCompetitors.length > 0) {
-        await Promise.all(brandsWithCompetitors.map(async (brand: any) => {
-          try {
-            const { data: competitorNames, error: competitorNamesError } = await supabase.rpc(
-              'get_competitor_names_for_brand',
-              {
-                p_user_id: userId,
-                p_brand_id: brand.id
+        try {
+          await Promise.all(brandsWithCompetitors.map(async (brand: any) => {
+            try {
+              const { data: competitorNames, error: competitorNamesError } = await supabase.rpc(
+                'get_competitor_names_for_brand',
+                {
+                  p_user_id: userId,
+                  p_brand_id: brand.id
+                }
+              );
+
+              if (competitorNamesError) {
+                console.error(`Error fetching competitor names for brand ${brand.id}:`, competitorNamesError);
+
+                // Fallback: try a direct query if RPC fails
+                try {
+                  const { data: fallbackData, error: fallbackError } = await supabase
+                    .from('price_changes')
+                    .select(`
+                      competitors!inner(name)
+                    `)
+                    .eq('user_id', userId)
+                    .in('product_id', (subquery) => {
+                      subquery
+                        .from('products')
+                        .select('id')
+                        .eq('user_id', userId)
+                        .eq('brand_id', brand.id);
+                    });
+
+                  if (!fallbackError && fallbackData) {
+                    const names = [...new Set(fallbackData.map((item: any) => item.competitors.name))];
+                    competitorNamesMap.set(brand.id, names);
+                  }
+                } catch (fallbackError) {
+                  console.error(`Fallback query also failed for brand ${brand.id}:`, fallbackError);
+                }
+                return;
               }
-            );
 
-            if (competitorNamesError) {
-              console.error(`Error fetching competitor names for brand ${brand.id}:`, competitorNamesError);
-              return;
+              if (competitorNames && competitorNames.length > 0) {
+                competitorNamesMap.set(brand.id, competitorNames[0].competitor_names || []);
+              }
+            } catch (error) {
+              console.error(`Error fetching competitor names for brand ${brand.id}:`, {
+                message: error instanceof Error ? error.message : 'Unknown error',
+                details: error instanceof Error ? error.stack : String(error),
+                hint: 'This is non-critical - continuing without competitor names',
+                code: ''
+              });
+              // Continue without competitor names for this brand
             }
-
-            if (competitorNames && competitorNames.length > 0) {
-              competitorNamesMap.set(brand.id, competitorNames[0].competitor_names || []);
-            }
-          } catch (error) {
-            console.error(`Unexpected error fetching competitor names for brand ${brand.id}:`, error);
-          }
-        }));
+          }));
+        } catch (error) {
+          console.error('Error in competitor names batch fetch - continuing without competitor names:', error);
+          // Continue without competitor names
+        }
       }
 
       // Add aliases and competitor names to each brand
@@ -1014,6 +1051,7 @@ export class BrandService {
         is_active: boolean;
         needs_review: boolean;
         product_count: number;
+        our_products_count: number;
         competitor_count: number;
       }) => ({
         ...brand,

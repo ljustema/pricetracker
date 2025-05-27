@@ -1,9 +1,29 @@
 -- =========================================================================
 -- Row Level Security policies
 -- =========================================================================
--- Generated: 2025-05-25 12:05:14
+-- Generated: 2025-05-27 10:02:57
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
+
+--
+-- Name: support_messages Users can add messages to own conversations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can add messages to own conversations" ON public.support_messages FOR INSERT WITH CHECK (((sender_id = auth.uid()) AND (EXISTS ( SELECT 1
+   FROM public.support_conversations
+  WHERE ((support_conversations.id = support_messages.conversation_id) AND (support_conversations.user_id = auth.uid()))))));
+
+--
+-- Name: support_conversations Users can create conversations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can create conversations" ON public.support_conversations FOR INSERT WITH CHECK ((user_id = auth.uid()));
+
+--
+-- Name: professional_scraper_requests Users can create scraper requests; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can create scraper requests" ON public.professional_scraper_requests FOR INSERT WITH CHECK ((user_id = auth.uid()));
 
 --
 -- Name: csv_uploads Users can delete their own CSV uploads; Type: POLICY; Schema: public; Owner: -
@@ -156,6 +176,12 @@ CREATE POLICY "Users can insert their own scrapers" ON public.scrapers FOR INSER
 CREATE POLICY "Users can insert their own staged integration products" ON public.staged_integration_products FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
+-- Name: support_conversations Users can update own conversations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update own conversations" ON public.support_conversations FOR UPDATE USING ((user_id = auth.uid()));
+
+--
 -- Name: csv_uploads Users can update their own CSV uploads; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -220,6 +246,26 @@ CREATE POLICY "Users can update their own scrapers" ON public.scrapers FOR UPDAT
 --
 
 CREATE POLICY "Users can update their own staged integration products" ON public.staged_integration_products FOR UPDATE USING ((auth.uid() = user_id));
+
+--
+-- Name: support_messages Users can view messages in own conversations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view messages in own conversations" ON public.support_messages FOR SELECT USING ((EXISTS ( SELECT 1
+   FROM public.support_conversations
+  WHERE ((support_conversations.id = support_messages.conversation_id) AND (support_conversations.user_id = auth.uid())))));
+
+--
+-- Name: support_conversations Users can view own conversations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view own conversations" ON public.support_conversations FOR SELECT USING ((user_id = auth.uid()));
+
+--
+-- Name: professional_scraper_requests Users can view own scraper requests; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view own scraper requests" ON public.professional_scraper_requests FOR SELECT USING ((user_id = auth.uid()));
 
 --
 -- Name: csv_uploads Users can view their own CSV uploads; Type: POLICY; Schema: public; Owner: -

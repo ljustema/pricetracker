@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-05-25 12:05:14
+-- Generated: 2025-05-27 10:02:57
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -617,6 +617,36 @@ CREATE TABLE public.integrations (
 );
 
 --
+-- Name: marketing_contacts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.marketing_contacts (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name text NOT NULL,
+    email text NOT NULL,
+    company text,
+    message text NOT NULL,
+    contact_type text DEFAULT 'general'::text,
+    status text DEFAULT 'new'::text,
+    created_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT marketing_contacts_contact_type_check CHECK ((contact_type = ANY (ARRAY['general'::text, 'sales'::text, 'support'::text, 'partnership'::text]))),
+    CONSTRAINT marketing_contacts_status_check CHECK ((status = ANY (ARRAY['new'::text, 'contacted'::text, 'resolved'::text])))
+);
+
+--
+-- Name: newsletter_subscriptions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.newsletter_subscriptions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email text NOT NULL,
+    name text,
+    subscribed_at timestamp with time zone DEFAULT now(),
+    unsubscribed_at timestamp with time zone,
+    is_active boolean DEFAULT true
+);
+
+--
 -- Name: price_changes; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -678,6 +708,41 @@ COMMENT ON COLUMN public.products.currency_code IS 'ISO 4217 currency code (e.g.
 --
 
 COMMENT ON COLUMN public.products.url IS 'URL to the product on the source platform';
+
+--
+-- Name: professional_scraper_requests; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.professional_scraper_requests (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid,
+    competitor_id uuid,
+    name text NOT NULL,
+    email text NOT NULL,
+    website text NOT NULL,
+    requirements text NOT NULL,
+    additional_info text,
+    status text DEFAULT 'submitted'::text,
+    quoted_price numeric(10,2),
+    estimated_delivery_days integer,
+    admin_notes text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT professional_scraper_requests_status_check CHECK ((status = ANY (ARRAY['submitted'::text, 'reviewing'::text, 'quoted'::text, 'in_progress'::text, 'completed'::text, 'cancelled'::text])))
+);
+
+--
+-- Name: rate_limit_log; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.rate_limit_log (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    ip_address inet NOT NULL,
+    endpoint text NOT NULL,
+    attempts integer DEFAULT 1,
+    window_start timestamp with time zone DEFAULT now(),
+    created_at timestamp with time zone DEFAULT now()
+);
 
 --
 -- Name: scraped_products; Type: TABLE; Schema: public; Owner: -
@@ -880,6 +945,44 @@ COMMENT ON COLUMN public.staged_integration_products.currency_code IS 'ISO 4217 
 --
 
 COMMENT ON COLUMN public.staged_integration_products.url IS 'URL to the product on the integration platform';
+
+--
+-- Name: support_conversations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.support_conversations (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid,
+    admin_user_id uuid,
+    subject text NOT NULL,
+    status text DEFAULT 'open'::text,
+    priority text DEFAULT 'medium'::text,
+    category text DEFAULT 'general'::text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    resolved_at timestamp with time zone,
+    last_read_by_user timestamp with time zone,
+    last_read_by_admin timestamp with time zone,
+    CONSTRAINT support_conversations_category_check CHECK ((category = ANY (ARRAY['general'::text, 'technical'::text, 'billing'::text, 'scraper_request'::text, 'feature_request'::text]))),
+    CONSTRAINT support_conversations_priority_check CHECK ((priority = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text, 'urgent'::text]))),
+    CONSTRAINT support_conversations_status_check CHECK ((status = ANY (ARRAY['open'::text, 'in_progress'::text, 'resolved'::text, 'closed'::text])))
+);
+
+--
+-- Name: support_messages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.support_messages (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    conversation_id uuid,
+    sender_id uuid,
+    sender_type text NOT NULL,
+    message_content text NOT NULL,
+    is_internal boolean DEFAULT false,
+    created_at timestamp with time zone DEFAULT now(),
+    read_by_recipient boolean DEFAULT false,
+    CONSTRAINT support_messages_sender_type_check CHECK ((sender_type = ANY (ARRAY['user'::text, 'admin'::text])))
+);
 
 --
 -- Name: user_profiles; Type: TABLE; Schema: public; Owner: -
@@ -1326,6 +1429,27 @@ ALTER TABLE ONLY public.integrations
     ADD CONSTRAINT integrations_pkey PRIMARY KEY (id);
 
 --
+-- Name: marketing_contacts marketing_contacts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.marketing_contacts
+    ADD CONSTRAINT marketing_contacts_pkey PRIMARY KEY (id);
+
+--
+-- Name: newsletter_subscriptions newsletter_subscriptions_email_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.newsletter_subscriptions
+    ADD CONSTRAINT newsletter_subscriptions_email_key UNIQUE (email);
+
+--
+-- Name: newsletter_subscriptions newsletter_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.newsletter_subscriptions
+    ADD CONSTRAINT newsletter_subscriptions_pkey PRIMARY KEY (id);
+
+--
 -- Name: price_changes price_changes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1338,6 +1462,20 @@ ALTER TABLE ONLY public.price_changes
 
 ALTER TABLE ONLY public.products
     ADD CONSTRAINT products_pkey PRIMARY KEY (id);
+
+--
+-- Name: professional_scraper_requests professional_scraper_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.professional_scraper_requests
+    ADD CONSTRAINT professional_scraper_requests_pkey PRIMARY KEY (id);
+
+--
+-- Name: rate_limit_log rate_limit_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.rate_limit_log
+    ADD CONSTRAINT rate_limit_log_pkey PRIMARY KEY (id);
 
 --
 -- Name: scraped_products scraped_products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1373,6 +1511,20 @@ ALTER TABLE ONLY public.scrapers
 
 ALTER TABLE ONLY public.staged_integration_products
     ADD CONSTRAINT staged_integration_products_pkey PRIMARY KEY (id);
+
+--
+-- Name: support_conversations support_conversations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_conversations
+    ADD CONSTRAINT support_conversations_pkey PRIMARY KEY (id);
+
+--
+-- Name: support_messages support_messages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_messages
+    ADD CONSTRAINT support_messages_pkey PRIMARY KEY (id);
 
 --
 -- Name: brand_aliases unique_brand_alias; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1697,6 +1849,20 @@ ALTER TABLE ONLY public.products
     ADD CONSTRAINT products_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 --
+-- Name: professional_scraper_requests professional_scraper_requests_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.professional_scraper_requests
+    ADD CONSTRAINT professional_scraper_requests_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+--
+-- Name: professional_scraper_requests professional_scraper_requests_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.professional_scraper_requests
+    ADD CONSTRAINT professional_scraper_requests_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id);
+
+--
 -- Name: scraped_products scraped_products_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1793,6 +1959,34 @@ ALTER TABLE ONLY public.staged_integration_products
 
 ALTER TABLE ONLY public.staged_integration_products
     ADD CONSTRAINT staged_integration_products_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: support_conversations support_conversations_admin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_conversations
+    ADD CONSTRAINT support_conversations_admin_user_id_fkey FOREIGN KEY (admin_user_id) REFERENCES public.user_profiles(id);
+
+--
+-- Name: support_conversations support_conversations_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_conversations
+    ADD CONSTRAINT support_conversations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id);
+
+--
+-- Name: support_messages support_messages_conversation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_messages
+    ADD CONSTRAINT support_messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.support_conversations(id) ON DELETE CASCADE;
+
+--
+-- Name: support_messages support_messages_sender_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_messages
+    ADD CONSTRAINT support_messages_sender_id_fkey FOREIGN KEY (sender_id) REFERENCES public.user_profiles(id);
 
 --
 -- Name: user_profiles user_profiles_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -1993,6 +2187,18 @@ ALTER TABLE public.integration_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.integrations ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: marketing_contacts; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.marketing_contacts ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: newsletter_subscriptions; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.newsletter_subscriptions ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: price_changes; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -2003,6 +2209,18 @@ ALTER TABLE public.price_changes ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: professional_scraper_requests; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.professional_scraper_requests ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: rate_limit_log; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.rate_limit_log ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: scraped_products; Type: ROW SECURITY; Schema: public; Owner: -
@@ -2033,6 +2251,18 @@ ALTER TABLE public.scrapers ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.staged_integration_products ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: support_conversations; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.support_conversations ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: support_messages; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.support_messages ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: user_profiles; Type: ROW SECURITY; Schema: public; Owner: -

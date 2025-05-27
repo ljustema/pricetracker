@@ -6,6 +6,7 @@ import UserMenu from "@/components/layout/user-menu";
 import PageTitle from "@/components/layout/page-title";
 import MobileSidebar from "@/components/layout/mobile-sidebar";
 import { checkAdminAccess } from "@/lib/admin/auth";
+import { NotificationBadge } from "@/components/notifications/NotificationBadge";
 
 export default async function AppLayout({
   children,
@@ -169,6 +170,26 @@ export default async function AppLayout({
               Integrations
             </Link>
             <Link
+              href="/app-routes/support"
+              className="group flex items-center rounded-md px-2 py-2 text-sm font-medium text-indigo-100 hover:bg-indigo-600 hover:text-white"
+            >
+              <svg
+                className="mr-3 h-6 w-6 text-indigo-300 group-hover:text-white"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                />
+              </svg>
+              Support
+            </Link>
+
+            <Link
               href="/app-routes/settings"
               className="group flex items-center rounded-md px-2 py-2 text-sm font-medium text-indigo-100 hover:bg-indigo-600 hover:text-white"
             >
@@ -236,7 +257,10 @@ export default async function AppLayout({
                 <PageTitle />
               </div>
             </div>
-            <div className="ml-4 flex items-center md:ml-6">
+            <div className="ml-4 flex items-center md:ml-6 space-x-4">
+              {/* Notification Badge */}
+              <NotificationBadge />
+
               {/* Profile dropdown */}
               <UserMenu user={session.user} />
             </div>

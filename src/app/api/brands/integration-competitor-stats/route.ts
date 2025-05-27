@@ -101,7 +101,7 @@ export async function GET(request: NextRequest) {
         let uniqueCount = 0;
         if (uniqueError) {
           console.error(`Error fetching unique products for integration ${integration.id}:`, uniqueError);
-          
+
           // Fallback query if RPC fails
           const { count, error: fallbackError } = await supabase
             .from('products')
@@ -139,24 +139,32 @@ export async function GET(request: NextRequest) {
       })
     );
 
+    // Get competitor product counts using the same method as competitors page
+    // Use the get_competitor_statistics function for consistency
+    const { data: competitorStatsData, error: competitorStatsError } = await supabase
+      .rpc('get_competitor_statistics', { p_user_id: userId });
+
+    if (competitorStatsError) {
+      console.error('Error fetching competitor statistics:', competitorStatsError);
+    }
+
+    // Create a map of competitor_id to stats for quick lookup
+    const statsMap = new Map<string, { product_count: number, brand_count: number }>();
+    if (competitorStatsData) {
+      competitorStatsData.forEach((stat: any) => {
+        statsMap.set(stat.competitor_id, {
+          product_count: stat.product_count || 0,
+          brand_count: stat.brand_count || 0
+        });
+      });
+    }
+
     // Get competitor product counts
     const competitorStats = await Promise.all(
       competitors.map(async (competitor) => {
-        // Get total products for this competitor
-        const { count: totalCount, error: totalError } = await supabase
-          .from('price_changes')
-          .select('product_id', { count: 'exact', head: true })
-          .eq('user_id', userId)
-          .eq('competitor_id', competitor.id);
-
-        if (totalError) {
-          console.error(`Error fetching product count for competitor ${competitor.id}:`, totalError);
-          return {
-            ...competitor,
-            totalProducts: 0,
-            uniqueProducts: 0
-          };
-        }
+        // Get stats from the map (consistent with competitors page)
+        const stats = statsMap.get(competitor.id) || { product_count: 0, brand_count: 0 };
+        const totalCount = stats.product_count;
 
         // Get unique products (products that only this competitor has)
         const { data: uniqueData, error: uniqueError } = await supabase.rpc(
@@ -170,7 +178,7 @@ export async function GET(request: NextRequest) {
         let uniqueCount = 0;
         if (uniqueError) {
           console.error(`Error fetching unique products for competitor ${competitor.id}:`, uniqueError);
-          
+
           // Fallback query if RPC fails
           const { count, error: fallbackError } = await supabase
             .from('products')
@@ -202,7 +210,7 @@ export async function GET(request: NextRequest) {
 
         return {
           ...competitor,
-          totalProducts: totalCount || 0,
+          totalProducts: totalCount,
           uniqueProducts: uniqueCount
         };
       })

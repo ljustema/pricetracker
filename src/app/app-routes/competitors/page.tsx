@@ -100,6 +100,37 @@ export default async function CompetitorsPage() {
   // Fetch competitors using the cached function
   const competitors = await getCompetitors(userId);
 
+  // Get our products statistics for comparison
+  const supabase = createSupabaseAdminClient();
+
+  // Count our products (products with our_price)
+  const { count: ourProductsCount, error: ourProductsError } = await supabase
+    .from('products')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .not('our_price', 'is', null);
+
+  if (ourProductsError) {
+    console.error('Error fetching our products count:', ourProductsError);
+  }
+
+  // Count our brands using the same approach as competitors
+  // Get distinct brands from products that have our_price
+  const { data: ourBrandsData, error: ourBrandsError } = await supabase
+    .from('products')
+    .select('brand_id')
+    .eq('user_id', userId)
+    .not('our_price', 'is', null)
+    .not('brand_id', 'is', null);
+
+  if (ourBrandsError) {
+    console.error('Error fetching our brands data:', ourBrandsError);
+  }
+
+  // Count distinct brands
+  const uniqueBrandIds = new Set(ourBrandsData?.map(p => p.brand_id) || []);
+  const ourBrandsCount = uniqueBrandIds.size;
+
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="mb-8 flex items-center justify-between">
@@ -110,6 +141,38 @@ export default async function CompetitorsPage() {
         >
           Add Competitor
         </Link>
+      </div>
+
+      {/* Our Products Summary Card */}
+      <div className="mb-8 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900">Our Products</h2>
+            <p className="text-sm text-gray-600">Your product catalog for comparison</p>
+          </div>
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100">
+            <svg className="h-6 w-6 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            </svg>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-4">
+          <Link
+            href="/app-routes/products?has_price=true"
+            className="rounded-md bg-indigo-50 p-3 hover:bg-indigo-100 transition-colors"
+          >
+            <p className="text-sm font-medium text-indigo-700">Total Products</p>
+            <p className="text-2xl font-bold text-indigo-900">{ourProductsCount || 0}</p>
+          </Link>
+          <Link
+            href="/app-routes/brands?our_products=true"
+            className="rounded-md bg-purple-50 p-3 hover:bg-purple-100 transition-colors"
+          >
+            <p className="text-sm font-medium text-purple-700">Total Brands</p>
+            <p className="text-2xl font-bold text-purple-900">{ourBrandsCount || 0}</p>
+          </Link>
+        </div>
       </div>
 
       {competitors && competitors.length > 0 ? (
