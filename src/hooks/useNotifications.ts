@@ -101,9 +101,31 @@ export function useNotifications() {
   }, [checkForNewMessages]);
 
   // Reset unread count (call when user visits support page)
-  const markAsViewed = useCallback(() => {
-    setUnreadCount(0);
-  }, []);
+  const markAsViewed = useCallback(async () => {
+    // Only mark as viewed if user is authenticated and there are unread messages
+    if (status !== 'authenticated' || !session?.user || unreadCount === 0) {
+      return;
+    }
+
+    try {
+      // Call API to mark all messages as read in database
+      const response = await fetch('/api/support/mark-all-read', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        // Only update local state if API call was successful
+        setUnreadCount(0);
+      } else {
+        console.error('Failed to mark messages as read:', await response.text());
+      }
+    } catch (error) {
+      console.error('Error marking messages as read:', error);
+    }
+  }, [session, status, unreadCount]);
 
   useEffect(() => {
     // Only set up polling if user is authenticated

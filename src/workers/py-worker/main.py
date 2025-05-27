@@ -204,12 +204,13 @@ def find_and_claim_job(conn):
                      conn.rollback()
                      return None
 
-                # Attempt to claim the job
+                # Attempt to claim the job and clear any info messages
                 claim_sql = """
                     UPDATE scraper_runs
                     SET status = 'running',
                         started_at = NOW(),
-                        claimed_by_worker_at = NOW()
+                        claimed_by_worker_at = NOW(),
+                        error_message = NULL
                     WHERE id = %s AND status IN ('pending', 'initializing')
                     RETURNING id;
                 """

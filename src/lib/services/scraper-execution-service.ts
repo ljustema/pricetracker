@@ -215,10 +215,11 @@ export class ScraperExecutionService {
           console.error(`Run ${actualRunId}: Error setting timeout: ${timeoutError.message}`);
         }
 
-        // For regular runs, add a short wait to see if the worker picks up the job
+        // For regular runs, add a wait to see if the worker picks up the job
         // This helps prevent the "Network error" issue when the worker hasn't started yet
-        const INITIAL_WAIT_MS = 5000; // 5 seconds
-        console.log(`Run ${actualRunId}: Waiting ${INITIAL_WAIT_MS}ms for worker to initialize...`);
+        // Wait time should be longer than worker polling interval (30 seconds) to avoid false positives
+        const INITIAL_WAIT_MS = 35000; // 35 seconds (slightly longer than worker polling interval)
+        console.log(`Run ${actualRunId}: Waiting ${INITIAL_WAIT_MS}ms for worker to pick up the job...`);
         await new Promise(resolve => setTimeout(resolve, INITIAL_WAIT_MS));
 
         // Check if the job was picked up
@@ -237,7 +238,7 @@ export class ScraperExecutionService {
             .from('scraper_runs')
             .update({
               status: 'initializing',
-              error_message: 'Waiting for worker to pick up the job. If this persists, check that the worker is running.'
+              error_message: 'INFO: Worker is initializing the job. This may take up to 60 seconds.'
             })
             .eq('id', actualRunId);
 
