@@ -8,7 +8,7 @@ import ProductsPageContent from "./products-page-content";
 // Define the structure for complex filters
 export interface ComplexFiltersState {
   brand: string;
-  competitor: string;
+  competitor: string[];  // Changed to array to support multiple competitors
   search: string;
   inactive: boolean;
   has_price: boolean;
@@ -18,6 +18,8 @@ export interface ComplexFiltersState {
   // New price comparison filters
   price_lower_than_competitors: boolean;
   price_higher_than_competitors: boolean;
+  // Add itemsPerPage to manage pagination size
+  itemsPerPage: number;
 }
 
 // Define props for this client wrapper
@@ -50,7 +52,15 @@ export default function ProductsClientWrapper({
   // This state will be the source of truth for complex filters.
   const [complexFilters, setComplexFilters] = useState<ComplexFiltersState>({
     brand: typeof initialSearchParams.brand === 'string' ? initialSearchParams.brand : "",
-    competitor: typeof initialSearchParams.competitor === 'string' ? initialSearchParams.competitor : "",
+    competitor: (() => {
+      // Parse competitor parameter - can be comma-separated string or array
+      if (typeof initialSearchParams.competitor === 'string') {
+        return initialSearchParams.competitor ? initialSearchParams.competitor.split(',').filter(Boolean) : [];
+      } else if (Array.isArray(initialSearchParams.competitor)) {
+        return initialSearchParams.competitor.filter(Boolean);
+      }
+      return [];
+    })(),
     search: typeof initialSearchParams.search === 'string' ? initialSearchParams.search : "",
     inactive: initialSearchParams.inactive === "true",
     has_price: initialSearchParams.has_price === "true",
@@ -60,6 +70,14 @@ export default function ProductsClientWrapper({
     // Initialize new price comparison filters
     price_lower_than_competitors: initialSearchParams.price_lower_than_competitors === "true",
     price_higher_than_competitors: initialSearchParams.price_higher_than_competitors === "true",
+    // Initialize itemsPerPage from URL params, default to 16, validate allowed values
+    itemsPerPage: (() => {
+      if (typeof initialSearchParams.itemsPerPage === 'string') {
+        const parsed = parseInt(initialSearchParams.itemsPerPage, 10);
+        return [16, 32, 64].includes(parsed) ? parsed : 16;
+      }
+      return 16;
+    })(),
   });
 
   const router = useRouter();
@@ -86,8 +104,8 @@ export default function ProductsClientWrapper({
     } else {
       params.delete("brand");
     }
-    if (complexFilters.competitor) {
-      params.set("competitor", complexFilters.competitor);
+    if (complexFilters.competitor && complexFilters.competitor.length > 0) {
+      params.set("competitor", complexFilters.competitor.join(','));
     } else {
       params.delete("competitor");
     }
@@ -127,6 +145,12 @@ export default function ProductsClientWrapper({
         params.set("sortOrder", complexFilters.sortOrder);
     } else {
         params.delete("sortOrder");
+    }
+    // Add itemsPerPage to URL (only if different from default)
+    if (complexFilters.itemsPerPage && complexFilters.itemsPerPage !== 16) {
+        params.set("itemsPerPage", complexFilters.itemsPerPage.toString());
+    } else {
+        params.delete("itemsPerPage");
     }
 
 

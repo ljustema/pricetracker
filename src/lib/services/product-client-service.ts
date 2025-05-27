@@ -314,7 +314,7 @@ export async function exportProductsCSV(filters: {
   category?: string;
   search?: string;
   isActive?: boolean;
-  sourceId?: string;
+  sourceId?: string | string[];
   hasPrice?: boolean;
   sortBy?: string;
   sortOrder?: string;

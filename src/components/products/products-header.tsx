@@ -27,8 +27,16 @@ export default function ProductsHeader() {
     category: searchParams.get('category') || undefined,
     search: searchParams.get('search') || undefined,
     isActive: searchParams.get('inactive') !== 'true',
-    sourceId: searchParams.get('competitor') || undefined,
-    has_price: searchParams.get('has_price') === 'true',
+    sourceId: (() => {
+      // Handle multiple competitor IDs - pass all selected competitor IDs for CSV export
+      const competitorParam = searchParams.get('competitor');
+      if (competitorParam) {
+        const competitorIds = competitorParam.split(',').filter(Boolean);
+        return competitorIds.length > 0 ? competitorIds : undefined;
+      }
+      return undefined;
+    })(),
+    hasPrice: searchParams.get('has_price') === 'true',
     sortBy: searchParams.get('sort') || 'created_at',
     sortOrder: searchParams.get('sortOrder') || 'desc',
     price_lower_than_competitors: searchParams.get('price_lower_than_competitors') === 'true',

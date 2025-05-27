@@ -37,7 +37,14 @@ export async function POST(request: NextRequest) {
       p_category: body.category || null,
       p_search: body.search || null,
       p_is_active: body.isActive === 'true' ? true : (body.isActive === false ? false : null),
-      p_competitor_id: body.sourceId || null, // Use competitor_id instead of source_id
+      p_competitor_ids: (() => {
+        // Handle multiple competitor IDs - now using array parameter
+        const competitorIds = body.sourceId;
+        if (Array.isArray(competitorIds)) {
+          return competitorIds.length > 0 ? competitorIds : null;
+        }
+        return competitorIds ? [competitorIds] : null;
+      })(),
       p_has_price: body.hasPrice !== undefined ? body.hasPrice : null,
       p_price_lower_than_competitors: body.price_lower_than_competitors || null,
       p_price_higher_than_competitors: body.price_higher_than_competitors || null,

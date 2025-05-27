@@ -10,6 +10,7 @@ import ProductsTable from "@/components/products/products-table";
 import ProductsFilter from "@/app/app-routes/products/products-filter";
 import ViewToggle from "@/app/app-routes/products/view-toggle";
 import Pagination from "@/components/ui/pagination";
+import PaginationSizeSelector from "@/components/ui/pagination-size-selector";
 import { useSearchParams } from 'next/navigation'; // Import useSearchParams
 
 // Define the props for the component
@@ -41,7 +42,8 @@ export default function ProductsContent({
   // Use initial props for static data passed from server
   const competitors = initialCompetitors;
   const brands = initialBrands;
-  const itemsPerPage = 12; // Re-declare for use in rendering logic
+  // Get itemsPerPage from complexFilters state instead of hardcoded value
+  const itemsPerPage = complexFilters.itemsPerPage || 16;
   // --- End: Define constants and derived variables ---
 
 
@@ -60,7 +62,7 @@ export default function ProductsContent({
   const categoryFilter = undefined; // Keep if used by API, derive from complexFilters if needed
   const searchQuery = complexFilters.search || undefined;
   const showInactive = complexFilters.inactive;
-  const sourceFilter = complexFilters.competitor || undefined; // Using competitor filter for both competitors and integrations
+  const sourceFilter = complexFilters.competitor && complexFilters.competitor.length > 0 ? complexFilters.competitor : undefined; // Using competitor filter for both competitors and integrations
   const hasPriceFilter = complexFilters.has_price;
   const priceLowerThanCompetitors = complexFilters.price_lower_than_competitors;
   const priceHigherThanCompetitors = complexFilters.price_higher_than_competitors;
@@ -181,6 +183,7 @@ export default function ProductsContent({
       hasPriceFilter,
       priceLowerThanCompetitors, // Add new price comparison filter
       priceHigherThanCompetitors, // Add new price comparison filter
+      itemsPerPage, // Add itemsPerPage to trigger refetch when pagination size changes
       cookieHeader // Keep cookieHeader dependency
     ]);
 
@@ -221,9 +224,15 @@ export default function ProductsContent({
               </span>{" "}
               of <span className="font-medium">{totalProducts}</span> results
             </p>
-            {/* Pass view from currentParams */}
-            {/* # Reason: Pass the view parameter derived from the hook result. */}
-            <ViewToggle defaultView={(currentUrlSearchParams.get('view') as "table" | "cards") || "cards"} />
+            <div className="flex items-center space-x-4">
+              <PaginationSizeSelector
+                currentSize={itemsPerPage}
+                onSizeChange={(newSize) => onComplexFilterChange({ itemsPerPage: newSize })}
+              />
+              {/* Pass view from currentParams */}
+              {/* # Reason: Pass the view parameter derived from the hook result. */}
+              <ViewToggle defaultView={(currentUrlSearchParams.get('view') as "table" | "cards") || "cards"} />
+            </div>
           </div>
 
           {/* Pass filter state and callback down to ProductsFilter */}
@@ -251,7 +260,7 @@ export default function ProductsContent({
               onDelete={(productId) => console.log("Delete product:", productId)}
             />
           ) : (
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
               {products.map((product: Product) => (
                 <ProductCard key={product.id} product={product} competitors={competitors as Competitor[]} />
               ))}

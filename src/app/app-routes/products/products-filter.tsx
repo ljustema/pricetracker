@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { ReadonlyURLSearchParams } from "next/navigation";
 import type { ComplexFiltersState } from './products-client-wrapper';
+import MultiSelectDropdown from '@/components/ui/multi-select-dropdown';
 
 // Move debounce function outside the component so it doesn't get recreated on every render
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -210,28 +211,19 @@ export default function ProductsFilter({
         </div>
 
         <div>
-          <label htmlFor="competitor" className="block text-sm font-medium text-gray-700">
-            Competitor
-          </label>
-          <select
-            id="competitor"
-            className="mt-1 block w-full rounded-md border-gray-300 py-2 pl-3 pr-10 text-base focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
-            value={currentFilters.competitor} // Controlled by prop
-            onChange={(e) => {
-              const newCompetitorValue = e.target.value;
+          <MultiSelectDropdown
+            options={competitors}
+            selectedValues={currentFilters.competitor}
+            onChange={(selectedValues) => {
               // # Reason: Update the complex filter state in the parent.
-              onComplexFilterChange({ competitor: newCompetitorValue });
+              onComplexFilterChange({ competitor: selectedValues });
               // # Reason: The URL update will be handled by the useEffect in ProductsClientWrapper,
               // which reacts to changes in complexFilters.
             }}
-          >
-            <option value="">All Competitors</option>
-            {competitors.map((competitor) => (
-              <option key={competitor.id} value={competitor.id}>
-                {competitor.name}
-              </option>
-            ))}
-          </select>
+            placeholder="All Competitors"
+            label="Competitors"
+            id="competitor"
+          />
         </div>
 
         <div>

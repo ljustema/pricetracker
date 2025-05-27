@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
     const rpcParams = {
       p_user_id: userId,
       p_page: parseInt(body.page || "1", 10),
-      p_page_size: parseInt(body.pageSize || "12", 10),
+      p_page_size: parseInt(body.pageSize || "16", 10),
       p_sort_by: body.sortBy || "created_at",
       p_sort_order: body.sortOrder || "desc",
       p_brand: body.brand || null, // Pass brand ID from the brands table
@@ -53,7 +53,14 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       // Convert isActive: Frontend sends 'true' or undefined (for active) or false (for inactive)
       // Function expects true (active), false (inactive), or null (don't filter)
       p_is_active: body.isActive === 'true' ? true : (body.isActive === false ? false : null),
-      p_competitor_id: body.sourceId || body.competitor || null, // Use sourceId if available, fall back to competitor
+      p_competitor_ids: (() => {
+        // Handle multiple competitor IDs - now using array parameter
+        const competitorIds = body.sourceId || body.competitor;
+        if (Array.isArray(competitorIds)) {
+          return competitorIds.length > 0 ? competitorIds : null;
+        }
+        return competitorIds ? [competitorIds] : null;
+      })(),
       // Convert has_price: Frontend sends true or undefined
       // Function expects true or null
       p_has_price: body.has_price === true ? true : null,
@@ -117,18 +124,22 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       }
 
       // Handle competitor filtering in the fallback query
-      if (rpcParams.p_competitor_id) {
+      const competitorIds = body.sourceId || body.competitor;
+      if (competitorIds && (Array.isArray(competitorIds) ? competitorIds.length > 0 : competitorIds)) {
         try {
-          // First, get all product IDs that have price changes for this competitor
+          // Handle both single competitor ID and multiple competitor IDs
+          const competitorIdArray = Array.isArray(competitorIds) ? competitorIds : [competitorIds];
+
+          // First, get all product IDs that have price changes for these competitors
           // We'll use a more efficient approach with pagination to avoid URL size limitations
           const { data: productIds, error: productIdsError } = await supabase
             .from("price_changes")
             .select("product_id")
             .eq("user_id", userId)
-            .eq("competitor_id", rpcParams.p_competitor_id);
+            .in("competitor_id", competitorIdArray);
 
           if (productIdsError) {
-            console.error("Error fetching product IDs for competitor:", productIdsError);
+            console.error("Error fetching product IDs for competitors:", productIdsError);
             throw new Error(`Error fetching product IDs: ${productIdsError.message}`);
           }
 
@@ -219,7 +230,7 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
               });
             }
           } else {
-            // If no products found for this competitor, return empty result
+            // If no products found for these competitors, return empty result
             query = query.eq("id", "00000000-0000-0000-0000-000000000000"); // This will return no results
           }
         } catch (e) {

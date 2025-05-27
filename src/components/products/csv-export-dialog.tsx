@@ -21,7 +21,7 @@ interface CSVExportDialogProps {
     category?: string;
     search?: string;
     isActive?: boolean;
-    sourceId?: string;
+    sourceId?: string | string[];
     hasPrice?: boolean;
     sortBy?: string;
     sortOrder?: string;

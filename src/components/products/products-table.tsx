@@ -81,9 +81,10 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
   })();
 
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full divide-y divide-gray-200">
-        <thead className="bg-gray-50">
+    <div className="overflow-x-auto border rounded-md shadow-md">
+      <div className="max-h-[800px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
           <tr>
             <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
               Product
@@ -280,6 +281,7 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
