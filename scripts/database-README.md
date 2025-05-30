@@ -10,10 +10,10 @@ The database setup is organized into multiple, ordered scripts located in the `d
 
 0.  **`db_setup/00_extensions.sql`**: Sets up all required PostgreSQL extensions (pg_cron, pgsodium, pg_graphql, etc.) and related event triggers.
 1.  **`db_setup/01_next_auth_schema.sql`**: Sets up the `next_auth` schema required by NextAuth.js (tables, grants, helper function).
-2.  **`db_setup/02_public_tables.sql`**: Creates all application-specific tables (`user_profiles`, `products`, `competitors`, `scrapers`, `scraped_products`, `price_changes`, `scraper_runs`, `brands`, `brand_aliases`, `integrations`, `integration_runs`, `staged_integration_products`, etc.) in the `public` schema, along with necessary indexes and comments.
+2.  **`db_setup/02_public_tables.sql`**: Creates all application-specific tables (`user_profiles`, `products`, `competitors`, `scrapers`, `temp_competitors_scraped_data`, `price_changes`, `scraper_runs`, `brands`, `brand_aliases`, `integrations`, `integration_runs`, `temp_integrations_scraped_data`, etc.) in the `public` schema, along with necessary indexes and comments.
 3.  **`db_setup/03_public_rls.sql`**: Applies Row Level Security (RLS) policies to the tables in the `public` schema to ensure users can only access their own data.
-4.  **`db_setup/04_public_functions_triggers.sql`**: Creates database functions and triggers used by the application (e.g., `create_profile_for_user`, `record_price_change`, `get_products_filtered`, `cleanup_scraped_products`, `process_staged_integration_products`).
-5.  **`db_setup/05_public_jobs.sql`**: Schedules a daily job using `pg_cron` to run the `cleanup_scraped_products` function and sets up error handling for worker processes. **Requires the `pg_cron` extension to be enabled in your Supabase project.**
+4.  **`db_setup/04_public_functions_triggers.sql`**: Creates database functions and triggers used by the application (e.g., `create_profile_for_user`, `record_price_change`, `get_products_filtered`, `cleanup_temp_competitors_scraped_data`, `process_pending_integration_products`).
+5.  **`db_setup/05_public_jobs.sql`**: Schedules a daily job using `pg_cron` to run the `cleanup_temp_competitors_scraped_data` function and sets up error handling for worker processes. **Requires the `pg_cron` extension to be enabled in your Supabase project.**
 6.  **`db_setup/06_other.sql`**: Contains other database objects including schemas, types, and default privileges that don't fit into the categories above.
 
 **Execution Order:**
@@ -50,7 +50,7 @@ If you need to completely reset the application's database structure (e.g., for 
 -- Unscheduling the cron jobs if they exist
 DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
-    PERFORM cron.unschedule('cleanup_scraped_products_job');
+    PERFORM cron.unschedule('cleanup_temp_competitors_scraped_data_job');
     PERFORM cron.unschedule('worker_timeout_handler');
   END IF;
 END $$;

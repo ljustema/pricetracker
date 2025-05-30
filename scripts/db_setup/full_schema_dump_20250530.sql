@@ -1111,25 +1111,25 @@ $$;
 
 
 --
--- Name: cleanup_scraped_products(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: cleanup_temp_competitors_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.cleanup_scraped_products() RETURNS void
+CREATE FUNCTION public.cleanup_temp_competitors_scraped_data() RETURNS void
     LANGUAGE plpgsql
     AS $$
 BEGIN
-  -- Remove all records in scraped_products that are older than 30 days
-  DELETE FROM scraped_products
+  -- Remove all records in temp_competitors_scraped_data that are older than 30 days
+  DELETE FROM temp_competitors_scraped_data
   WHERE scraped_at < NOW() - INTERVAL '30 days';
 
   -- Keep only the most recent record for each product/competitor combination
   -- for records that are between 3 and 30 days old
-  DELETE FROM scraped_products sp1
+  DELETE FROM temp_competitors_scraped_data sp1
   WHERE scraped_at < NOW() - INTERVAL '3 days'
     AND scraped_at > NOW() - INTERVAL '30 days'
     AND EXISTS (
       SELECT 1
-      FROM scraped_products sp2
+      FROM temp_competitors_scraped_data sp2
       WHERE sp2.product_id = sp1.product_id
         AND sp2.competitor_id = sp1.competitor_id
         AND sp2.scraped_at > sp1.scraped_at
@@ -1137,7 +1137,7 @@ BEGIN
 
   -- Remove products without product_id that are older than 1 day
   -- (these couldn't be matched and have insufficient data)
-  DELETE FROM scraped_products
+  DELETE FROM temp_competitors_scraped_data
   WHERE product_id IS NULL
     AND scraped_at < NOW() - INTERVAL '1 day';
 END;
@@ -1915,19 +1915,19 @@ BEGIN
     SELECT jsonb_build_object(
         'processed', COUNT(*) FILTER (WHERE status = 'processed'),
         'created', COUNT(*) FILTER (WHERE status = 'processed' AND product_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM price_changes pc WHERE pc.product_id = staged_integration_products.product_id AND pc.changed_at < staged_integration_products.processed_at
+            SELECT 1 FROM price_changes pc WHERE pc.product_id = temp_integrations_scraped_data.product_id AND pc.changed_at < temp_integrations_scraped_data.processed_at
         )),
         'updated', COUNT(*) FILTER (WHERE status = 'processed' AND product_id IS NOT NULL AND EXISTS (
-            SELECT 1 FROM price_changes pc WHERE pc.product_id = staged_integration_products.product_id AND pc.changed_at < staged_integration_products.processed_at
+            SELECT 1 FROM price_changes pc WHERE pc.product_id = temp_integrations_scraped_data.product_id AND pc.changed_at < temp_integrations_scraped_data.processed_at
         )),
         'errors', COUNT(*) FILTER (WHERE status = 'error'),
         'pending', COUNT(*) FILTER (WHERE status = 'pending')
     )
     INTO stats
-    FROM staged_integration_products
+    FROM temp_integrations_scraped_data
     WHERE integration_run_id = run_id;
 
-    RETURN stats;
+    RETURN COALESCE(stats, '{"processed": 0, "created": 0, "updated": 0, "errors": 0, "pending": 0}'::jsonb);
 END;
 $$;
 
@@ -3151,8 +3151,8 @@ DECLARE
     duplicate_record RECORD;
     result JSONB;
     price_changes_count INT := 0;
-    scraped_products_count INT := 0;
-    staged_products_count INT := 0;
+    temp_competitors_count INT := 0;
+    temp_integrations_count INT := 0;
     remaining_refs BOOLEAN;
 BEGIN
     -- Set a longer statement timeout for this operation
@@ -3206,25 +3206,25 @@ BEGIN
     
     GET DIAGNOSTICS price_changes_count = ROW_COUNT;
     
-    -- Update references in scraped_products table and count affected rows
-    UPDATE scraped_products
+    -- Update references in temp_competitors_scraped_data table and count affected rows
+    UPDATE temp_competitors_scraped_data
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
     
-    GET DIAGNOSTICS scraped_products_count = ROW_COUNT;
+    GET DIAGNOSTICS temp_competitors_count = ROW_COUNT;
     
-    -- Update references in staged_integration_products table and count affected rows
-    UPDATE staged_integration_products
+    -- Update references in temp_integrations_scraped_data table and count affected rows
+    UPDATE temp_integrations_scraped_data
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
     
-    GET DIAGNOSTICS staged_products_count = ROW_COUNT;
+    GET DIAGNOSTICS temp_integrations_count = ROW_COUNT;
     
     -- Check if there are any remaining references to the duplicate product
     SELECT EXISTS (
-        SELECT 1 FROM staged_integration_products WHERE product_id = duplicate_id
+        SELECT 1 FROM temp_integrations_scraped_data WHERE product_id = duplicate_id
         UNION ALL
-        SELECT 1 FROM scraped_products WHERE product_id = duplicate_id
+        SELECT 1 FROM temp_competitors_scraped_data WHERE product_id = duplicate_id
         UNION ALL
         SELECT 1 FROM price_changes WHERE product_id = duplicate_id
         LIMIT 1
@@ -3239,8 +3239,8 @@ BEGIN
             'duplicate_id', duplicate_id,
             'stats', jsonb_build_object(
                 'price_changes_updated', price_changes_count,
-                'scraped_products_updated', scraped_products_count,
-                'staged_products_updated', staged_products_count
+                'temp_competitors_updated', temp_competitors_count,
+                'temp_integrations_updated', temp_integrations_count
             )
         );
     END IF;
@@ -3257,8 +3257,8 @@ BEGIN
             'duplicate_id', duplicate_id,
             'stats', jsonb_build_object(
                 'price_changes_updated', price_changes_count,
-                'scraped_products_updated', scraped_products_count,
-                'staged_products_updated', staged_products_count
+                'temp_competitors_updated', temp_competitors_count,
+                'temp_integrations_updated', temp_integrations_count
             )
         );
     EXCEPTION WHEN OTHERS THEN
@@ -3271,8 +3271,8 @@ BEGIN
             'duplicate_id', duplicate_id,
             'stats', jsonb_build_object(
                 'price_changes_updated', price_changes_count,
-                'scraped_products_updated', scraped_products_count,
-                'staged_products_updated', staged_products_count
+                'temp_competitors_updated', temp_competitors_count,
+                'temp_integrations_updated', temp_integrations_count
             )
         );
     END;
@@ -3320,8 +3320,8 @@ DECLARE
     stats JSONB;
 BEGIN
     -- Force processing of any pending products by updating them in place
-    UPDATE staged_integration_products
-    SET status = status  -- This is a no-op update that will trigger the AFTER UPDATE trigger
+    UPDATE temp_integrations_scraped_data
+    SET status = status  -- This is a no-op update that will trigger the BEFORE UPDATE trigger
     WHERE integration_run_id = run_id AND status = 'pending';
 
     -- Get the statistics
@@ -3371,159 +3371,103 @@ BEGIN
             new_price := NULL;
         END IF;
 
-        -- Try to find the brand ID
-        IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
-            -- Look for an exact match first
-            SELECT id INTO v_brand_id
-            FROM brands
-            WHERE user_id = NEW.user_id
-              AND LOWER(name) = LOWER(NEW.brand)
-              AND is_active = TRUE
-            LIMIT 1;
+        -- Find or create brand
+        SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
 
-            -- If no exact match, try to find a similar brand
-            IF v_brand_id IS NULL THEN
-                SELECT id INTO v_brand_id
-                FROM brands
-                WHERE user_id = NEW.user_id
-                  AND is_active = TRUE
-                  AND (
-                    -- Try different similarity approaches
-                    LOWER(name) LIKE LOWER('%' || NEW.brand || '%') OR
-                    LOWER(NEW.brand) LIKE LOWER('%' || name || '%')
-                  )
-                ORDER BY
-                    -- Prioritize shorter names that are more likely to be exact matches
-                    LENGTH(name) ASC
-                LIMIT 1;
-            END IF;
-        END IF;
-
-        -- Try to find an existing product by EAN or SKU+brand
-        IF (NEW.ean IS NOT NULL AND NEW.ean != '') THEN
-            -- Match by EAN (preferred)
-            SELECT id, our_price INTO existing_product_id, old_price
+        -- Try to find existing product by EAN first
+        IF NEW.ean IS NOT NULL AND NEW.ean != '' THEN
+            SELECT id INTO existing_product_id
             FROM products
             WHERE user_id = NEW.user_id
               AND ean = NEW.ean
             LIMIT 1;
-        ELSIF (NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.brand IS NOT NULL AND NEW.brand != '' AND v_brand_id IS NOT NULL) THEN
-            -- Match by SKU + brand
-            SELECT id, our_price INTO existing_product_id, old_price
+        END IF;
+
+        -- If not found by EAN, try to match by brand + SKU
+        IF existing_product_id IS NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL THEN
+            SELECT id INTO existing_product_id
             FROM products
             WHERE user_id = NEW.user_id
-              AND sku = NEW.sku
               AND brand_id = v_brand_id
+              AND sku = NEW.sku
             LIMIT 1;
         END IF;
 
-        -- If we found an existing product, update it
         IF existing_product_id IS NOT NULL THEN
-            -- Update the product with all available data
-            -- IMPORTANT: Always update all fields with the latest values from integration
+            -- Product exists - UPDATE ALL FIELDS (we own our products)
+            -- Get current our_price for price change tracking
+            SELECT our_price INTO old_price
+            FROM products
+            WHERE id = existing_product_id;
+
+            -- Update ALL product fields with integration data
             UPDATE products
             SET
-                name = NEW.name,
-                sku = NEW.sku,
-                ean = NEW.ean,
-                brand_id = v_brand_id,
-                image_url = NEW.image_url,
-                our_price = new_price, -- Use the price directly without adding tax
-                wholesale_price = NEW.wholesale_price,
-                currency_code = COALESCE(NEW.currency_code, 'SEK'),
-                url = NEW.url,
-                category = COALESCE(NEW.raw_data->>'category', category),
-                description = COALESCE(NEW.raw_data->>'description', description),
+                name = COALESCE(NEW.name, name),
+                sku = COALESCE(NEW.sku, sku),
+                ean = COALESCE(NEW.ean, ean),
+                brand = COALESCE(NEW.brand, brand),
+                brand_id = COALESCE(v_brand_id, brand_id),
+                our_price = new_price,
+                wholesale_price = COALESCE(NEW.wholesale_price, wholesale_price),
+                image_url = COALESCE(NEW.image_url, image_url),
+                url = COALESCE(NEW.url, url),
+                currency_code = COALESCE(NEW.currency_code, currency_code),
                 updated_at = NOW()
             WHERE id = existing_product_id;
 
-            -- Record price change if price has changed
-            IF old_price IS DISTINCT FROM new_price AND new_price IS NOT NULL THEN
-                INSERT INTO price_changes (
-                    user_id,
-                    product_id,
-                    competitor_id,
-                    old_price,
-                    new_price,
-                    price_change_percentage,
-                    integration_id,
-                    currency_code,
-                    url
-                )
-                SELECT
-                    NEW.user_id,
-                    existing_product_id,
-                    NULL,
-                    old_price,
-                    new_price,
-                    CASE
-                        WHEN old_price = 0 OR old_price IS NULL THEN 0
-                        ELSE ((new_price - old_price) / old_price) * 100
-                    END,
-                    NEW.integration_id,
-                    COALESCE(NEW.currency_code, 'SEK'),
-                    NEW.url
-                WHERE old_price IS NOT NULL OR new_price IS NOT NULL;
-            END IF;
-
-            -- Update the staged product
+            -- Set the product_id in the staged record
             NEW.product_id := existing_product_id;
-            NEW.status := 'processed';
-            NEW.processed_at := NOW();
         ELSE
-            -- Create a new product only if we have sufficient data
-            -- This is a redundant check since we already validated above, but keeping it for safety
-            IF (NEW.ean IS NOT NULL AND NEW.ean != '') OR
-               (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL) THEN
+            -- Product doesn't exist - CREATE new product
+            INSERT INTO products (
+                user_id, name, sku, ean, brand, brand_id,
+                our_price, wholesale_price, image_url, url, currency_code,
+                is_active, created_at, updated_at
+            ) VALUES (
+                NEW.user_id, NEW.name, NEW.sku, NEW.ean, NEW.brand, v_brand_id,
+                new_price, NEW.wholesale_price, NEW.image_url, NEW.url, NEW.currency_code,
+                true, NOW(), NOW()
+            ) RETURNING id INTO existing_product_id;
 
-                INSERT INTO products (
-                    user_id,
-                    name,
-                    sku,
-                    ean,
-                    brand_id,
-                    image_url,
-                    our_price,
-                    wholesale_price,
-                    currency_code,
-                    url,
-                    category,
-                    description
-                )
-                VALUES (
-                    NEW.user_id,
-                    NEW.name,
-                    NEW.sku,
-                    NEW.ean,
-                    v_brand_id,
-                    NEW.image_url,
-                    new_price, -- Use the price directly without adding tax
-                    NEW.wholesale_price,
-                    COALESCE(NEW.currency_code, 'SEK'),
-                    NEW.url,
-                    COALESCE(NEW.raw_data->>'category', NULL),
-                    COALESCE(NEW.raw_data->>'description', NULL)
-                )
-                RETURNING id INTO existing_product_id;
-
-                -- Update the staged product
-                NEW.product_id := existing_product_id;
-                NEW.status := 'processed';
-                NEW.processed_at := NOW();
-            ELSE
-                -- Product lacks sufficient data, mark as error
-                NEW.status := 'error';
-                NEW.error_message := 'Product lacks sufficient data for matching. Requires either EAN or both SKU and brand.';
-            END IF;
+            -- Set the product_id in the staged record
+            NEW.product_id := existing_product_id;
         END IF;
 
-        EXCEPTION WHEN OTHERS THEN
-            -- Handle errors
-            NEW.status := 'error';
-            NEW.error_message := SQLERRM;
-    END;
+        -- Record price change if we have a price
+        IF new_price IS NOT NULL THEN
+            INSERT INTO price_changes (
+                user_id, product_id, integration_id, old_price, new_price,
+                price_change_percentage, currency_code, changed_at, url
+            ) VALUES (
+                NEW.user_id, existing_product_id, NEW.integration_id,
+                old_price, new_price,
+                CASE
+                    WHEN old_price IS NOT NULL AND old_price > 0 THEN
+                        ROUND(((new_price - old_price) / old_price * 100)::numeric, 2)
+                    ELSE NULL
+                END,
+                NEW.currency_code, NOW(), NEW.url
+            );
+        END IF;
 
-    RETURN NEW;
+        -- Mark as processed and set processed timestamp
+        NEW.status := 'processed';
+        NEW.processed_at := NOW();
+
+        -- Delete from temp table (cleanup after processing)
+        DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
+        
+        -- Return NULL to prevent the UPDATE (since we deleted the record)
+        RETURN NULL;
+
+    EXCEPTION WHEN OTHERS THEN
+        -- Mark as error and store error message
+        NEW.status := 'error';
+        NEW.error_message := SQLERRM;
+        NEW.processed_at := NOW();
+        RETURN NEW;
+    END;
 END;
 $$;
 
@@ -3709,15 +3653,15 @@ DECLARE
     stats JSONB;
 BEGIN
     -- Reset error products to pending status
-    UPDATE staged_integration_products
+    UPDATE temp_integrations_scraped_data
     SET
         status = 'pending',
         error_message = NULL
     WHERE integration_run_id = run_id AND status = 'error';
 
     -- Force processing of these products
-    UPDATE staged_integration_products
-    SET status = status  -- This is a no-op update that will trigger the AFTER UPDATE trigger
+    UPDATE temp_integrations_scraped_data
+    SET status = status  -- This is a no-op update that will trigger the BEFORE UPDATE trigger
     WHERE integration_run_id = run_id AND status = 'pending';
 
     -- Get the statistics
@@ -5858,37 +5802,6 @@ CREATE TABLE public.rate_limit_log (
 
 
 --
--- Name: scraped_products; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraped_products (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    scraper_id uuid,
-    competitor_id uuid NOT NULL,
-    product_id uuid,
-    name text NOT NULL,
-    price numeric(10,2) NOT NULL,
-    currency text DEFAULT 'USD'::text,
-    url text,
-    image_url text,
-    sku text,
-    brand text,
-    scraped_at timestamp with time zone DEFAULT now(),
-    ean text,
-    currency_code text,
-    CONSTRAINT scraped_products_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
-);
-
-
---
--- Name: COLUMN scraped_products.currency_code; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraped_products.currency_code IS 'ISO 4217 currency code determined by the scraper';
-
-
---
 -- Name: scraper_ai_sessions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6035,49 +5948,6 @@ COMMENT ON COLUMN public.scrapers.scrape_only_own_products IS 'Flag to only scra
 
 
 --
--- Name: staged_integration_products; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.staged_integration_products (
-    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
-    integration_run_id uuid NOT NULL,
-    integration_id uuid NOT NULL,
-    user_id uuid NOT NULL,
-    prestashop_product_id text,
-    name text NOT NULL,
-    sku text,
-    ean text,
-    brand text,
-    price numeric(10,2),
-    wholesale_price numeric(10,2),
-    image_url text,
-    raw_data jsonb,
-    status text DEFAULT 'pending'::text NOT NULL,
-    error_message text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    processed_at timestamp with time zone,
-    product_id uuid,
-    currency_code text,
-    url text,
-    CONSTRAINT staged_integration_products_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
-);
-
-
---
--- Name: COLUMN staged_integration_products.currency_code; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.staged_integration_products.currency_code IS 'ISO 4217 currency code from the integration source';
-
-
---
--- Name: COLUMN staged_integration_products.url; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.staged_integration_products.url IS 'URL to the product on the integration platform';
-
-
---
 -- Name: support_conversations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6114,6 +5984,59 @@ CREATE TABLE public.support_messages (
     created_at timestamp with time zone DEFAULT now(),
     read_by_recipient boolean DEFAULT false,
     CONSTRAINT support_messages_sender_type_check CHECK ((sender_type = ANY (ARRAY['user'::text, 'admin'::text])))
+);
+
+
+--
+-- Name: temp_competitors_scraped_data; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.temp_competitors_scraped_data (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    scraper_id uuid,
+    competitor_id uuid NOT NULL,
+    product_id uuid,
+    name text NOT NULL,
+    price numeric(10,2) NOT NULL,
+    currency text DEFAULT 'USD'::text,
+    url text,
+    image_url text,
+    sku text,
+    brand text,
+    scraped_at timestamp with time zone DEFAULT now(),
+    ean text,
+    currency_code text,
+    CONSTRAINT temp_competitors_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
+);
+
+
+--
+-- Name: temp_integrations_scraped_data; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.temp_integrations_scraped_data (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    integration_run_id uuid NOT NULL,
+    integration_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    prestashop_product_id text,
+    name text NOT NULL,
+    sku text,
+    ean text,
+    brand text,
+    price numeric(10,2),
+    wholesale_price numeric(10,2),
+    image_url text,
+    raw_data jsonb,
+    status text DEFAULT 'pending'::text NOT NULL,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    processed_at timestamp with time zone,
+    product_id uuid,
+    currency_code text,
+    url text,
+    CONSTRAINT temp_integrations_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
 );
 
 
@@ -6757,14 +6680,6 @@ ALTER TABLE ONLY public.rate_limit_log
 
 
 --
--- Name: scraped_products scraped_products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraped_products
-    ADD CONSTRAINT scraped_products_pkey PRIMARY KEY (id);
-
-
---
 -- Name: scraper_ai_sessions scraper_ai_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6789,14 +6704,6 @@ ALTER TABLE ONLY public.scrapers
 
 
 --
--- Name: staged_integration_products staged_integration_products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.staged_integration_products
-    ADD CONSTRAINT staged_integration_products_pkey PRIMARY KEY (id);
-
-
---
 -- Name: support_conversations support_conversations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6810,6 +6717,22 @@ ALTER TABLE ONLY public.support_conversations
 
 ALTER TABLE ONLY public.support_messages
     ADD CONSTRAINT support_messages_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: temp_integrations_scraped_data temp_integrations_scraped_data_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_integrations_scraped_data
+    ADD CONSTRAINT temp_integrations_scraped_data_pkey PRIMARY KEY (id);
 
 
 --
@@ -7565,27 +7488,6 @@ CREATE INDEX idx_rate_limit_log_window_start ON public.rate_limit_log USING btre
 
 
 --
--- Name: idx_scraped_products_brand_sku; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_scraped_products_brand_sku ON public.scraped_products USING btree (brand, sku);
-
-
---
--- Name: idx_scraped_products_ean; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_scraped_products_ean ON public.scraped_products USING btree (ean);
-
-
---
--- Name: idx_scraped_products_scraper_id_scraped_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_scraped_products_scraper_id_scraped_at ON public.scraped_products USING btree (scraper_id, scraped_at);
-
-
---
 -- Name: idx_scraper_ai_sessions_competitor_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7663,41 +7565,6 @@ CREATE INDEX idx_scrapers_scraper_type ON public.scrapers USING btree (scraper_t
 
 
 --
--- Name: idx_staged_integration_products_ean; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_staged_integration_products_ean ON public.staged_integration_products USING btree (ean) WHERE (ean IS NOT NULL);
-
-
---
--- Name: idx_staged_integration_products_integration_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_staged_integration_products_integration_id ON public.staged_integration_products USING btree (integration_id);
-
-
---
--- Name: idx_staged_integration_products_integration_run_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_staged_integration_products_integration_run_id ON public.staged_integration_products USING btree (integration_run_id);
-
-
---
--- Name: idx_staged_integration_products_sku_brand; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_staged_integration_products_sku_brand ON public.staged_integration_products USING btree (sku, brand) WHERE ((sku IS NOT NULL) AND (brand IS NOT NULL));
-
-
---
--- Name: idx_staged_integration_products_status; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_staged_integration_products_status ON public.staged_integration_products USING btree (status);
-
-
---
 -- Name: idx_support_conversations_admin_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7758,6 +7625,55 @@ CREATE INDEX idx_support_messages_sender_id ON public.support_messages USING btr
 --
 
 CREATE INDEX idx_support_messages_unread ON public.support_messages USING btree (conversation_id, sender_type, read_by_recipient);
+
+
+--
+-- Name: idx_temp_competitors_scraped_data_competitor_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_competitor_id ON public.temp_competitors_scraped_data USING btree (competitor_id);
+
+
+--
+-- Name: idx_temp_competitors_scraped_data_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_product_id ON public.temp_competitors_scraped_data USING btree (product_id);
+
+
+--
+-- Name: idx_temp_competitors_scraped_data_scraped_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_scraped_at ON public.temp_competitors_scraped_data USING btree (scraped_at);
+
+
+--
+-- Name: idx_temp_competitors_scraped_data_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_user_id ON public.temp_competitors_scraped_data USING btree (user_id);
+
+
+--
+-- Name: idx_temp_integrations_scraped_data_integration_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_integrations_scraped_data_integration_run_id ON public.temp_integrations_scraped_data USING btree (integration_run_id);
+
+
+--
+-- Name: idx_temp_integrations_scraped_data_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_integrations_scraped_data_product_id ON public.temp_integrations_scraped_data USING btree (product_id);
+
+
+--
+-- Name: idx_temp_integrations_scraped_data_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_integrations_scraped_data_status ON public.temp_integrations_scraped_data USING btree (status);
 
 
 --
@@ -7866,17 +7782,17 @@ CREATE TRIGGER one_active_scraper_per_competitor BEFORE INSERT OR UPDATE ON publ
 
 
 --
--- Name: scraped_products price_change_trigger; Type: TRIGGER; Schema: public; Owner: -
+-- Name: temp_competitors_scraped_data price_change_trigger; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER price_change_trigger AFTER INSERT ON public.scraped_products FOR EACH ROW EXECUTE FUNCTION public.record_price_change();
+CREATE TRIGGER price_change_trigger AFTER INSERT ON public.temp_competitors_scraped_data FOR EACH ROW EXECUTE FUNCTION public.record_price_change();
 
 
 --
--- Name: staged_integration_products process_staged_integration_product_trigger; Type: TRIGGER; Schema: public; Owner: -
+-- Name: temp_integrations_scraped_data process_temp_integration_product_trigger; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER process_staged_integration_product_trigger BEFORE UPDATE ON public.staged_integration_products FOR EACH ROW EXECUTE FUNCTION public.process_staged_integration_product();
+CREATE TRIGGER process_temp_integration_product_trigger BEFORE UPDATE ON public.temp_integrations_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_staged_integration_product();
 
 
 --
@@ -8231,38 +8147,6 @@ ALTER TABLE ONLY public.professional_scraper_requests
 
 
 --
--- Name: scraped_products scraped_products_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraped_products
-    ADD CONSTRAINT scraped_products_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
-
-
---
--- Name: scraped_products scraped_products_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraped_products
-    ADD CONSTRAINT scraped_products_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
-
-
---
--- Name: scraped_products scraped_products_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraped_products
-    ADD CONSTRAINT scraped_products_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
-
-
---
--- Name: scraped_products scraped_products_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraped_products
-    ADD CONSTRAINT scraped_products_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-
-
---
 -- Name: scraper_ai_sessions scraper_ai_sessions_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8311,38 +8195,6 @@ ALTER TABLE ONLY public.scrapers
 
 
 --
--- Name: staged_integration_products staged_integration_products_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.staged_integration_products
-    ADD CONSTRAINT staged_integration_products_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id) ON DELETE CASCADE;
-
-
---
--- Name: staged_integration_products staged_integration_products_integration_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.staged_integration_products
-    ADD CONSTRAINT staged_integration_products_integration_run_id_fkey FOREIGN KEY (integration_run_id) REFERENCES public.integration_runs(id) ON DELETE CASCADE;
-
-
---
--- Name: staged_integration_products staged_integration_products_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.staged_integration_products
-    ADD CONSTRAINT staged_integration_products_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
-
-
---
--- Name: staged_integration_products staged_integration_products_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.staged_integration_products
-    ADD CONSTRAINT staged_integration_products_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
-
---
 -- Name: support_conversations support_conversations_admin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8372,6 +8224,54 @@ ALTER TABLE ONLY public.support_messages
 
 ALTER TABLE ONLY public.support_messages
     ADD CONSTRAINT support_messages_sender_id_fkey FOREIGN KEY (sender_id) REFERENCES public.user_profiles(id);
+
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id) ON DELETE CASCADE;
+
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
+
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id) ON DELETE CASCADE;
+
+
+--
+-- Name: temp_integrations_scraped_data temp_integrations_scraped_data_integration_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_integrations_scraped_data
+    ADD CONSTRAINT temp_integrations_scraped_data_integration_run_id_fkey FOREIGN KEY (integration_run_id) REFERENCES public.integration_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: temp_integrations_scraped_data temp_integrations_scraped_data_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_integrations_scraped_data
+    ADD CONSTRAINT temp_integrations_scraped_data_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
 
 
 --
@@ -8612,13 +8512,6 @@ CREATE POLICY "Users can delete their own scrapers" ON public.scrapers FOR DELET
 
 
 --
--- Name: staged_integration_products Users can delete their own staged integration products; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can delete their own staged integration products" ON public.staged_integration_products FOR DELETE USING ((auth.uid() = user_id));
-
-
---
 -- Name: csv_uploads Users can insert their own CSV uploads; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -8689,13 +8582,6 @@ CREATE POLICY "Users can insert their own products" ON public.products FOR INSER
 
 
 --
--- Name: scraped_products Users can insert their own scraped products; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraped products" ON public.scraped_products FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
-
---
 -- Name: scraper_ai_sessions Users can insert their own scraper AI sessions; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -8710,10 +8596,17 @@ CREATE POLICY "Users can insert their own scrapers" ON public.scrapers FOR INSER
 
 
 --
--- Name: staged_integration_products Users can insert their own staged integration products; Type: POLICY; Schema: public; Owner: -
+-- Name: temp_integrations_scraped_data Users can only access their own integration products; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can insert their own staged integration products" ON public.staged_integration_products FOR INSERT WITH CHECK ((auth.uid() = user_id));
+CREATE POLICY "Users can only access their own integration products" ON public.temp_integrations_scraped_data USING ((auth.uid() = user_id));
+
+
+--
+-- Name: temp_competitors_scraped_data Users can only access their own scraped products; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can only access their own scraped products" ON public.temp_competitors_scraped_data USING ((auth.uid() = user_id));
 
 
 --
@@ -8791,13 +8684,6 @@ CREATE POLICY "Users can update their own scraper AI sessions" ON public.scraper
 --
 
 CREATE POLICY "Users can update their own scrapers" ON public.scrapers FOR UPDATE USING ((auth.uid() = user_id));
-
-
---
--- Name: staged_integration_products Users can update their own staged integration products; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own staged integration products" ON public.staged_integration_products FOR UPDATE USING ((auth.uid() = user_id));
 
 
 --
@@ -8901,13 +8787,6 @@ CREATE POLICY "Users can view their own profile" ON public.user_profiles FOR SEL
 
 
 --
--- Name: scraped_products Users can view their own scraped products; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraped products" ON public.scraped_products FOR SELECT USING ((auth.uid() = user_id));
-
-
---
 -- Name: scraper_ai_sessions Users can view their own scraper AI sessions; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -8919,13 +8798,6 @@ CREATE POLICY "Users can view their own scraper AI sessions" ON public.scraper_a
 --
 
 CREATE POLICY "Users can view their own scrapers" ON public.scrapers FOR SELECT USING ((auth.uid() = user_id));
-
-
---
--- Name: staged_integration_products Users can view their own staged integration products; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own staged integration products" ON public.staged_integration_products FOR SELECT USING ((auth.uid() = user_id));
 
 
 --
@@ -9050,12 +8922,6 @@ ALTER TABLE public.professional_scraper_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.rate_limit_log ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: scraped_products; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraped_products ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: scraper_ai_sessions; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -9074,12 +8940,6 @@ ALTER TABLE public.scraper_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scrapers ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: staged_integration_products; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.staged_integration_products ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: support_conversations; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -9090,6 +8950,18 @@ ALTER TABLE public.support_conversations ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.support_messages ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: temp_competitors_scraped_data; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.temp_competitors_scraped_data ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: temp_integrations_scraped_data; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.temp_integrations_scraped_data ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: user_profiles; Type: ROW SECURITY; Schema: public; Owner: -

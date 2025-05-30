@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-05-28 15:44:40
+-- Generated: 2025-05-30 15:46:13
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -570,12 +570,12 @@ $$;
 
 -- Keep only the most recent record for each product/competitor combination
   -- for records that are between 3 and 30 days old
-  DELETE FROM scraped_products sp1
+  DELETE FROM temp_competitors_scraped_data sp1
   WHERE scraped_at < NOW() - INTERVAL '3 days'
     AND scraped_at > NOW() - INTERVAL '30 days'
     AND EXISTS (
       SELECT 1
-      FROM scraped_products sp2
+      FROM temp_competitors_scraped_data sp2
       WHERE sp2.product_id = sp1.product_id
         AND sp2.competitor_id = sp1.competitor_id
         AND sp2.scraped_at > sp1.scraped_at
@@ -583,7 +583,7 @@ $$;
 
 -- Remove products without product_id that are older than 1 day
   -- (these couldn't be matched and have insufficient data)
-  DELETE FROM scraped_products
+  DELETE FROM temp_competitors_scraped_data
   WHERE product_id IS NULL
     AND scraped_at < NOW() - INTERVAL '1 day';
 
@@ -782,19 +782,19 @@ BEGIN
     SELECT jsonb_build_object(
         'processed', COUNT(*) FILTER (WHERE status = 'processed'),
         'created', COUNT(*) FILTER (WHERE status = 'processed' AND product_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM price_changes pc WHERE pc.product_id = staged_integration_products.product_id AND pc.changed_at < staged_integration_products.processed_at
+            SELECT 1 FROM price_changes pc WHERE pc.product_id = temp_integrations_scraped_data.product_id AND pc.changed_at < temp_integrations_scraped_data.processed_at
         )),
         'updated', COUNT(*) FILTER (WHERE status = 'processed' AND product_id IS NOT NULL AND EXISTS (
-            SELECT 1 FROM price_changes pc WHERE pc.product_id = staged_integration_products.product_id AND pc.changed_at < staged_integration_products.processed_at
+            SELECT 1 FROM price_changes pc WHERE pc.product_id = temp_integrations_scraped_data.product_id AND pc.changed_at < temp_integrations_scraped_data.processed_at
         )),
         'errors', COUNT(*) FILTER (WHERE status = 'error'),
         'pending', COUNT(*) FILTER (WHERE status = 'pending')
     )
     INTO stats
-    FROM staged_integration_products
+    FROM temp_integrations_scraped_data
     WHERE integration_run_id = run_id;
 
-RETURN stats;
+RETURN COALESCE(stats, '{"processed": 0, "created": 0, "updated": 0, "errors": 0, "pending": 0}'::jsonb);
 
 END;
 
@@ -1522,9 +1522,9 @@ result JSONB;
 
 price_changes_count INT := 0;
 
-scraped_products_count INT := 0;
+temp_competitors_count INT := 0;
 
-staged_products_count INT := 0;
+temp_integrations_count INT := 0;
 
 remaining_refs BOOLEAN;
 
@@ -1583,25 +1583,25 @@ END IF;
 
 GET DIAGNOSTICS price_changes_count = ROW_COUNT;
 
--- Update references in scraped_products table and count affected rows
-    UPDATE scraped_products
+-- Update references in temp_competitors_scraped_data table and count affected rows
+    UPDATE temp_competitors_scraped_data
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
 
-GET DIAGNOSTICS scraped_products_count = ROW_COUNT;
+GET DIAGNOSTICS temp_competitors_count = ROW_COUNT;
 
--- Update references in staged_integration_products table and count affected rows
-    UPDATE staged_integration_products
+-- Update references in temp_integrations_scraped_data table and count affected rows
+    UPDATE temp_integrations_scraped_data
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
 
-GET DIAGNOSTICS staged_products_count = ROW_COUNT;
+GET DIAGNOSTICS temp_integrations_count = ROW_COUNT;
 
 -- Check if there are any remaining references to the duplicate product
     SELECT EXISTS (
-        SELECT 1 FROM staged_integration_products WHERE product_id = duplicate_id
+        SELECT 1 FROM temp_integrations_scraped_data WHERE product_id = duplicate_id
         UNION ALL
-        SELECT 1 FROM scraped_products WHERE product_id = duplicate_id
+        SELECT 1 FROM temp_competitors_scraped_data WHERE product_id = duplicate_id
         UNION ALL
         SELECT 1 FROM price_changes WHERE product_id = duplicate_id
         LIMIT 1
@@ -1616,8 +1616,8 @@ IF remaining_refs THEN
             'duplicate_id', duplicate_id,
             'stats', jsonb_build_object(
                 'price_changes_updated', price_changes_count,
-                'scraped_products_updated', scraped_products_count,
-                'staged_products_updated', staged_products_count
+                'temp_competitors_updated', temp_competitors_count,
+                'temp_integrations_updated', temp_integrations_count
             )
         );
 
@@ -1635,8 +1635,8 @@ END IF;
             'duplicate_id', duplicate_id,
             'stats', jsonb_build_object(
                 'price_changes_updated', price_changes_count,
-                'scraped_products_updated', scraped_products_count,
-                'staged_products_updated', staged_products_count
+                'temp_competitors_updated', temp_competitors_count,
+                'temp_integrations_updated', temp_integrations_count
             )
         );
 
@@ -1650,8 +1650,8 @@ EXCEPTION WHEN OTHERS THEN
             'duplicate_id', duplicate_id,
             'stats', jsonb_build_object(
                 'price_changes_updated', price_changes_count,
-                'scraped_products_updated', scraped_products_count,
-                'staged_products_updated', staged_products_count
+                'temp_competitors_updated', temp_competitors_count,
+                'temp_integrations_updated', temp_integrations_count
             )
         );
 
@@ -1677,8 +1677,8 @@ $$;
 
 BEGIN
     -- Force processing of any pending products by updating them in place
-    UPDATE staged_integration_products
-    SET status = status  -- This is a no-op update that will trigger the AFTER UPDATE trigger
+    UPDATE temp_integrations_scraped_data
+    SET status = status  -- This is a no-op update that will trigger the BEFORE UPDATE trigger
     WHERE integration_run_id = run_id AND status = 'pending';
 
 -- Get the statistics
@@ -1716,175 +1716,113 @@ BEGIN
 
 END IF;
 
--- Try to find the brand ID
-        IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
-            -- Look for an exact match first
-            SELECT id INTO v_brand_id
-            FROM brands
-            WHERE user_id = NEW.user_id
-              AND LOWER(name) = LOWER(NEW.brand)
-              AND is_active = TRUE
-            LIMIT 1;
+-- Find or create brand
+        SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
 
--- If no exact match, try to find a similar brand
-            IF v_brand_id IS NULL THEN
-                SELECT id INTO v_brand_id
-                FROM brands
-                WHERE user_id = NEW.user_id
-                  AND is_active = TRUE
-                  AND (
-                    -- Try different similarity approaches
-                    LOWER(name) LIKE LOWER('%' || NEW.brand || '%') OR
-                    LOWER(NEW.brand) LIKE LOWER('%' || name || '%')
-                  )
-                ORDER BY
-                    -- Prioritize shorter names that are more likely to be exact matches
-                    LENGTH(name) ASC
-                LIMIT 1;
-
-END IF;
-
-END IF;
-
--- Try to find an existing product by EAN or SKU+brand
-        IF (NEW.ean IS NOT NULL AND NEW.ean != '') THEN
-            -- Match by EAN (preferred)
-            SELECT id, our_price INTO existing_product_id, old_price
+-- Try to find existing product by EAN first
+        IF NEW.ean IS NOT NULL AND NEW.ean != '' THEN
+            SELECT id INTO existing_product_id
             FROM products
             WHERE user_id = NEW.user_id
               AND ean = NEW.ean
             LIMIT 1;
 
-ELSIF (NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.brand IS NOT NULL AND NEW.brand != '' AND v_brand_id IS NOT NULL) THEN
-            -- Match by SKU + brand
-            SELECT id, our_price INTO existing_product_id, old_price
+END IF;
+
+-- If not found by EAN, try to match by brand + SKU
+        IF existing_product_id IS NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL THEN
+            SELECT id INTO existing_product_id
             FROM products
             WHERE user_id = NEW.user_id
-              AND sku = NEW.sku
               AND brand_id = v_brand_id
+              AND sku = NEW.sku
             LIMIT 1;
 
 END IF;
 
--- If we found an existing product, update it
-        IF existing_product_id IS NOT NULL THEN
-            -- Update the product with all available data
-            -- IMPORTANT: Always update all fields with the latest values from integration
+IF existing_product_id IS NOT NULL THEN
+            -- Product exists - UPDATE ALL FIELDS (we own our products)
+            -- Get current our_price for price change tracking
+            SELECT our_price INTO old_price
+            FROM products
+            WHERE id = existing_product_id;
+
+-- Update ALL product fields with integration data
             UPDATE products
             SET
-                name = NEW.name,
-                sku = NEW.sku,
-                ean = NEW.ean,
-                brand_id = v_brand_id,
-                image_url = NEW.image_url,
-                our_price = new_price, -- Use the price directly without adding tax
-                wholesale_price = NEW.wholesale_price,
-                currency_code = COALESCE(NEW.currency_code, 'SEK'),
-                url = NEW.url,
-                category = COALESCE(NEW.raw_data->>'category', category),
-                description = COALESCE(NEW.raw_data->>'description', description),
+                name = COALESCE(NEW.name, name),
+                sku = COALESCE(NEW.sku, sku),
+                ean = COALESCE(NEW.ean, ean),
+                brand = COALESCE(NEW.brand, brand),
+                brand_id = COALESCE(v_brand_id, brand_id),
+                our_price = new_price,
+                wholesale_price = COALESCE(NEW.wholesale_price, wholesale_price),
+                image_url = COALESCE(NEW.image_url, image_url),
+                url = COALESCE(NEW.url, url),
+                currency_code = COALESCE(NEW.currency_code, currency_code),
                 updated_at = NOW()
             WHERE id = existing_product_id;
 
--- Record price change if price has changed
-            IF old_price IS DISTINCT FROM new_price AND new_price IS NOT NULL THEN
-                INSERT INTO price_changes (
-                    user_id,
-                    product_id,
-                    competitor_id,
-                    old_price,
-                    new_price,
-                    price_change_percentage,
-                    integration_id,
-                    currency_code,
-                    url
-                )
-                SELECT
-                    NEW.user_id,
-                    existing_product_id,
-                    NULL,
-                    old_price,
-                    new_price,
-                    CASE
-                        WHEN old_price = 0 OR old_price IS NULL THEN 0
-                        ELSE ((new_price - old_price) / old_price) * 100
-                    END,
-                    NEW.integration_id,
-                    COALESCE(NEW.currency_code, 'SEK'),
-                    NEW.url
-                WHERE old_price IS NOT NULL OR new_price IS NOT NULL;
-
-END IF;
-
--- Update the staged product
+-- Set the product_id in the staged record
             NEW.product_id := existing_product_id;
 
-NEW.status := 'processed';
-
-NEW.processed_at := NOW();
-
 ELSE
-            -- Create a new product only if we have sufficient data
-            -- This is a redundant check since we already validated above, but keeping it for safety
-            IF (NEW.ean IS NOT NULL AND NEW.ean != '') OR
-               (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL) THEN
+            -- Product doesn't exist - CREATE new product
+            INSERT INTO products (
+                user_id, name, sku, ean, brand, brand_id,
+                our_price, wholesale_price, image_url, url, currency_code,
+                is_active, created_at, updated_at
+            ) VALUES (
+                NEW.user_id, NEW.name, NEW.sku, NEW.ean, NEW.brand, v_brand_id,
+                new_price, NEW.wholesale_price, NEW.image_url, NEW.url, NEW.currency_code,
+                true, NOW(), NOW()
+            ) RETURNING id INTO existing_product_id;
 
-                INSERT INTO products (
-                    user_id,
-                    name,
-                    sku,
-                    ean,
-                    brand_id,
-                    image_url,
-                    our_price,
-                    wholesale_price,
-                    currency_code,
-                    url,
-                    category,
-                    description
-                )
-                VALUES (
-                    NEW.user_id,
-                    NEW.name,
-                    NEW.sku,
-                    NEW.ean,
-                    v_brand_id,
-                    NEW.image_url,
-                    new_price, -- Use the price directly without adding tax
-                    NEW.wholesale_price,
-                    COALESCE(NEW.currency_code, 'SEK'),
-                    NEW.url,
-                    COALESCE(NEW.raw_data->>'category', NULL),
-                    COALESCE(NEW.raw_data->>'description', NULL)
-                )
-                RETURNING id INTO existing_product_id;
-
--- Update the staged product
-                NEW.product_id := existing_product_id;
-
-NEW.status := 'processed';
-
-NEW.processed_at := NOW();
-
-ELSE
-                -- Product lacks sufficient data, mark as error
-                NEW.status := 'error';
-
-NEW.error_message := 'Product lacks sufficient data for matching. Requires either EAN or both SKU and brand.';
+-- Set the product_id in the staged record
+            NEW.product_id := existing_product_id;
 
 END IF;
 
+-- Record price change if we have a price
+        IF new_price IS NOT NULL THEN
+            INSERT INTO price_changes (
+                user_id, product_id, integration_id, old_price, new_price,
+                price_change_percentage, currency_code, changed_at, url
+            ) VALUES (
+                NEW.user_id, existing_product_id, NEW.integration_id,
+                old_price, new_price,
+                CASE
+                    WHEN old_price IS NOT NULL AND old_price > 0 THEN
+                        ROUND(((new_price - old_price) / old_price * 100)::numeric, 2)
+                    ELSE NULL
+                END,
+                NEW.currency_code, NOW(), NEW.url
+            );
+
 END IF;
+
+-- Mark as processed and set processed timestamp
+        NEW.status := 'processed';
+
+NEW.processed_at := NOW();
+
+-- Delete from temp table (cleanup after processing)
+        DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
+
+-- Return NULL to prevent the UPDATE (since we deleted the record)
+        RETURN NULL;
 
 EXCEPTION WHEN OTHERS THEN
-            -- Handle errors
-            NEW.status := 'error';
+        -- Mark as error and store error message
+        NEW.status := 'error';
 
 NEW.error_message := SQLERRM;
 
-END;
+NEW.processed_at := NOW();
 
 RETURN NEW;
+
+END;
 
 END;
 
@@ -2055,15 +1993,15 @@ $$;
 
 BEGIN
     -- Reset error products to pending status
-    UPDATE staged_integration_products
+    UPDATE temp_integrations_scraped_data
     SET
         status = 'pending',
         error_message = NULL
     WHERE integration_run_id = run_id AND status = 'error';
 
 -- Force processing of these products
-    UPDATE staged_integration_products
-    SET status = status  -- This is a no-op update that will trigger the AFTER UPDATE trigger
+    UPDATE temp_integrations_scraped_data
+    SET status = status  -- This is a no-op update that will trigger the BEFORE UPDATE trigger
     WHERE integration_run_id = run_id AND status = 'pending';
 
 -- Get the statistics
@@ -3395,24 +3333,6 @@ CREATE INDEX idx_rate_limit_log_ip_endpoint ON public.rate_limit_log USING btree
 CREATE INDEX idx_rate_limit_log_window_start ON public.rate_limit_log USING btree (window_start);
 
 --
--- Name: idx_scraped_products_brand_sku; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_scraped_products_brand_sku ON public.scraped_products USING btree (brand, sku);
-
---
--- Name: idx_scraped_products_ean; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_scraped_products_ean ON public.scraped_products USING btree (ean);
-
---
--- Name: idx_scraped_products_scraper_id_scraped_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_scraped_products_scraper_id_scraped_at ON public.scraped_products USING btree (scraper_id, scraped_at);
-
---
 -- Name: idx_scraper_ai_sessions_competitor_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3479,36 +3399,6 @@ CREATE INDEX idx_scrapers_execution_time ON public.scrapers USING btree (executi
 CREATE INDEX idx_scrapers_scraper_type ON public.scrapers USING btree (scraper_type);
 
 --
--- Name: idx_staged_integration_products_ean; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_staged_integration_products_ean ON public.staged_integration_products USING btree (ean) WHERE (ean IS NOT NULL);
-
---
--- Name: idx_staged_integration_products_integration_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_staged_integration_products_integration_id ON public.staged_integration_products USING btree (integration_id);
-
---
--- Name: idx_staged_integration_products_integration_run_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_staged_integration_products_integration_run_id ON public.staged_integration_products USING btree (integration_run_id);
-
---
--- Name: idx_staged_integration_products_sku_brand; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_staged_integration_products_sku_brand ON public.staged_integration_products USING btree (sku, brand) WHERE ((sku IS NOT NULL) AND (brand IS NOT NULL));
-
---
--- Name: idx_staged_integration_products_status; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_staged_integration_products_status ON public.staged_integration_products USING btree (status);
-
---
 -- Name: idx_support_conversations_admin_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3561,6 +3451,48 @@ CREATE INDEX idx_support_messages_sender_id ON public.support_messages USING btr
 --
 
 CREATE INDEX idx_support_messages_unread ON public.support_messages USING btree (conversation_id, sender_type, read_by_recipient);
+
+--
+-- Name: idx_temp_competitors_scraped_data_competitor_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_competitor_id ON public.temp_competitors_scraped_data USING btree (competitor_id);
+
+--
+-- Name: idx_temp_competitors_scraped_data_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_product_id ON public.temp_competitors_scraped_data USING btree (product_id);
+
+--
+-- Name: idx_temp_competitors_scraped_data_scraped_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_scraped_at ON public.temp_competitors_scraped_data USING btree (scraped_at);
+
+--
+-- Name: idx_temp_competitors_scraped_data_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_user_id ON public.temp_competitors_scraped_data USING btree (user_id);
+
+--
+-- Name: idx_temp_integrations_scraped_data_integration_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_integrations_scraped_data_integration_run_id ON public.temp_integrations_scraped_data USING btree (integration_run_id);
+
+--
+-- Name: idx_temp_integrations_scraped_data_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_integrations_scraped_data_product_id ON public.temp_integrations_scraped_data USING btree (product_id);
+
+--
+-- Name: idx_temp_integrations_scraped_data_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_integrations_scraped_data_status ON public.temp_integrations_scraped_data USING btree (status);
 
 --
 -- Name: idx_user_profiles_admin_role; Type: INDEX; Schema: public; Owner: -

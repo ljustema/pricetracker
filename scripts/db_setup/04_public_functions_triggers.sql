@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-05-28 15:44:40
+-- Generated: 2025-05-30 15:46:13
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -354,15 +354,15 @@ BEGIN
   WHERE created_at < NOW() - INTERVAL '24 hours';
 
 --
--- Name: cleanup_scraped_products(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: cleanup_temp_competitors_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.cleanup_scraped_products() RETURNS void
+CREATE FUNCTION public.cleanup_temp_competitors_scraped_data() RETURNS void
     LANGUAGE plpgsql
     AS $$
 BEGIN
-  -- Remove all records in scraped_products that are older than 30 days
-  DELETE FROM scraped_products
+  -- Remove all records in temp_competitors_scraped_data that are older than 30 days
+  DELETE FROM temp_competitors_scraped_data
   WHERE scraped_at < NOW() - INTERVAL '30 days';
 
 --
@@ -2182,16 +2182,16 @@ CREATE TRIGGER create_profile_trigger AFTER INSERT ON auth.users FOR EACH ROW EX
 CREATE TRIGGER one_active_scraper_per_competitor BEFORE INSERT OR UPDATE ON public.scrapers FOR EACH ROW EXECUTE FUNCTION public.ensure_one_active_scraper_per_competitor();
 
 --
--- Name: scraped_products price_change_trigger; Type: TRIGGER; Schema: public; Owner: -
+-- Name: temp_competitors_scraped_data price_change_trigger; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER price_change_trigger AFTER INSERT ON public.scraped_products FOR EACH ROW EXECUTE FUNCTION public.record_price_change();
+CREATE TRIGGER price_change_trigger AFTER INSERT ON public.temp_competitors_scraped_data FOR EACH ROW EXECUTE FUNCTION public.record_price_change();
 
 --
--- Name: staged_integration_products process_staged_integration_product_trigger; Type: TRIGGER; Schema: public; Owner: -
+-- Name: temp_integrations_scraped_data process_temp_integration_product_trigger; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER process_staged_integration_product_trigger BEFORE UPDATE ON public.staged_integration_products FOR EACH ROW EXECUTE FUNCTION public.process_staged_integration_product();
+CREATE TRIGGER process_temp_integration_product_trigger BEFORE UPDATE ON public.temp_integrations_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_staged_integration_product();
 
 --
 -- Name: products set_product_brand_id_trigger; Type: TRIGGER; Schema: public; Owner: -

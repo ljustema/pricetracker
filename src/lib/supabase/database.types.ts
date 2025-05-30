@@ -87,12 +87,7 @@ export type Database = {
         Update: any
         Relationships: any[]
       }
-      scraped_products: {
-        Row: any
-        Insert: any
-        Update: any
-        Relationships: any[]
-      }
+
       scraper_runs: {
         Row: any
         Insert: any
@@ -119,10 +114,7 @@ export type Database = {
       }
     }
     Functions: {
-      cleanup_scraped_products: {
-        Args: Record<PropertyKey, never>
-        Returns: undefined
-      }
+
       cleanup_temp_competitors_scraped_data: {
         Args: Record<PropertyKey, never>
         Returns: undefined

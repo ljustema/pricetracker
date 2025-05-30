@@ -101,16 +101,16 @@ export async function POST(request: NextRequest) {
           .in('product_id', [primaryId, duplicateId])
           .groupby('product_id');
 
-        // Check scraped_products
+        // Check temp_competitors_scraped_data
         const { data: scrapedProducts, error: scrapedError } = await supabase
-          .from('scraped_products')
+          .from('temp_competitors_scraped_data')
           .select('product_id, count', { count: 'exact' })
           .in('product_id', [primaryId, duplicateId])
           .groupby('product_id');
 
-        // Check staged_integration_products
+        // Check temp_integrations_scraped_data
         const { data: stagedProducts, error: stagedError } = await supabase
-          .from('staged_integration_products')
+          .from('temp_integrations_scraped_data')
           .select('product_id, count', { count: 'exact' })
           .in('product_id', [primaryId, duplicateId])
           .groupby('product_id');
@@ -119,8 +119,8 @@ export async function POST(request: NextRequest) {
         if (!priceError && !scrapedError && !stagedError) {
           console.log("Related records:", {
             price_changes: priceChanges,
-            scraped_products: scrapedProducts,
-            staged_products: stagedProducts
+            temp_competitors_scraped_data: scrapedProducts,
+            temp_integrations_scraped_data: stagedProducts
           });
         }
       } catch (countError) {

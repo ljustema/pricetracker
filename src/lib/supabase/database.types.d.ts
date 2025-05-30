@@ -251,57 +251,7 @@ export type Database = {
                     }
                 ];
             };
-            scraped_products: {
-                Row: {
-                    brand: string | null;
-                    competitor_id: string;
-                    currency: string | null;
-                    ean: string | null;
-                    id: string;
-                    image_url: string | null;
-                    name: string;
-                    price: number;
-                    product_id: string | null;
-                    scraped_at: string | null;
-                    scraper_id: string | null;
-                    sku: string | null;
-                    url: string | null;
-                    user_id: string;
-                };
-                Insert: {
-                    brand?: string | null;
-                    competitor_id: string;
-                    currency?: string | null;
-                    ean?: string | null;
-                    id?: string;
-                    image_url?: string | null;
-                    name: string;
-                    price: number;
-                    product_id?: string | null;
-                    scraped_at?: string | null;
-                    scraper_id?: string | null;
-                    sku?: string | null;
-                    url?: string | null;
-                    user_id: string;
-                };
-                Update: {
-                    brand?: string | null;
-                    competitor_id?: string;
-                    currency?: string | null;
-                    ean?: string | null;
-                    id?: string;
-                    image_url?: string | null;
-                    name?: string;
-                    price?: number;
-                    product_id?: string | null;
-                    scraped_at?: string | null;
-                    scraper_id?: string | null;
-                    sku?: string | null;
-                    url?: string | null;
-                    user_id?: string;
-                };
-                Relationships: [];
-            };
+
             temp_competitors_scraped_data: {
                 Row: {
                     brand: string | null;
@@ -718,10 +668,7 @@ export type Database = {
             [_ in never]: never;
         };
         Functions: {
-            cleanup_scraped_products: {
-                Args: Record<PropertyKey, never>;
-                Returns: undefined;
-            };
+
             create_user_for_nextauth: {
                 Args: {
                     user_id: string;

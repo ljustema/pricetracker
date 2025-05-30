@@ -416,7 +416,7 @@ def update_job_status(conn, run_id: str, status: str, error_message: Optional[st
 
 # --- Product Saving ---
 
-def save_scraped_products(conn, run_id: str, user_id: str, competitor_id: str, products: List[Dict[str, Any]]) -> int:
+def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competitor_id: str, products: List[Dict[str, Any]]) -> int:
     """
     Saves a list of scraped products to the database with batching and retries.
     Relies on DB trigger 'record_price_change' for product matching and price change recording.
@@ -442,7 +442,7 @@ def save_scraped_products(conn, run_id: str, user_id: str, competitor_id: str, p
 
         products_to_insert.append((
             user_id,
-            # run_id, # Removed: scraper_run_id column does not exist in scraped_products
+            # run_id, # Removed: scraper_run_id column does not exist in temp_competitors_scraped_data
             competitor_id,
             p.get('name'),
             price,
@@ -759,7 +759,7 @@ def process_job(conn, job):
                                         log_event("INFO", "DB_BATCH_SAVE", run_id, f"Saving batch of {len(products_buffer)} products...")
                                         # Ensure connection is valid before saving batch
                                         if conn.closed: conn = get_db_connection()
-                                        inserted = save_scraped_products(conn, run_id, user_id, competitor_id, products_buffer)
+                                        inserted = save_temp_competitors_scraped_data(conn, run_id, user_id, competitor_id, products_buffer)
                                         log_event("INFO", "DB_BATCH_SAVE", run_id, f"Successfully inserted {inserted} products.")
                                         products_buffer = [] # Clear buffer after saving
 
@@ -854,7 +854,7 @@ def process_job(conn, job):
                 log_event("INFO", "DB_BATCH_SAVE", run_id, f"Saving final batch of {len(products_buffer)} products...")
                 # Ensure connection is valid before saving final batch
                 if conn.closed: conn = get_db_connection()
-                inserted = save_scraped_products(conn, run_id, user_id, competitor_id, products_buffer)
+                inserted = save_temp_competitors_scraped_data(conn, run_id, user_id, competitor_id, products_buffer)
                 log_event("INFO", "DB_BATCH_SAVE", run_id, f"Successfully inserted {inserted} products.")
 
             # 5. Check exit code after processing all output

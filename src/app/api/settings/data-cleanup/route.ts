@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { older_than_days, include_products, include_price_changes, include_scraped_products } = body;
+    const { older_than_days, include_products, include_price_changes, include_temp_competitors_scraped_data } = body;
 
     // Validate older_than_days
     if (older_than_days < 1 || older_than_days > 365) {
@@ -58,8 +58,8 @@ export async function POST(request: NextRequest) {
 
     let deletedCount = 0;
 
-    // Delete scraped products if requested
-    if (include_scraped_products) {
+    // Delete temp competitors scraped data if requested
+    if (include_temp_competitors_scraped_data) {
       const { data: scrapedProductsData, error: scrapedProductsError } = await supabase
         .from("temp_competitors_scraped_data")
         .delete()
@@ -68,9 +68,9 @@ export async function POST(request: NextRequest) {
         .select("count");
 
       if (scrapedProductsError) {
-        console.error("Error deleting scraped products:", scrapedProductsError);
+        console.error("Error deleting temp competitors scraped data:", scrapedProductsError);
         return NextResponse.json(
-          { error: "Failed to delete scraped products" },
+          { error: "Failed to delete temp competitors scraped data" },
           { status: 500 }
         );
       }

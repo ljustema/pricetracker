@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Row Level Security policies
 -- =========================================================================
--- Generated: 2025-05-28 15:44:40
+-- Generated: 2025-05-30 15:46:13
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -86,12 +86,6 @@ CREATE POLICY "Users can delete their own scraper AI sessions" ON public.scraper
 CREATE POLICY "Users can delete their own scrapers" ON public.scrapers FOR DELETE USING ((auth.uid() = user_id));
 
 --
--- Name: staged_integration_products Users can delete their own staged integration products; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can delete their own staged integration products" ON public.staged_integration_products FOR DELETE USING ((auth.uid() = user_id));
-
---
 -- Name: csv_uploads Users can insert their own CSV uploads; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -152,12 +146,6 @@ CREATE POLICY "Users can insert their own price changes" ON public.price_changes
 CREATE POLICY "Users can insert their own products" ON public.products FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
--- Name: scraped_products Users can insert their own scraped products; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can insert their own scraped products" ON public.scraped_products FOR INSERT WITH CHECK ((auth.uid() = user_id));
-
---
 -- Name: scraper_ai_sessions Users can insert their own scraper AI sessions; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -170,10 +158,16 @@ CREATE POLICY "Users can insert their own scraper AI sessions" ON public.scraper
 CREATE POLICY "Users can insert their own scrapers" ON public.scrapers FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
--- Name: staged_integration_products Users can insert their own staged integration products; Type: POLICY; Schema: public; Owner: -
+-- Name: temp_integrations_scraped_data Users can only access their own integration products; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can insert their own staged integration products" ON public.staged_integration_products FOR INSERT WITH CHECK ((auth.uid() = user_id));
+CREATE POLICY "Users can only access their own integration products" ON public.temp_integrations_scraped_data USING ((auth.uid() = user_id));
+
+--
+-- Name: temp_competitors_scraped_data Users can only access their own scraped products; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can only access their own scraped products" ON public.temp_competitors_scraped_data USING ((auth.uid() = user_id));
 
 --
 -- Name: support_conversations Users can update own conversations; Type: POLICY; Schema: public; Owner: -
@@ -240,12 +234,6 @@ CREATE POLICY "Users can update their own scraper AI sessions" ON public.scraper
 --
 
 CREATE POLICY "Users can update their own scrapers" ON public.scrapers FOR UPDATE USING ((auth.uid() = user_id));
-
---
--- Name: staged_integration_products Users can update their own staged integration products; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can update their own staged integration products" ON public.staged_integration_products FOR UPDATE USING ((auth.uid() = user_id));
 
 --
 -- Name: support_messages Users can view messages in own conversations; Type: POLICY; Schema: public; Owner: -
@@ -334,12 +322,6 @@ CREATE POLICY "Users can view their own products" ON public.products FOR SELECT 
 CREATE POLICY "Users can view their own profile" ON public.user_profiles FOR SELECT USING ((auth.uid() = id));
 
 --
--- Name: scraped_products Users can view their own scraped products; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own scraped products" ON public.scraped_products FOR SELECT USING ((auth.uid() = user_id));
-
---
 -- Name: scraper_ai_sessions Users can view their own scraper AI sessions; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -350,12 +332,6 @@ CREATE POLICY "Users can view their own scraper AI sessions" ON public.scraper_a
 --
 
 CREATE POLICY "Users can view their own scrapers" ON public.scrapers FOR SELECT USING ((auth.uid() = user_id));
-
---
--- Name: staged_integration_products Users can view their own staged integration products; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY "Users can view their own staged integration products" ON public.staged_integration_products FOR SELECT USING ((auth.uid() = user_id));
 
 --
 -- Name: user_subscriptions Users can view their own subscriptions; Type: POLICY; Schema: public; Owner: -

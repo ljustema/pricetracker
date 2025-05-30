@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-05-28 15:44:40
+-- Generated: 2025-05-30 15:46:13
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -745,35 +745,6 @@ CREATE TABLE public.rate_limit_log (
 );
 
 --
--- Name: scraped_products; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraped_products (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    scraper_id uuid,
-    competitor_id uuid NOT NULL,
-    product_id uuid,
-    name text NOT NULL,
-    price numeric(10,2) NOT NULL,
-    currency text DEFAULT 'USD'::text,
-    url text,
-    image_url text,
-    sku text,
-    brand text,
-    scraped_at timestamp with time zone DEFAULT now(),
-    ean text,
-    currency_code text,
-    CONSTRAINT scraped_products_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
-);
-
---
--- Name: COLUMN scraped_products.currency_code; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.scraped_products.currency_code IS 'ISO 4217 currency code determined by the scraper';
-
---
 -- Name: scraper_ai_sessions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -907,46 +878,6 @@ COMMENT ON COLUMN public.scrapers.last_products_per_second IS 'Products per seco
 COMMENT ON COLUMN public.scrapers.scrape_only_own_products IS 'Flag to only scrape products matching the user''s own product catalog (based on EAN/SKU/Brand matching)';
 
 --
--- Name: staged_integration_products; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.staged_integration_products (
-    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
-    integration_run_id uuid NOT NULL,
-    integration_id uuid NOT NULL,
-    user_id uuid NOT NULL,
-    prestashop_product_id text,
-    name text NOT NULL,
-    sku text,
-    ean text,
-    brand text,
-    price numeric(10,2),
-    wholesale_price numeric(10,2),
-    image_url text,
-    raw_data jsonb,
-    status text DEFAULT 'pending'::text NOT NULL,
-    error_message text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    processed_at timestamp with time zone,
-    product_id uuid,
-    currency_code text,
-    url text,
-    CONSTRAINT staged_integration_products_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
-);
-
---
--- Name: COLUMN staged_integration_products.currency_code; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.staged_integration_products.currency_code IS 'ISO 4217 currency code from the integration source';
-
---
--- Name: COLUMN staged_integration_products.url; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.staged_integration_products.url IS 'URL to the product on the integration platform';
-
---
 -- Name: support_conversations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -982,6 +913,57 @@ CREATE TABLE public.support_messages (
     created_at timestamp with time zone DEFAULT now(),
     read_by_recipient boolean DEFAULT false,
     CONSTRAINT support_messages_sender_type_check CHECK ((sender_type = ANY (ARRAY['user'::text, 'admin'::text])))
+);
+
+--
+-- Name: temp_competitors_scraped_data; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.temp_competitors_scraped_data (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    scraper_id uuid,
+    competitor_id uuid NOT NULL,
+    product_id uuid,
+    name text NOT NULL,
+    price numeric(10,2) NOT NULL,
+    currency text DEFAULT 'USD'::text,
+    url text,
+    image_url text,
+    sku text,
+    brand text,
+    scraped_at timestamp with time zone DEFAULT now(),
+    ean text,
+    currency_code text,
+    CONSTRAINT temp_competitors_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
+);
+
+--
+-- Name: temp_integrations_scraped_data; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.temp_integrations_scraped_data (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    integration_run_id uuid NOT NULL,
+    integration_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    prestashop_product_id text,
+    name text NOT NULL,
+    sku text,
+    ean text,
+    brand text,
+    price numeric(10,2),
+    wholesale_price numeric(10,2),
+    image_url text,
+    raw_data jsonb,
+    status text DEFAULT 'pending'::text NOT NULL,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    processed_at timestamp with time zone,
+    product_id uuid,
+    currency_code text,
+    url text,
+    CONSTRAINT temp_integrations_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
 );
 
 --
@@ -1478,13 +1460,6 @@ ALTER TABLE ONLY public.rate_limit_log
     ADD CONSTRAINT rate_limit_log_pkey PRIMARY KEY (id);
 
 --
--- Name: scraped_products scraped_products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraped_products
-    ADD CONSTRAINT scraped_products_pkey PRIMARY KEY (id);
-
---
 -- Name: scraper_ai_sessions scraper_ai_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1506,13 +1481,6 @@ ALTER TABLE ONLY public.scrapers
     ADD CONSTRAINT scrapers_pkey PRIMARY KEY (id);
 
 --
--- Name: staged_integration_products staged_integration_products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.staged_integration_products
-    ADD CONSTRAINT staged_integration_products_pkey PRIMARY KEY (id);
-
---
 -- Name: support_conversations support_conversations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1525,6 +1493,20 @@ ALTER TABLE ONLY public.support_conversations
 
 ALTER TABLE ONLY public.support_messages
     ADD CONSTRAINT support_messages_pkey PRIMARY KEY (id);
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_pkey PRIMARY KEY (id);
+
+--
+-- Name: temp_integrations_scraped_data temp_integrations_scraped_data_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_integrations_scraped_data
+    ADD CONSTRAINT temp_integrations_scraped_data_pkey PRIMARY KEY (id);
 
 --
 -- Name: brand_aliases unique_brand_alias; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1863,34 +1845,6 @@ ALTER TABLE ONLY public.professional_scraper_requests
     ADD CONSTRAINT professional_scraper_requests_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id);
 
 --
--- Name: scraped_products scraped_products_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraped_products
-    ADD CONSTRAINT scraped_products_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
-
---
--- Name: scraped_products scraped_products_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraped_products
-    ADD CONSTRAINT scraped_products_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
-
---
--- Name: scraped_products scraped_products_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraped_products
-    ADD CONSTRAINT scraped_products_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
-
---
--- Name: scraped_products scraped_products_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.scraped_products
-    ADD CONSTRAINT scraped_products_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-
---
 -- Name: scraper_ai_sessions scraper_ai_sessions_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1933,34 +1887,6 @@ ALTER TABLE ONLY public.scrapers
     ADD CONSTRAINT scrapers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 --
--- Name: staged_integration_products staged_integration_products_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.staged_integration_products
-    ADD CONSTRAINT staged_integration_products_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id) ON DELETE CASCADE;
-
---
--- Name: staged_integration_products staged_integration_products_integration_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.staged_integration_products
-    ADD CONSTRAINT staged_integration_products_integration_run_id_fkey FOREIGN KEY (integration_run_id) REFERENCES public.integration_runs(id) ON DELETE CASCADE;
-
---
--- Name: staged_integration_products staged_integration_products_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.staged_integration_products
-    ADD CONSTRAINT staged_integration_products_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
-
---
--- Name: staged_integration_products staged_integration_products_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.staged_integration_products
-    ADD CONSTRAINT staged_integration_products_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
---
 -- Name: support_conversations support_conversations_admin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1987,6 +1913,48 @@ ALTER TABLE ONLY public.support_messages
 
 ALTER TABLE ONLY public.support_messages
     ADD CONSTRAINT support_messages_sender_id_fkey FOREIGN KEY (sender_id) REFERENCES public.user_profiles(id);
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id) ON DELETE CASCADE;
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id) ON DELETE CASCADE;
+
+--
+-- Name: temp_integrations_scraped_data temp_integrations_scraped_data_integration_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_integrations_scraped_data
+    ADD CONSTRAINT temp_integrations_scraped_data_integration_run_id_fkey FOREIGN KEY (integration_run_id) REFERENCES public.integration_runs(id) ON DELETE CASCADE;
+
+--
+-- Name: temp_integrations_scraped_data temp_integrations_scraped_data_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_integrations_scraped_data
+    ADD CONSTRAINT temp_integrations_scraped_data_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
 
 --
 -- Name: user_profiles user_profiles_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -2223,12 +2191,6 @@ ALTER TABLE public.professional_scraper_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.rate_limit_log ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: scraped_products; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.scraped_products ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: scraper_ai_sessions; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -2247,12 +2209,6 @@ ALTER TABLE public.scraper_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scrapers ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: staged_integration_products; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.staged_integration_products ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: support_conversations; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -2263,6 +2219,18 @@ ALTER TABLE public.support_conversations ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.support_messages ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: temp_competitors_scraped_data; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.temp_competitors_scraped_data ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: temp_integrations_scraped_data; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.temp_integrations_scraped_data ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: user_profiles; Type: ROW SECURITY; Schema: public; Owner: -

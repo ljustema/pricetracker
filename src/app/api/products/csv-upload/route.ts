@@ -234,7 +234,7 @@ export async function POST(req: NextRequest) {
         productsAdded++;
       }
 
-      // Insert directly to price_changes instead of scraped_products
+      // Insert directly to price_changes instead of temp_competitors_scraped_data
       const price = parseFloat(row.price);
       if (isNaN(price)) {
         continue; // Skip if price is not a valid number

@@ -104,7 +104,7 @@ export async function POST(
 
     // First, delete all existing links for this product
     const { error: deleteError } = await supabase
-      .from("scraped_products")
+      .from("temp_competitors_scraped_data")
       .delete()
       .eq("product_id", productId)
       .eq("user_id", userId);

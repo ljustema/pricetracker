@@ -32,7 +32,7 @@ const dataCleanupSchema = z.object({
   older_than_days: z.number().min(1).max(365),
   include_products: z.boolean(),
   include_price_changes: z.boolean(),
-  include_scraped_products: z.boolean(),
+  include_temp_competitors_scraped_data: z.boolean(),
 });
 
 type MatchingRulesValues = z.infer<typeof matchingRulesSchema>;
@@ -76,7 +76,7 @@ export default function AdvancedSettings({ userId }: AdvancedSettingsProps) {
       older_than_days: 30,
       include_products: false,
       include_price_changes: true,
-      include_scraped_products: true,
+      include_temp_competitors_scraped_data: true,
     },
   });
 
@@ -484,16 +484,16 @@ export default function AdvancedSettings({ userId }: AdvancedSettingsProps) {
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
-                  <Label htmlFor="include_scraped_products">Include Scraped Products</Label>
+                  <Label htmlFor="include_temp_competitors_scraped_data">Include Temp Competitors Scraped Data</Label>
                   <p className="text-sm text-gray-500">
-                    Remove historical scraped product data
+                    Remove historical competitor scraped data
                   </p>
                 </div>
                 <Switch
-                  id="include_scraped_products"
-                  checked={dataCleanupForm.watch("include_scraped_products")}
+                  id="include_temp_competitors_scraped_data"
+                  checked={dataCleanupForm.watch("include_temp_competitors_scraped_data")}
                   onCheckedChange={(checked) =>
-                    dataCleanupForm.setValue("include_scraped_products", checked)
+                    dataCleanupForm.setValue("include_temp_competitors_scraped_data", checked)
                   }
                 />
               </div>

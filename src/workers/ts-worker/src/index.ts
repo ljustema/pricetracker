@@ -1157,7 +1157,7 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
 
     logStructured(runId, 'debug', 'DB_INSERT', `Attempting to save ${products.length} products with competitor_id: ${competitorId}...`);
 
-    // Map ScrapedProductData to the structure needed for scraped_products table
+    // Map ScrapedProductData to the structure needed for temp_competitors_scraped_data table
     const productsToInsert = products.map(p => ({
         // Let DB generate UUID for id
         user_id: userId,
