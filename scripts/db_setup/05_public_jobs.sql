@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Job-related objects
 -- =========================================================================
--- Generated: 2025-05-27 10:02:57
+-- Generated: 2025-05-28 15:44:40
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -51,7 +51,8 @@ BEGIN
     SET
       status = 'running',
       started_at = NOW(),
-      claimed_by_worker_at = NOW() -- Set the claimed_by_worker_at timestamp
+      claimed_by_worker_at = NOW(), -- Set the claimed_by_worker_at timestamp
+      error_message = NULL -- Clear any info messages when worker claims the job
     FROM potential_job pj
     WHERE sr_update.id = pj.id AND sr_update.status IN ('pending', 'initializing') -- Ensure it's still pending or initializing before update
     RETURNING sr_update.id -- Return the ID of the job that was actually updated

@@ -333,7 +333,7 @@ CREATE TYPE realtime.wal_rls AS (
 CREATE FUNCTION auth.email() RETURNS text
     LANGUAGE sql STABLE
     AS $$
-  select
+  select 
   coalesce(
     nullif(current_setting('request.jwt.claim.email', true), ''),
     (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email')
@@ -355,7 +355,7 @@ COMMENT ON FUNCTION auth.email() IS 'Deprecated. Use auth.jwt() -> ''email'' ins
 CREATE FUNCTION auth.jwt() RETURNS jsonb
     LANGUAGE sql STABLE
     AS $$
-  select
+  select 
     coalesce(
         nullif(current_setting('request.jwt.claim', true), ''),
         nullif(current_setting('request.jwt.claims', true), '')
@@ -370,7 +370,7 @@ $$;
 CREATE FUNCTION auth.role() RETURNS text
     LANGUAGE sql STABLE
     AS $$
-  select
+  select 
   coalesce(
     nullif(current_setting('request.jwt.claim.role', true), ''),
     (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')
@@ -392,7 +392,7 @@ COMMENT ON FUNCTION auth.role() IS 'Deprecated. Use auth.jwt() -> ''role'' inste
 CREATE FUNCTION auth.uid() RETURNS uuid
     LANGUAGE sql STABLE
     AS $$
-  select
+  select 
   coalesce(
     nullif(current_setting('request.jwt.claim.sub', true), ''),
     (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
@@ -791,12 +791,12 @@ BEGIN
   -- If progress_messages has more than 200 entries, trim it to 100
   IF NEW.progress_messages IS NOT NULL THEN
     v_message_count := array_length(NEW.progress_messages, 1);
-
+    
     IF v_message_count IS NOT NULL AND v_message_count > 200 THEN
       NEW.progress_messages := NEW.progress_messages[(v_message_count - 100 + 1):v_message_count];
     END IF;
   END IF;
-
+  
   RETURN NEW;
 END;
 $$;
@@ -1104,7 +1104,7 @@ CREATE FUNCTION public.cleanup_rate_limit_logs() RETURNS void
     LANGUAGE plpgsql
     AS $$
 BEGIN
-  DELETE FROM rate_limit_log
+  DELETE FROM rate_limit_log 
   WHERE created_at < NOW() - INTERVAL '24 hours';
 END;
 $$;
@@ -1351,7 +1351,7 @@ BEGIN
     NOW()
   )
   ON CONFLICT (id) DO NOTHING;
-
+  
   -- The trigger create_profile_for_user will automatically create a profile
 END;
 $$;
@@ -1396,20 +1396,20 @@ BEGIN
     LOOP
         -- Check if scraper should run
         should_run_flag := (scraper_record.last_run IS NULL OR scraper_record.last_run < current_time - interval '23 hours');
-
+        
         -- Check if there's already a pending job
         SELECT EXISTS (
             SELECT 1 FROM public.scraper_runs sr
             WHERE sr.scraper_id = scraper_record.id
               AND sr.status IN ('pending', 'initializing', 'running')
         ) INTO has_pending_job_flag;
-
+        
         job_created_flag := false;
-
+        
         IF should_run_flag AND NOT has_pending_job_flag THEN
             job_created_flag := true;
         END IF;
-
+        
         RETURN QUERY SELECT scraper_record.id, scraper_record.name, should_run_flag, has_pending_job_flag, job_created_flag;
     END LOOP;
 END;
@@ -1543,7 +1543,7 @@ CREATE FUNCTION public.find_potential_duplicates(p_user_id uuid) RETURNS TABLE(g
 BEGIN
     -- Products with same EAN (non-null)
     RETURN QUERY
-    SELECT
+    SELECT 
         'ean_' || p.ean AS group_id,
         p.id AS product_id,
         p.name,
@@ -1552,21 +1552,21 @@ BEGIN
         p.brand,
         p.brand_id,
         'Same EAN: ' || p.ean AS match_reason
-    FROM
+    FROM 
         products p
-    WHERE
-        p.user_id = p_user_id AND
-        p.ean IS NOT NULL AND
+    WHERE 
+        p.user_id = p_user_id AND 
+        p.ean IS NOT NULL AND 
         p.ean != '' AND
         EXISTS (
-            SELECT 1 FROM products p2
+            SELECT 1 FROM products p2 
             WHERE p2.ean = p.ean AND p2.user_id = p.user_id AND p2.id != p.id
         )
-
+    
     UNION ALL
-
+    
     -- Products with same brand_id and SKU (non-null)
-    SELECT
+    SELECT 
         'brand_sku_' || p.brand_id::text || '_' || p.sku AS group_id,
         p.id AS product_id,
         p.name,
@@ -1575,19 +1575,19 @@ BEGIN
         p.brand,
         p.brand_id,
         'Same brand+SKU: ' || COALESCE(p.brand, '') || ' + ' || p.sku AS match_reason
-    FROM
+    FROM 
         products p
-    WHERE
-        p.user_id = p_user_id AND
-        p.brand_id IS NOT NULL AND
-        p.sku IS NOT NULL AND
+    WHERE 
+        p.user_id = p_user_id AND 
+        p.brand_id IS NOT NULL AND 
+        p.sku IS NOT NULL AND 
         p.sku != '' AND
         EXISTS (
-            SELECT 1 FROM products p2
-            WHERE p2.brand_id = p.brand_id AND p2.sku = p.sku
+            SELECT 1 FROM products p2 
+            WHERE p2.brand_id = p.brand_id AND p2.sku = p.sku 
             AND p2.user_id = p.user_id AND p2.id != p.id
         )
-
+    
     ORDER BY group_id, product_id;
 END;
 $$;
@@ -1602,7 +1602,7 @@ CREATE FUNCTION public.get_admin_user_stats() RETURNS TABLE(total_users bigint, 
     AS $$
 BEGIN
     RETURN QUERY
-    SELECT
+    SELECT 
         (SELECT COUNT(*) FROM public.user_profiles) as total_users,
         (SELECT COUNT(*) FROM public.user_profiles WHERE updated_at >= NOW() - INTERVAL '30 days') as active_users_last_30_days,
         (SELECT COUNT(*) FROM public.user_profiles WHERE created_at >= NOW() - INTERVAL '30 days') as new_users_last_30_days,
@@ -1832,7 +1832,7 @@ CREATE FUNCTION public.get_conversation_summary(user_uuid uuid) RETURNS TABLE(co
     AS $$
 BEGIN
   RETURN QUERY
-  SELECT
+  SELECT 
     sc.id as conversation_id,
     sc.subject,
     sc.status,
@@ -1843,24 +1843,24 @@ BEGIN
     COUNT(sm.id) as total_messages,
     COUNT(CASE WHEN sm.sender_type = 'admin' AND sm.read_by_recipient = FALSE THEN 1 END) as unread_messages,
     (
-      SELECT sm2.message_content
-      FROM support_messages sm2
-      WHERE sm2.conversation_id = sc.id
-      ORDER BY sm2.created_at DESC
+      SELECT sm2.message_content 
+      FROM support_messages sm2 
+      WHERE sm2.conversation_id = sc.id 
+      ORDER BY sm2.created_at DESC 
       LIMIT 1
     ) as last_message_content,
     (
-      SELECT sm2.sender_type
-      FROM support_messages sm2
-      WHERE sm2.conversation_id = sc.id
-      ORDER BY sm2.created_at DESC
+      SELECT sm2.sender_type 
+      FROM support_messages sm2 
+      WHERE sm2.conversation_id = sc.id 
+      ORDER BY sm2.created_at DESC 
       LIMIT 1
     ) as last_message_sender,
     (
-      SELECT sm2.created_at
-      FROM support_messages sm2
-      WHERE sm2.conversation_id = sc.id
-      ORDER BY sm2.created_at DESC
+      SELECT sm2.created_at 
+      FROM support_messages sm2 
+      WHERE sm2.conversation_id = sc.id 
+      ORDER BY sm2.created_at DESC 
       LIMIT 1
     ) as last_message_time
   FROM support_conversations sc
@@ -1882,7 +1882,7 @@ CREATE FUNCTION public.get_cron_jobs() RETURNS TABLE(jobid bigint, schedule text
 BEGIN
     -- Return cron jobs data
     RETURN QUERY
-    SELECT
+    SELECT 
         j.jobid,
         j.schedule,
         j.command,
@@ -2050,7 +2050,7 @@ BEGIN
   FROM public.companies
   WHERE user_id = p_user_id
   LIMIT 1;
-
+  
   -- If not, create a new company
   IF v_company_id IS NULL THEN
     INSERT INTO public.companies (
@@ -2068,7 +2068,7 @@ BEGIN
     )
     RETURNING id INTO v_company_id;
   END IF;
-
+  
   RETURN v_company_id;
 END;
 $$;
@@ -2207,6 +2207,237 @@ $$;
 
 
 --
+-- Name: get_products_filtered(uuid, integer, integer, text, text, text, text, text, boolean, uuid[], boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean) RETURNS json
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    _query text;
+    _count_query text;
+    _offset integer;
+    _limit integer;
+    _sort_direction text;
+    _allowed_sort_columns text[] := ARRAY['name', 'sku', 'ean', 'brand', 'category', 'our_price', 'cost_price', 'created_at', 'updated_at'];
+    _safe_sort_by text;
+    _result json;
+    _total_count bigint;
+BEGIN
+    -- Calculate offset and limit
+    _offset := (p_page - 1) * p_page_size;
+    _limit := p_page_size;
+
+    -- Validate sort_by parameter to prevent null field name error
+    IF p_sort_by IS NULL OR p_sort_by = '' THEN
+        _safe_sort_by := 'created_at';
+    ELSIF p_sort_by = ANY(_allowed_sort_columns) THEN
+        _safe_sort_by := p_sort_by;
+    ELSE
+        _safe_sort_by := 'created_at'; -- Default sort column
+    END IF;
+
+    -- Validate and sanitize sort direction
+    IF p_sort_order IS NULL OR p_sort_order = '' THEN
+        _sort_direction := 'DESC';
+    ELSIF lower(p_sort_order) = 'asc' THEN
+        _sort_direction := 'ASC';
+    ELSE
+        _sort_direction := 'DESC';
+    END IF;
+
+    -- Base query construction for counting
+    _count_query := format('
+        WITH CompetitorPricesForFilter AS (
+            SELECT
+                pc.product_id,
+                MIN(pc.new_price) as min_competitor_price
+            FROM price_changes pc
+            WHERE pc.user_id = %L 
+            AND pc.competitor_id IS NOT NULL
+            GROUP BY pc.product_id
+        )
+        SELECT count(DISTINCT p.id)
+        FROM products p
+        LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
+        LEFT JOIN CompetitorPricesForFilter cpf ON p.id = cpf.product_id
+        WHERE p.user_id = %L', p_user_id, p_user_id);
+
+    -- Apply filters dynamically to count query
+    IF p_brand IS NOT NULL AND p_brand <> '' THEN
+        _count_query := _count_query || format(' AND p.brand_id = %L', p_brand);
+    END IF;
+    IF p_category IS NOT NULL AND p_category <> '' THEN
+        _count_query := _count_query || format(' AND p.category = %L', p_category);
+    END IF;
+    IF p_search IS NOT NULL AND p_search <> '' THEN
+        _count_query := _count_query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
+                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
+    END IF;
+    IF p_is_active IS NOT NULL THEN
+        _count_query := _count_query || format(' AND p.is_active = %L', p_is_active);
+    END IF;
+    IF p_has_price = TRUE THEN
+        _count_query := _count_query || ' AND p.our_price IS NOT NULL';
+    END IF;
+
+    -- Add price comparison filters to count query
+    IF p_price_lower_than_competitors = TRUE THEN
+        _count_query := _count_query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price < cpf.min_competitor_price';
+    END IF;
+    IF p_price_higher_than_competitors = TRUE THEN
+        _count_query := _count_query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price > cpf.min_competitor_price';
+    END IF;
+
+    -- Add competitor filter to count query (modified for array)
+    IF p_competitor_ids IS NOT NULL AND array_length(p_competitor_ids, 1) > 0 THEN
+        _count_query := _count_query || format('
+            AND p.id IN (
+                SELECT DISTINCT pc.product_id
+                FROM price_changes pc
+                WHERE pc.user_id = %L
+                AND pc.competitor_id = ANY(%L)
+            )', p_user_id, p_competitor_ids);
+    END IF;
+
+    -- Execute count query first
+    EXECUTE _count_query INTO _total_count;
+
+    -- Base query construction for data fetching
+    _query := format('
+        WITH CompetitorPricesForFilter AS (
+            SELECT
+                pc.product_id,
+                MIN(pc.new_price) as min_competitor_price
+            FROM price_changes pc
+            WHERE pc.user_id = %L 
+            AND pc.competitor_id IS NOT NULL
+            GROUP BY pc.product_id
+        ),
+        FilteredProductsBase AS ( -- Renamed to avoid conflict later
+            SELECT p.id
+            FROM products p
+            LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
+            LEFT JOIN CompetitorPricesForFilter cpf ON p.id = cpf.product_id
+            WHERE p.user_id = %L', p_user_id, p_user_id);
+
+    -- Apply filters dynamically to data query (similar to count query)
+    IF p_brand IS NOT NULL AND p_brand <> '' THEN
+        _query := _query || format(' AND p.brand_id = %L', p_brand);
+    END IF;
+    IF p_category IS NOT NULL AND p_category <> '' THEN
+        _query := _query || format(' AND p.category = %L', p_category);
+    END IF;
+    IF p_search IS NOT NULL AND p_search <> '' THEN
+        _query := _query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
+                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
+    END IF;
+    IF p_is_active IS NOT NULL THEN
+        _query := _query || format(' AND p.is_active = %L', p_is_active);
+    END IF;
+    IF p_has_price = TRUE THEN
+        _query := _query || ' AND p.our_price IS NOT NULL';
+    END IF;
+
+    -- Add price comparison filters to data query
+    IF p_price_lower_than_competitors = TRUE THEN
+        _query := _query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price < cpf.min_competitor_price';
+    END IF;
+    IF p_price_higher_than_competitors = TRUE THEN
+        _query := _query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price > cpf.min_competitor_price';
+    END IF;
+
+    -- Add competitor filter to data query (modified for array)
+    IF p_competitor_ids IS NOT NULL AND array_length(p_competitor_ids, 1) > 0 THEN
+        _query := _query || format('
+            AND p.id IN (
+                SELECT DISTINCT pc.product_id
+                FROM price_changes pc
+                WHERE pc.user_id = %L
+                AND pc.competitor_id = ANY(%L)
+            )', p_user_id, p_competitor_ids);
+    END IF;
+
+    -- Add grouping, sorting and pagination to the subquery selecting product IDs
+    -- Add id as a secondary sort to ensure consistent ordering
+    _query := _query || format('
+            GROUP BY p.id -- Ensure unique product IDs before sorting/limiting
+            ORDER BY p.%I %s, p.id ASC
+            LIMIT %L OFFSET %L
+        ),
+        LatestCompetitorPrices AS (
+            SELECT
+                pc.product_id,
+                pc.competitor_id as source_id,
+                pc.new_price,
+                ''competitor'' as source_type,
+                c.name as source_name,
+                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
+            FROM price_changes pc
+            JOIN competitors c ON pc.competitor_id = c.id
+            WHERE pc.user_id = %L AND pc.competitor_id IS NOT NULL
+        ),
+        LatestIntegrationPrices AS (
+            SELECT
+                pc.product_id,
+                pc.integration_id as source_id,
+                pc.new_price,
+                ''integration'' as source_type,
+                i.name as source_name,
+                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
+            FROM price_changes pc
+            JOIN integrations i ON pc.integration_id = i.id
+            WHERE pc.user_id = %L AND pc.integration_id IS NOT NULL
+        ),
+        AllLatestPrices AS (
+            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestCompetitorPrices WHERE rn = 1
+            UNION ALL
+            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestIntegrationPrices WHERE rn = 1
+        ),
+        AggregatedSourcePrices AS (
+            SELECT
+                product_id,
+                jsonb_object_agg(
+                    source_id::text,
+                    jsonb_build_object(''price'', new_price, ''source_type'', source_type, ''source_name'', COALESCE(source_name, ''Unknown''))
+                ) as source_prices
+            FROM AllLatestPrices
+            GROUP BY product_id
+        ),
+        AggregatedCompetitorPrices AS (
+             SELECT
+                product_id,
+                jsonb_object_agg(source_id::text, new_price) as competitor_prices
+            FROM AllLatestPrices
+            GROUP BY product_id
+        )
+        -- Final SELECT joining products with aggregated prices
+        SELECT
+            p.*,
+            COALESCE(asp.source_prices, ''{}''::jsonb) as source_prices,
+            COALESCE(acp.competitor_prices, ''{}''::jsonb) as competitor_prices
+        FROM products p
+        JOIN FilteredProductsBase fp ON p.id = fp.id -- Join with the filtered product IDs
+        LEFT JOIN AggregatedSourcePrices asp ON p.id = asp.product_id
+        LEFT JOIN AggregatedCompetitorPrices acp ON p.id = acp.product_id
+        ORDER BY p.%I %s, p.id ASC', -- Apply final sorting based on the main product table fields with id as secondary sort
+        _safe_sort_by, _sort_direction, _limit, _offset, -- Parameters for LIMIT/OFFSET
+        p_user_id, -- For LatestCompetitorPrices CTE
+        p_user_id, -- For LatestIntegrationPrices CTE
+        _safe_sort_by, _sort_direction -- Parameters for final ORDER BY
+    );
+
+    -- Execute the main query and construct the JSON result
+    EXECUTE format('SELECT json_build_object(%L, COALESCE(json_agg(q), %L::json), %L, %L) FROM (%s) q',
+                   'data', '[]', 'totalCount', _total_count, _query)
+    INTO _result;
+
+    RETURN _result;
+END;
+$$;
+
+
+--
 -- Name: get_products_filtered(uuid, integer, integer, text, text, text, text, text, boolean, uuid, boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -2253,7 +2484,7 @@ BEGIN
                 pc.product_id,
                 MIN(pc.new_price) as min_competitor_price
             FROM price_changes pc
-            WHERE pc.user_id = %L
+            WHERE pc.user_id = %L 
             AND pc.competitor_id IS NOT NULL
             GROUP BY pc.product_id
         )
@@ -2310,7 +2541,7 @@ BEGIN
                 pc.product_id,
                 MIN(pc.new_price) as min_competitor_price
             FROM price_changes pc
-            WHERE pc.user_id = %L
+            WHERE pc.user_id = %L 
             AND pc.competitor_id IS NOT NULL
             GROUP BY pc.product_id
         ),
@@ -2438,10 +2669,10 @@ $$;
 
 
 --
--- Name: get_products_filtered_with_user_check(uuid, integer, integer, text, text, text, text, text, boolean, uuid, boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
+-- Name: get_products_filtered_with_user_check(uuid, integer, integer, text, text, text, text, text, boolean, uuid[], boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.get_products_filtered_with_user_check(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_id uuid DEFAULT NULL::uuid, p_has_price boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean) RETURNS json
+CREATE FUNCTION public.get_products_filtered_with_user_check(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean) RETURNS json
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
 DECLARE
@@ -2461,12 +2692,47 @@ BEGIN
     p_category,
     p_search,
     p_is_active,
-    p_competitor_id,
+    p_competitor_ids,
     p_has_price,
     p_price_lower_than_competitors,
     p_price_higher_than_competitors
   ) INTO v_result;
 
+  RETURN v_result;
+END;
+$$;
+
+
+--
+-- Name: get_products_filtered_with_user_check(uuid, integer, integer, text, text, text, text, text, boolean, uuid, boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_products_filtered_with_user_check(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_id uuid DEFAULT NULL::uuid, p_has_price boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean) RETURNS json
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+DECLARE
+  v_result json;
+BEGIN
+  -- First ensure the user exists
+  PERFORM ensure_user_exists_simple(p_user_id);
+  
+  -- Then call the original function with all parameters
+  SELECT get_products_filtered(
+    p_user_id,
+    p_page,
+    p_page_size,
+    p_sort_by,
+    p_sort_order,
+    p_brand,
+    p_category,
+    p_search,
+    p_is_active,
+    p_competitor_id,
+    p_has_price,
+    p_price_lower_than_competitors,
+    p_price_higher_than_competitors
+  ) INTO v_result;
+  
   RETURN v_result;
 END;
 $$;
@@ -2481,69 +2747,69 @@ CREATE FUNCTION public.get_scheduling_stats() RETURNS TABLE(metric_name text, me
     AS $$
 BEGIN
     RETURN QUERY
-    SELECT
+    SELECT 
         'active_scrapers'::text,
         COUNT(*)::bigint,
         'Number of active scrapers'::text
-    FROM public.scrapers
+    FROM public.scrapers 
     WHERE is_active = true
-
+    
     UNION ALL
-
-    SELECT
+    
+    SELECT 
         'active_integrations'::text,
         COUNT(*)::bigint,
         'Number of active integrations'::text
-    FROM public.integrations
+    FROM public.integrations 
     WHERE status = 'active'
-
+    
     UNION ALL
-
-    SELECT
+    
+    SELECT 
         'pending_scraper_jobs'::text,
         COUNT(*)::bigint,
         'Number of pending scraper jobs'::text
-    FROM public.scraper_runs
+    FROM public.scraper_runs 
     WHERE status = 'pending'
-
+    
     UNION ALL
-
-    SELECT
+    
+    SELECT 
         'running_scraper_jobs'::text,
         COUNT(*)::bigint,
         'Number of running scraper jobs'::text
-    FROM public.scraper_runs
+    FROM public.scraper_runs 
     WHERE status = 'running'
-
+    
     UNION ALL
-
-    SELECT
+    
+    SELECT 
         'pending_integration_jobs'::text,
         COUNT(*)::bigint,
         'Number of pending integration jobs'::text
-    FROM public.integration_runs
+    FROM public.integration_runs 
     WHERE status = 'pending'
-
+    
     UNION ALL
-
-    SELECT
+    
+    SELECT 
         'processing_integration_jobs'::text,
         COUNT(*)::bigint,
         'Number of processing integration jobs'::text
-    FROM public.integration_runs
+    FROM public.integration_runs 
     WHERE status = 'processing'
-
+    
     UNION ALL
-
-    SELECT
+    
+    SELECT 
         'jobs_completed_today'::text,
         COUNT(*)::bigint,
         'Number of jobs completed today'::text
     FROM (
-        SELECT completed_at FROM public.scraper_runs
+        SELECT completed_at FROM public.scraper_runs 
         WHERE status = 'completed' AND completed_at >= date_trunc('day', now())
         UNION ALL
-        SELECT completed_at FROM public.integration_runs
+        SELECT completed_at FROM public.integration_runs 
         WHERE status = 'completed' AND completed_at >= date_trunc('day', now())
     ) completed_jobs;
 END;
@@ -2635,14 +2901,14 @@ BEGIN
         )::DATE as date
     ),
     daily_signups AS (
-        SELECT
+        SELECT 
             created_at::DATE as signup_date,
             COUNT(*) as new_users
         FROM public.user_profiles
         WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' * period_days
         GROUP BY created_at::DATE
     )
-    SELECT
+    SELECT 
         ds.date,
         COALESCE(daily_signups.new_users, 0) as new_users,
         (SELECT COUNT(*) FROM public.user_profiles WHERE created_at::DATE <= ds.date) as cumulative_users
@@ -2836,38 +3102,38 @@ BEGIN
   -- Mark messages as read based on reader type
   IF reader_type = 'user' THEN
     -- User reading admin messages
-    UPDATE support_messages
+    UPDATE support_messages 
     SET read_by_recipient = TRUE
     WHERE conversation_id = conversation_uuid
     AND sender_type = 'admin'
     AND read_by_recipient = FALSE;
-
+    
     GET DIAGNOSTICS updated_count = ROW_COUNT;
-
+    
     -- Update last read timestamp for user
     UPDATE support_conversations
     SET last_read_by_user = NOW()
     WHERE id = conversation_uuid;
-
+    
   ELSIF reader_type = 'admin' THEN
     -- Admin reading user messages
-    UPDATE support_messages
+    UPDATE support_messages 
     SET read_by_recipient = TRUE
     WHERE conversation_id = conversation_uuid
     AND sender_type = 'user'
     AND read_by_recipient = FALSE;
-
+    
     GET DIAGNOSTICS updated_count = ROW_COUNT;
-
+    
     -- Update last read timestamp for admin
     UPDATE support_conversations
     SET last_read_by_admin = NOW()
     WHERE id = conversation_uuid;
-
+    
   ELSE
     updated_count := 0;
   END IF;
-
+  
   RETURN updated_count;
 END;
 $$;
@@ -2891,11 +3157,11 @@ DECLARE
 BEGIN
     -- Set a longer statement timeout for this operation
     SET LOCAL statement_timeout = '120000'; -- 2 minutes in milliseconds
-
+    
     -- Get the primary and duplicate product records
     SELECT * INTO primary_record FROM products WHERE id = primary_id;
     SELECT * INTO duplicate_record FROM products WHERE id = duplicate_id;
-
+    
     -- Check if both records exist
     IF primary_record IS NULL THEN
         RETURN jsonb_build_object(
@@ -2905,7 +3171,7 @@ BEGIN
             'duplicate_id', duplicate_id
         );
     END IF;
-
+    
     IF duplicate_record IS NULL THEN
         RETURN jsonb_build_object(
             'success', false,
@@ -2914,7 +3180,7 @@ BEGIN
             'duplicate_id', duplicate_id
         );
     END IF;
-
+    
     -- Update the primary product with any missing information from the duplicate
     UPDATE products
     SET
@@ -2932,28 +3198,28 @@ BEGIN
         url = COALESCE(primary_record.url, duplicate_record.url),
         updated_at = NOW()
     WHERE id = primary_id;
-
+    
     -- Update references in price_changes table and count affected rows
     UPDATE price_changes
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
-
+    
     GET DIAGNOSTICS price_changes_count = ROW_COUNT;
-
+    
     -- Update references in scraped_products table and count affected rows
     UPDATE scraped_products
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
-
+    
     GET DIAGNOSTICS scraped_products_count = ROW_COUNT;
-
+    
     -- Update references in staged_integration_products table and count affected rows
     UPDATE staged_integration_products
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
-
+    
     GET DIAGNOSTICS staged_products_count = ROW_COUNT;
-
+    
     -- Check if there are any remaining references to the duplicate product
     SELECT EXISTS (
         SELECT 1 FROM staged_integration_products WHERE product_id = duplicate_id
@@ -2963,7 +3229,7 @@ BEGIN
         SELECT 1 FROM price_changes WHERE product_id = duplicate_id
         LIMIT 1
     ) INTO remaining_refs;
-
+    
     IF remaining_refs THEN
         -- There are still references to the duplicate product
         RETURN jsonb_build_object(
@@ -2978,11 +3244,11 @@ BEGIN
             )
         );
     END IF;
-
+    
     -- Delete the duplicate product
     BEGIN
         DELETE FROM products WHERE id = duplicate_id;
-
+        
         -- Return success result with statistics
         result := jsonb_build_object(
             'success', true,
@@ -3010,7 +3276,7 @@ BEGIN
             )
         );
     END;
-
+    
     RETURN result;
 EXCEPTION WHEN OTHERS THEN
     -- Return detailed error information
@@ -3021,7 +3287,7 @@ EXCEPTION WHEN OTHERS THEN
         'primary_id', primary_id,
         'duplicate_id', duplicate_id
     );
-
+    
     RETURN result;
 END;
 $$;
@@ -3528,13 +3794,13 @@ DECLARE
     v_brand_id UUID;
 BEGIN
     -- If brand column is updated but brand_id is not, update brand_id
-    IF NEW.brand IS NOT NULL AND NEW.brand != '' AND
+    IF NEW.brand IS NOT NULL AND NEW.brand != '' AND 
        (NEW.brand_id IS NULL OR (TG_OP = 'UPDATE' AND NEW.brand != OLD.brand)) THEN
         -- Find or create the brand
         SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
         NEW.brand_id := v_brand_id;
     END IF;
-
+    
     RETURN NEW;
 END;
 $$;
@@ -3554,7 +3820,7 @@ BEGIN
         FROM brands
         WHERE id = NEW.brand_id;
     END IF;
-
+    
     RETURN NEW;
 END;
 $$;
@@ -3575,14 +3841,14 @@ BEGIN
   SELECT progress_messages INTO v_current_messages
   FROM scraper_runs
   WHERE id = p_run_id;
-
+  
   -- If no messages or null, do nothing
   IF v_current_messages IS NULL OR array_length(v_current_messages, 1) IS NULL THEN
     RETURN;
   END IF;
-
+  
   v_message_count := array_length(v_current_messages, 1);
-
+  
   -- If we have more messages than the max, trim the oldest ones
   IF v_message_count > p_max_messages THEN
     UPDATE scraper_runs
@@ -3608,8 +3874,8 @@ CREATE FUNCTION public.update_conversation_timestamp() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
-  UPDATE support_conversations
-  SET updated_at = NOW()
+  UPDATE support_conversations 
+  SET updated_at = NOW() 
   WHERE id = NEW.conversation_id;
   RETURN NEW;
 END;
@@ -3714,7 +3980,7 @@ BEGIN
     --         ', Status: ' || NEW.status ||
     --         ', Execution time: ' || NEW.execution_time_ms ||
     --         ', Products per second: ' || NEW.products_per_second);
-
+    
     UPDATE scrapers
     SET
       status = CASE
@@ -3734,7 +4000,7 @@ BEGIN
       last_products_per_second = NEW.products_per_second,
       updated_at = NOW()
     WHERE id = NEW.scraper_id;
-
+    
     -- Comment out the debug logging
     -- INSERT INTO debug_logs (message)
     -- VALUES ('Updated scraper: ' || NEW.scraper_id ||
@@ -3780,12 +4046,12 @@ CREATE FUNCTION public.update_user_profile() RETURNS trigger
 BEGIN
   -- Update the user_profile when next_auth.users is updated
   UPDATE public.user_profiles
-  SET
+  SET 
     name = NEW.name,
     avatar_url = NEW.image,
     updated_at = NOW()
   WHERE id = NEW.id;
-
+  
   RETURN NEW;
 END;
 $$;
@@ -4745,7 +5011,7 @@ CREATE FUNCTION storage.update_updated_at_column() RETURNS trigger
     AS $$
 BEGIN
     NEW.updated_at = now();
-    RETURN NEW;
+    RETURN NEW; 
 END;
 $$;
 
