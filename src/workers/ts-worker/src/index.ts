@@ -1191,7 +1191,7 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
             attempt++;
             try {
                 logStructured(runId, 'debug', 'DB_INSERT', `Attempt ${attempt}/${MAX_RETRIES} inserting chunk ${chunkNumber} (${chunk.length} products)...`);
-                const { error } = await supabase.from('scraped_products').insert(chunk);
+                const { error } = await supabase.from('temp_competitors_scraped_data').insert(chunk);
 
                 if (error) {
                     logStructured(runId, 'warn', 'DB_INSERT', `Attempt ${attempt} failed for chunk ${chunkNumber}: ${error.message}`);

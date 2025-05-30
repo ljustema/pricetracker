@@ -481,7 +481,7 @@ def save_scraped_products(conn, run_id: str, user_id: str, competitor_id: str, p
                         log_event("DEBUG", "DB_INSERT", run_id, f"Attempt {attempt}/{MAX_RETRIES} inserting chunk {chunk_number} ({len(chunk)} products)...")
                         # Use execute_values for efficient batch insertion
                         sql = """
-                            INSERT INTO scraped_products (
+                            INSERT INTO temp_competitors_scraped_data (
                                 user_id, competitor_id, name, price, currency,
                                 url, image_url, sku, brand, ean, scraped_at
                             ) VALUES %s

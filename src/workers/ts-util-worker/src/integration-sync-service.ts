@@ -166,9 +166,9 @@ export class IntegrationSyncService {
     // Make sure all products are processed by calling the process function one final time
     this.log('info', 'FINAL_PROCESSING', 'Ensuring all products are processed');
 
-    // Check if the staged_integration_products table has any records for this run
+    // Check if the temp_integrations_scraped_data table has any records for this run
     const { data: stagedCount, error: countError } = await this.supabase
-      .from('staged_integration_products')
+      .from('temp_integrations_scraped_data')
       .select('id', { count: 'exact' })
       .eq('integration_run_id', this.runId);
 
@@ -204,7 +204,7 @@ export class IntegrationSyncService {
     // Get statistics on processed products
     try {
       const { data: stats, error: statsError } = await this.supabase
-        .from('staged_integration_products')
+        .from('temp_integrations_scraped_data')
         .select('status')
         .eq('integration_run_id', this.runId);
 
@@ -280,12 +280,12 @@ export class IntegrationSyncService {
       };
     });
 
-    // Insert the batch into the staged_integration_products table
-    console.log(`Inserting ${stagedProducts.length} products into staged_integration_products table`);
+    // Insert the batch into the temp_integrations_scraped_data table
+    console.log(`Inserting ${stagedProducts.length} products into temp_integrations_scraped_data table`);
     console.log('First product in batch:', JSON.stringify(stagedProducts[0], null, 2));
 
     const { data: insertData, error: insertError } = await this.supabase
-      .from('staged_integration_products')
+      .from('temp_integrations_scraped_data')
       .insert(stagedProducts)
       .select();
 
