@@ -381,7 +381,7 @@ export class ScraperExecutionService {
             try {
                 console.log(`processBatch: Attempt ${attempt}/${MAX_RETRIES} inserting chunk ${chunkNumber}...`);
                 const { error } = await supabaseAdmin
-                    .from('scraped_products')
+                    .from('temp_competitors_scraped_data')
                     .insert(chunk);
 
                 if (error) {

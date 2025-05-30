@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
     // Delete scraped products if requested
     if (include_scraped_products) {
       const { data: scrapedProductsData, error: scrapedProductsError } = await supabase
-        .from("scraped_products")
+        .from("temp_competitors_scraped_data")
         .delete()
         .eq("user_id", userId)
         .lt("scraped_at", cutoffDateString)

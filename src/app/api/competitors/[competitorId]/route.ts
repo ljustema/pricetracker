@@ -218,7 +218,7 @@ export async function DELETE(
 
     // First, delete any associated scraped products to avoid foreign key constraints
     const { error: deleteProductsError } = await supabase
-      .from("scraped_products")
+      .from("temp_competitors_scraped_data")
       .delete()
       .eq("competitor_id", competitorId);
 

@@ -1,9 +1,9 @@
 /**
  * TEMPORARY SIMPLIFIED DATABASE TYPES
- * 
+ *
  * This is a simplified version of the database types file to allow deployment to Railway.
  * The original file was causing UTF-8 encoding issues during deployment.
- * 
+ *
  * After successful deployment, you should regenerate the proper types using:
  * supabase gen types typescript --project-id <your-project-id> --schema public > src/lib/supabase/database.types.ts
  */
@@ -105,9 +105,25 @@ export type Database = {
         Update: any
         Relationships: any[]
       }
+      temp_competitors_scraped_data: {
+        Row: any
+        Insert: any
+        Update: any
+        Relationships: any[]
+      }
+      temp_integrations_scraped_data: {
+        Row: any
+        Insert: any
+        Update: any
+        Relationships: any[]
+      }
     }
     Functions: {
       cleanup_scraped_products: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
+      cleanup_temp_competitors_scraped_data: {
         Args: Record<PropertyKey, never>
         Returns: undefined
       }

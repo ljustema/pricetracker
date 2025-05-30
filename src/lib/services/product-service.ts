@@ -127,7 +127,7 @@ export async function getScrapedProducts(
   const uuid = ensureUUID(userId);
 
   let query = supabase
-    .from("scraped_products")
+    .from("temp_competitors_scraped_data")
     .select(`
       *,
       competitors(name, website),

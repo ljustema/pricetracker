@@ -300,26 +300,168 @@ export type Database = {
                     url?: string | null;
                     user_id?: string;
                 };
+                Relationships: [];
+            };
+            temp_competitors_scraped_data: {
+                Row: {
+                    brand: string | null;
+                    competitor_id: string;
+                    currency: string | null;
+                    ean: string | null;
+                    id: string;
+                    image_url: string | null;
+                    name: string;
+                    price: number;
+                    product_id: string | null;
+                    scraped_at: string | null;
+                    scraper_id: string | null;
+                    sku: string | null;
+                    url: string | null;
+                    user_id: string;
+                };
+                Insert: {
+                    brand?: string | null;
+                    competitor_id: string;
+                    currency?: string | null;
+                    ean?: string | null;
+                    id?: string;
+                    image_url?: string | null;
+                    name: string;
+                    price: number;
+                    product_id?: string | null;
+                    scraped_at?: string | null;
+                    scraper_id?: string | null;
+                    sku?: string | null;
+                    url?: string | null;
+                    user_id: string;
+                };
+                Update: {
+                    brand?: string | null;
+                    competitor_id?: string;
+                    currency?: string | null;
+                    ean?: string | null;
+                    id?: string;
+                    image_url?: string | null;
+                    name?: string;
+                    price?: number;
+                    product_id?: string | null;
+                    scraped_at?: string | null;
+                    scraper_id?: string | null;
+                    sku?: string | null;
+                    url?: string | null;
+                    user_id?: string;
+                };
                 Relationships: [
                     {
-                        foreignKeyName: "scraped_products_competitor_id_fkey";
+                        foreignKeyName: "temp_competitors_scraped_data_competitor_id_fkey";
                         columns: ["competitor_id"];
                         isOneToOne: false;
                         referencedRelation: "competitors";
                         referencedColumns: ["id"];
                     },
                     {
-                        foreignKeyName: "scraped_products_product_id_fkey";
+                        foreignKeyName: "temp_competitors_scraped_data_product_id_fkey";
                         columns: ["product_id"];
                         isOneToOne: false;
                         referencedRelation: "products";
                         referencedColumns: ["id"];
                     },
                     {
-                        foreignKeyName: "scraped_products_scraper_id_fkey";
+                        foreignKeyName: "temp_competitors_scraped_data_scraper_id_fkey";
                         columns: ["scraper_id"];
                         isOneToOne: false;
                         referencedRelation: "scrapers";
+                        referencedColumns: ["id"];
+                    }
+                ];
+            };
+            temp_integrations_scraped_data: {
+                Row: {
+                    brand: string | null;
+                    created_at: string;
+                    currency_code: string | null;
+                    ean: string | null;
+                    error_message: string | null;
+                    id: string;
+                    image_url: string | null;
+                    integration_id: string;
+                    integration_run_id: string;
+                    name: string;
+                    prestashop_product_id: string | null;
+                    price: number | null;
+                    processed_at: string | null;
+                    product_id: string | null;
+                    raw_data: Json | null;
+                    sku: string | null;
+                    status: string;
+                    url: string | null;
+                    user_id: string;
+                    wholesale_price: number | null;
+                };
+                Insert: {
+                    brand?: string | null;
+                    created_at?: string;
+                    currency_code?: string | null;
+                    ean?: string | null;
+                    error_message?: string | null;
+                    id?: string;
+                    image_url?: string | null;
+                    integration_id: string;
+                    integration_run_id: string;
+                    name: string;
+                    prestashop_product_id?: string | null;
+                    price?: number | null;
+                    processed_at?: string | null;
+                    product_id?: string | null;
+                    raw_data?: Json | null;
+                    sku?: string | null;
+                    status?: string;
+                    url?: string | null;
+                    user_id: string;
+                    wholesale_price?: number | null;
+                };
+                Update: {
+                    brand?: string | null;
+                    created_at?: string;
+                    currency_code?: string | null;
+                    ean?: string | null;
+                    error_message?: string | null;
+                    id?: string;
+                    image_url?: string | null;
+                    integration_id?: string;
+                    integration_run_id?: string;
+                    name?: string;
+                    prestashop_product_id?: string | null;
+                    price?: number | null;
+                    processed_at?: string | null;
+                    product_id?: string | null;
+                    raw_data?: Json | null;
+                    sku?: string | null;
+                    status?: string;
+                    url?: string | null;
+                    user_id?: string;
+                    wholesale_price?: number | null;
+                };
+                Relationships: [
+                    {
+                        foreignKeyName: "temp_integrations_scraped_data_integration_id_fkey";
+                        columns: ["integration_id"];
+                        isOneToOne: false;
+                        referencedRelation: "integrations";
+                        referencedColumns: ["id"];
+                    },
+                    {
+                        foreignKeyName: "temp_integrations_scraped_data_integration_run_id_fkey";
+                        columns: ["integration_run_id"];
+                        isOneToOne: false;
+                        referencedRelation: "integration_runs";
+                        referencedColumns: ["id"];
+                    },
+                    {
+                        foreignKeyName: "temp_integrations_scraped_data_product_id_fkey";
+                        columns: ["product_id"];
+                        isOneToOne: false;
+                        referencedRelation: "products";
                         referencedColumns: ["id"];
                     }
                 ];

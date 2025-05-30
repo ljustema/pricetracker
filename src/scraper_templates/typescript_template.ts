@@ -23,7 +23,7 @@ import { hideBin } from 'yargs/helpers';
 
 /**
  * Defines the structure for scraped product data.
- * Align this with the `scraped_products` table schema.
+ * Align this with the `temp_competitors_scraped_data` table schema.
  */
 interface ScrapedProductData {
     url: string;

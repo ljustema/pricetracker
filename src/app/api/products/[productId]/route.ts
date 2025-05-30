@@ -301,16 +301,16 @@ export async function DELETE(
       );
     }
 
-    // Check if there are staged_integration_products referencing this product
+    // Check if there are temp_integrations_scraped_data referencing this product
     const { count: stagedProductsCount, error: stagedCountError } = await supabase
-      .from("staged_integration_products")
+      .from("temp_integrations_scraped_data")
       .select("id", { count: 'exact', head: true })
       .eq("product_id", productId);
 
     if (stagedCountError) {
-      console.error("Error checking staged_integration_products references:", stagedCountError);
+      console.error("Error checking temp_integrations_scraped_data references:", stagedCountError);
       return NextResponse.json(
-        { error: "Error checking staged_integration_products references" },
+        { error: "Error checking temp_integrations_scraped_data references" },
         { status: 500 }
       );
     }
@@ -333,22 +333,22 @@ export async function DELETE(
       console.log(`Deleted ${priceChangesCount} price_changes records for product ${productId}`);
     }
 
-    // Delete staged_integration_products records if they exist
+    // Delete temp_integrations_scraped_data records if they exist
     if (stagedProductsCount && stagedProductsCount > 0) {
       const { error: deleteStagedError } = await supabase
-        .from("staged_integration_products")
+        .from("temp_integrations_scraped_data")
         .delete()
         .eq("product_id", productId);
 
       if (deleteStagedError) {
-        console.error("Error deleting staged_integration_products:", deleteStagedError);
+        console.error("Error deleting temp_integrations_scraped_data:", deleteStagedError);
         return NextResponse.json(
-          { error: `Cannot delete product: it has ${stagedProductsCount} staged integration product records. Please try again or contact support.` },
+          { error: `Cannot delete product: it has ${stagedProductsCount} temp integration product records. Please try again or contact support.` },
           { status: 409 }
         );
       }
 
-      console.log(`Deleted ${stagedProductsCount} staged_integration_products records for product ${productId}`);
+      console.log(`Deleted ${stagedProductsCount} temp_integrations_scraped_data records for product ${productId}`);
     }
 
     // Now delete the product
