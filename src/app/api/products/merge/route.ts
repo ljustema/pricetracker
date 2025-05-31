@@ -97,30 +97,27 @@ export async function POST(request: NextRequest) {
         // Check price_changes
         const { data: priceChanges, error: priceError } = await supabase
           .from('price_changes')
-          .select('product_id, count', { count: 'exact' })
-          .in('product_id', [primaryId, duplicateId])
-          .groupby('product_id');
+          .select('product_id')
+          .in('product_id', [primaryId, duplicateId]);
 
         // Check temp_competitors_scraped_data
         const { data: scrapedProducts, error: scrapedError } = await supabase
           .from('temp_competitors_scraped_data')
-          .select('product_id, count', { count: 'exact' })
-          .in('product_id', [primaryId, duplicateId])
-          .groupby('product_id');
+          .select('product_id')
+          .in('product_id', [primaryId, duplicateId]);
 
         // Check temp_integrations_scraped_data
         const { data: stagedProducts, error: stagedError } = await supabase
           .from('temp_integrations_scraped_data')
-          .select('product_id, count', { count: 'exact' })
-          .in('product_id', [primaryId, duplicateId])
-          .groupby('product_id');
+          .select('product_id')
+          .in('product_id', [primaryId, duplicateId]);
 
         // Log the counts if available
         if (!priceError && !scrapedError && !stagedError) {
           console.log("Related records:", {
-            price_changes: priceChanges,
-            temp_competitors_scraped_data: scrapedProducts,
-            temp_integrations_scraped_data: stagedProducts
+            price_changes: priceChanges?.length || 0,
+            temp_competitors_scraped_data: scrapedProducts?.length || 0,
+            temp_integrations_scraped_data: stagedProducts?.length || 0
           });
         }
       } catch (countError) {

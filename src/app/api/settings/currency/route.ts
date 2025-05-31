@@ -33,9 +33,9 @@ export async function GET() {
     // Get the user's company
     const userId = ensureUUID(session.user.id);
 
-    // First, check if the user has a company
+    // First, check if the user has settings
     const { data, error } = await supabase
-      .from("companies")
+      .from("user_settings")
       .select("primary_currency, currency_format")
       .eq("user_id", userId)
       .maybeSingle();
@@ -48,36 +48,36 @@ export async function GET() {
       );
     }
 
-    // If no company exists, create one with default values
+    // If no settings exist, create them with default values
     if (!data) {
-      // Call the get_or_create_company function
+      // Call the get_or_create_user_settings function
       const { data: functionData, error: functionError } = await supabase
-        .rpc("get_or_create_company", { p_user_id: userId });
+        .rpc("get_or_create_user_settings", { p_user_id: userId });
 
       if (functionError) {
-        console.error("Error creating company:", functionError);
+        console.error("Error creating user settings:", functionError);
         return NextResponse.json(
-          { error: "Failed to create company" },
+          { error: "Failed to create user settings" },
           { status: 500 }
         );
       }
 
-      // Fetch the newly created company
-      const { data: newCompany, error: fetchError } = await supabase
-        .from("companies")
+      // Fetch the newly created settings
+      const { data: newSettings, error: fetchError } = await supabase
+        .from("user_settings")
         .select("primary_currency, currency_format")
         .eq("id", functionData)
         .single();
 
       if (fetchError) {
-        console.error("Error fetching new company:", fetchError);
+        console.error("Error fetching new user settings:", fetchError);
         return NextResponse.json(
-          { error: "Failed to fetch new company" },
+          { error: "Failed to fetch new user settings" },
           { status: 500 }
         );
       }
 
-      return NextResponse.json(newCompany);
+      return NextResponse.json(newSettings);
     }
 
     return NextResponse.json(data);

@@ -33,21 +33,21 @@ export async function GET(_request: NextRequest) {
     // Get the user's company
     const userId = ensureUUID(session.user.id);
 
-    // First, ensure the company exists
-    const { data: _companyData, error: companyError } = await supabase
-      .rpc("get_or_create_company", { p_user_id: userId });
+    // First, ensure the user settings exist
+    const { data: _settingsData, error: settingsError } = await supabase
+      .rpc("get_or_create_user_settings", { p_user_id: userId });
 
-    if (companyError) {
-      console.error("Error ensuring company exists:", companyError);
+    if (settingsError) {
+      console.error("Error ensuring user settings exist:", settingsError);
       return NextResponse.json(
-        { error: "Failed to ensure company exists" },
+        { error: "Failed to ensure user settings exist" },
         { status: 500 }
       );
     }
 
-    // Fetch the company's price thresholds
+    // Fetch the user's price thresholds
     const { data, error } = await supabase
-      .from("companies")
+      .from("user_settings")
       .select("price_thresholds")
       .eq("user_id", userId)
       .single();

@@ -30,54 +30,54 @@ export async function GET() {
 
     const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
-    // Get the user's company
+    // Get the user's settings
     const userId = ensureUUID(session.user.id);
 
-    // First, check if the user has a company
+    // First, check if the user has settings
     const { data, error } = await supabase
-      .from("companies")
+      .from("user_settings")
       .select("*")
       .eq("user_id", userId)
       .maybeSingle();
 
     if (error) {
-      console.error("Error fetching company:", error);
+      console.error("Error fetching user settings:", error);
       return NextResponse.json(
-        { error: "Failed to fetch company" },
+        { error: "Failed to fetch user settings" },
         { status: 500 }
       );
     }
 
-    // If no company exists, create one with default values
+    // If no settings exist, create them with default values
     if (!data) {
-      // Call the get_or_create_company function
+      // Call the get_or_create_user_settings function
       const { data: functionData, error: functionError } = await supabase
-        .rpc("get_or_create_company", { p_user_id: userId });
+        .rpc("get_or_create_user_settings", { p_user_id: userId });
 
       if (functionError) {
-        console.error("Error creating company:", functionError);
+        console.error("Error creating user settings:", functionError);
         return NextResponse.json(
-          { error: "Failed to create company" },
+          { error: "Failed to create user settings" },
           { status: 500 }
         );
       }
 
-      // Fetch the newly created company
-      const { data: newCompany, error: fetchError } = await supabase
-        .from("companies")
+      // Fetch the newly created settings
+      const { data: newSettings, error: fetchError } = await supabase
+        .from("user_settings")
         .select("*")
         .eq("id", functionData)
         .single();
 
       if (fetchError) {
-        console.error("Error fetching new company:", fetchError);
+        console.error("Error fetching new user settings:", fetchError);
         return NextResponse.json(
-          { error: "Failed to fetch new company" },
+          { error: "Failed to fetch new user settings" },
           { status: 500 }
         );
       }
 
-      return NextResponse.json(newCompany);
+      return NextResponse.json(newSettings);
     }
 
     return NextResponse.json(data);
@@ -147,32 +147,32 @@ export async function PATCH(request: NextRequest) {
     if (address !== undefined) updateData.address = address;
     if (org_number !== undefined) updateData.org_number = org_number;
 
-    // Get the user's company ID
+    // Get the user's settings ID
     const userId = ensureUUID(session.user.id);
 
-    // First, ensure the company exists
-    const { error: companyError } = await supabase
-      .rpc("get_or_create_company", { p_user_id: userId });
+    // First, ensure the user settings exist
+    const { error: settingsError } = await supabase
+      .rpc("get_or_create_user_settings", { p_user_id: userId });
 
-    if (companyError) {
-      console.error("Error ensuring company exists:", companyError);
+    if (settingsError) {
+      console.error("Error ensuring user settings exist:", settingsError);
       return NextResponse.json(
-        { error: "Failed to ensure company exists" },
+        { error: "Failed to ensure user settings exist" },
         { status: 500 }
       );
     }
 
-    // Update the company
+    // Update the user settings
     const { data, error } = await supabase
-      .from("companies")
+      .from("user_settings")
       .update(updateData)
       .eq("user_id", userId)
       .select();
 
     if (error) {
-      console.error("Error updating company:", error);
+      console.error("Error updating user settings:", error);
       return NextResponse.json(
-        { error: "Failed to update company" },
+        { error: "Failed to update user settings" },
         { status: 500 }
       );
     }

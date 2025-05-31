@@ -12,9 +12,12 @@ import {
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
+import { ProductFieldComparison } from './ProductFieldComparison';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 interface Product {
   product_id: string;
+  id: string;
   name: string;
   sku: string | null;
   ean: string | null;
@@ -25,10 +28,12 @@ interface Product {
   image_url?: string | null;
   our_price?: number | null;
   wholesale_price?: number | null;
+  currency_code?: string | null;
+  url?: string | null;
 }
 
 interface DuplicateGroup {
-  group_id: number;
+  group_id: string;
   match_reason: string;
   products: Product[];
 }
@@ -80,13 +85,6 @@ export function MergeModal({
     { key: 'wholesale_price', label: 'Wholesale Price' },
   ];
 
-  const handleFieldSelection = (field: string, value: string) => {
-    setFieldSelections({
-      ...fieldSelections,
-      [field]: value
-    });
-  };
-
   const handleMerge = async () => {
     try {
       setMerging(true);
@@ -115,7 +113,7 @@ export function MergeModal({
           }
 
           console.log("Merge successful:", data);
-        } catch (mergeError: any) {
+        } catch (mergeError: unknown) {
           console.error("Error merging product:", mergeError);
           throw mergeError;
         }
@@ -128,8 +126,8 @@ export function MergeModal({
 
       onSuccess();
       onOpenChange(false);
-    } catch (err: any) {
-      const errorMessage = err.message || "Unknown error occurred";
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Unknown error occurred";
       setError(errorMessage);
       toast({
         title: "Error merging products",
@@ -141,92 +139,119 @@ export function MergeModal({
     }
   };
 
+  const handleFieldSelection = (field: string, productId: string, _value: unknown) => {
+    setFieldSelections({
+      ...fieldSelections,
+      [field]: productId
+    });
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="!max-w-[60vw] !w-[60vw] max-h-[90vh] overflow-y-auto sm:!max-w-[60vw]" style={{ width: '60vw', maxWidth: '60vw' }}>
         <DialogHeader>
-          <DialogTitle>Merge Products</DialogTitle>
+          <DialogTitle>Merge Products - Enhanced Comparison</DialogTitle>
         </DialogHeader>
 
         <div className="py-4">
-          <div className="mb-4">
-            <h3 className="font-medium">Primary Product (will be kept)</h3>
-            <div className="p-2 border rounded mt-1">
-              <div><strong>{primaryProduct.name}</strong></div>
-              <div className="text-sm">
-                {primaryProduct.brand && <span className="mr-2">Brand: {primaryProduct.brand}</span>}
-                {primaryProduct.sku && <span className="mr-2">SKU: {primaryProduct.sku}</span>}
-                {primaryProduct.ean && <span>EAN: {primaryProduct.ean}</span>}
-              </div>
-            </div>
-          </div>
+          <Tabs defaultValue="overview" className="w-full">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="comparison">Smart Comparison</TabsTrigger>
+              <TabsTrigger value="legacy">Manual Selection</TabsTrigger>
+            </TabsList>
 
-          <div className="mb-4">
-            <h3 className="font-medium">Duplicate Products (will be merged and deleted)</h3>
-            <div className="space-y-2 mt-1">
-              {duplicateProducts.map(product => (
-                <div key={product.product_id} className="p-2 border rounded">
-                  <div><strong>{product.name}</strong></div>
-                  <div className="text-sm">
-                    {product.brand && <span className="mr-2">Brand: {product.brand}</span>}
-                    {product.sku && <span className="mr-2">SKU: {product.sku}</span>}
-                    {product.ean && <span>EAN: {product.ean}</span>}
+            <TabsContent value="overview" className="space-y-4">
+              <div className="mb-4">
+                <h3 className="font-medium">Primary Product (will be kept)</h3>
+                <div className="p-3 border rounded bg-green-50">
+                  <div><strong>{primaryProduct.name}</strong></div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    {primaryProduct.brand && <span className="mr-4">Brand: <strong>{primaryProduct.brand}</strong></span>}
+                    {primaryProduct.sku && <span className="mr-4">SKU: <strong>{primaryProduct.sku}</strong></span>}
+                    {primaryProduct.ean && <span>EAN: <strong>{primaryProduct.ean}</strong></span>}
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
+              </div>
 
-          <div className="mb-4">
-            <h3 className="font-medium">Field Selection</h3>
-            <p className="text-sm text-gray-500 mb-2">
-              Choose which values to keep for each field when there are conflicts
-            </p>
-
-            <div className="space-y-4">
-              {fields.map(field => {
-                const values = new Set([
-                  primaryProduct[field.key as keyof Product],
-                  ...duplicateProducts.map(p => p[field.key as keyof Product])
-                ].filter(Boolean));
-
-                // Skip if there's only one unique value or no values
-                if (values.size <= 1) return null;
-
-                return (
-                  <div key={field.key} className="border p-3 rounded">
-                    <h4 className="font-medium mb-2">{field.label}</h4>
-                    <RadioGroup
-                      value={fieldSelections[field.key] || primaryProduct.product_id}
-                      onValueChange={(value) => handleFieldSelection(field.key, value)}
-                    >
-                      <div className="space-y-2">
-                        <div className="flex items-center">
-                          <RadioGroupItem id={`${field.key}-primary`} value={primaryProduct.product_id} />
-                          <Label htmlFor={`${field.key}-primary`} className="ml-2">
-                            {primaryProduct[field.key as keyof Product] || '(empty)'} (Primary)
-                          </Label>
-                        </div>
-
-                        {duplicateProducts.map(product => (
-                          <div key={product.product_id} className="flex items-center">
-                            <RadioGroupItem
-                              id={`${field.key}-${product.product_id}`}
-                              value={product.product_id}
-                              disabled={!product[field.key as keyof Product]}
-                            />
-                            <Label htmlFor={`${field.key}-${product.product_id}`} className="ml-2">
-                              {product[field.key as keyof Product] || '(empty)'}
-                            </Label>
-                          </div>
-                        ))}
+              <div className="mb-4">
+                <h3 className="font-medium">Duplicate Products (will be merged and deleted)</h3>
+                <div className="space-y-2 mt-2">
+                  {duplicateProducts.map(product => (
+                    <div key={product.product_id} className="p-3 border rounded bg-red-50">
+                      <div><strong>{product.name}</strong></div>
+                      <div className="text-sm text-gray-600 mt-1">
+                        {product.brand && <span className="mr-4">Brand: <strong>{product.brand}</strong></span>}
+                        {product.sku && <span className="mr-4">SKU: <strong>{product.sku}</strong></span>}
+                        {product.ean && <span>EAN: <strong>{product.ean}</strong></span>}
                       </div>
-                    </RadioGroup>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="comparison" className="space-y-4">
+              <ProductFieldComparison
+                products={[primaryProduct, ...duplicateProducts]}
+                onFieldSelect={handleFieldSelection}
+                selectedFields={fieldSelections}
+              />
+            </TabsContent>
+
+            <TabsContent value="legacy" className="space-y-4">
+              <div className="mb-4">
+                <h3 className="font-medium">Manual Field Selection</h3>
+                <p className="text-sm text-gray-500 mb-2">
+                  Choose which values to keep for each field when there are conflicts
+                </p>
+
+                <div className="space-y-4">
+                  {fields.map(field => {
+                    const values = new Set([
+                      primaryProduct[field.key as keyof Product],
+                      ...duplicateProducts.map(p => p[field.key as keyof Product])
+                    ].filter(Boolean));
+
+                    // Skip if there's only one unique value or no values
+                    if (values.size <= 1) return null;
+
+                    return (
+                      <div key={field.key} className="border p-3 rounded">
+                        <h4 className="font-medium mb-2">{field.label}</h4>
+                        <RadioGroup
+                          value={fieldSelections[field.key] || primaryProduct.product_id}
+                          onValueChange={(value) => handleFieldSelection(field.key, value, null)}
+                        >
+                          <div className="space-y-2">
+                            <div className="flex items-center">
+                              <RadioGroupItem id={`${field.key}-primary`} value={primaryProduct.product_id} />
+                              <Label htmlFor={`${field.key}-primary`} className="ml-2">
+                                {primaryProduct[field.key as keyof Product] || '(empty)'} (Primary)
+                              </Label>
+                            </div>
+
+                            {duplicateProducts.map(product => (
+                              <div key={product.product_id} className="flex items-center">
+                                <RadioGroupItem
+                                  id={`${field.key}-${product.product_id}`}
+                                  value={product.product_id}
+                                  disabled={!product[field.key as keyof Product]}
+                                />
+                                <Label htmlFor={`${field.key}-${product.product_id}`} className="ml-2">
+                                  {product[field.key as keyof Product] || '(empty)'}
+                                </Label>
+                              </div>
+                            ))}
+                          </div>
+                        </RadioGroup>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </TabsContent>
+          </Tabs>
 
           {error && (
             <div className="text-red-500 mb-4">
