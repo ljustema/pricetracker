@@ -55,17 +55,82 @@ logger.propagate = False # Prevent duplicate logging if root logger is configure
 # --- Database Utilities ---
 
 def get_db_connection():
-    """Establishes a connection to the PostgreSQL database."""
+    """Establishes a connection to the PostgreSQL database with proper SSL and timeout configuration."""
     if not DATABASE_URL:
         # Use logger directly instead of log_event before logger might be fully configured
         logger.critical("DATABASE_URL environment variable not set.")
         raise ValueError("DATABASE_URL environment variable not set.")
+
+    # Connection parameters for better stability with Supabase
+    connection_params = {
+        'dsn': DATABASE_URL,
+        'connect_timeout': 30,  # 30 second connection timeout
+        'keepalives_idle': 600,  # Start keepalives after 10 minutes of inactivity
+        'keepalives_interval': 30,  # Send keepalive every 30 seconds
+        'keepalives_count': 3,  # Drop connection after 3 failed keepalives
+        'application_name': f'py-worker-{os.getpid()}',  # Help identify connections in logs
+    }
+
+    # Add SSL configuration for Supabase
+    if 'supabase' in DATABASE_URL.lower():
+        connection_params['sslmode'] = 'require'
+
+    max_retries = 3
+    retry_delay = 1
+
+    for attempt in range(max_retries):
+        try:
+            conn = psycopg2.connect(**connection_params)
+            # Test the connection with a simple query
+            with conn.cursor() as test_cur:
+                test_cur.execute("SELECT 1")
+                test_cur.fetchone()
+            return conn
+        except psycopg2.OperationalError as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Database connection attempt {attempt + 1} failed: {e}. Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                logger.critical(f"Database connection failed after {max_retries} attempts: {e}")
+                raise
+        except psycopg2.Error as e:
+            logger.critical(f"Database connection error: {e}")
+            raise
+
+def validate_and_reconnect_if_needed(conn):
+    """
+    Validates a database connection and reconnects if necessary.
+    Returns a valid connection or raises an exception if unable to connect.
+    """
+    if conn is None:
+        return get_db_connection()
+
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        return conn
-    except psycopg2.Error as e:
-        logger.critical(f"Database connection error: {e}")
-        raise
+        # Check if connection is closed
+        if conn.closed:
+            return get_db_connection()
+
+        # Test the connection with a simple query
+        with conn.cursor() as test_cur:
+            test_cur.execute("SELECT 1")
+            test_cur.fetchone()
+
+        return conn  # Connection is valid
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        # Connection is broken, get a new one
+        try:
+            conn.close()
+        except Exception:
+            pass  # Ignore errors when closing broken connection
+        return get_db_connection()
+    except Exception:
+        # For any other error, try to get a new connection
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return get_db_connection()
 
 def log_event(level: str, phase: str, run_id: Optional[str], message: str, data: Optional[Dict] = None):
     """Logs messages in the structured format."""
@@ -133,18 +198,12 @@ def find_and_claim_job(conn):
     Finds a pending Python scraper job and attempts to claim it atomically.
     Returns the job details if successful, otherwise None.
     """
-    # Check if connection is still active, if not, get a new one
+    # Validate and reconnect if needed
     try:
-        if conn.closed:
-            log_event("INFO", "DB_CONNECTION", None, "Creating new database connection as previous one was closed")
-            conn = get_db_connection()
+        conn = validate_and_reconnect_if_needed(conn)
     except Exception as e:
-        log_event("WARN", "DB_CONNECTION", None, f"Error checking connection status: {str(e)}")
-        try:
-            conn = get_db_connection()
-        except Exception as e2:
-            log_event("ERROR", "DB_CONNECTION", None, f"Failed to create new connection: {str(e2)}")
-            return None # Cannot proceed
+        log_event("ERROR", "DB_CONNECTION", None, f"Failed to establish database connection: {str(e)}")
+        return None # Cannot proceed
 
     # Add retry logic for job search
     max_retries = 3  # Increased from 2 to 3 for more resilience
@@ -248,7 +307,7 @@ def find_and_claim_job(conn):
                 time.sleep(1)
                 # Ensure connection is still valid
                 try:
-                    if conn.closed: conn = get_db_connection()
+                    conn = validate_and_reconnect_if_needed(conn)
                 except Exception as reconn_err:
                     log_event("ERROR", "DB_CONNECTION", None, f"Failed to reconnect after DB error: {reconn_err}")
                     return None # Cannot continue without DB
@@ -265,7 +324,7 @@ def find_and_claim_job(conn):
                  time.sleep(1)
                  # Ensure connection is still valid
                  try:
-                     if conn.closed: conn = get_db_connection()
+                     conn = validate_and_reconnect_if_needed(conn)
                  except Exception as reconn_err:
                      log_event("ERROR", "DB_CONNECTION", None, f"Failed to reconnect after error: {reconn_err}")
                      return None # Cannot continue without DB
@@ -283,7 +342,7 @@ def fetch_scraper_details(conn, scraper_id: str) -> Optional[Dict[str, Any]]:
     retry_count = 0
     while retry_count <= max_retries:
         try:
-            if conn.closed: conn = get_db_connection() # Ensure connection
+            conn = validate_and_reconnect_if_needed(conn) # Ensure connection
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
                 cur.execute(
                     """
@@ -309,7 +368,7 @@ def fetch_scraper_details(conn, scraper_id: str) -> Optional[Dict[str, Any]]:
             if retry_count <= max_retries:
                 time.sleep(1)
                 try: # Try to ensure connection for next retry
-                    if conn.closed: conn = get_db_connection()
+                    conn = validate_and_reconnect_if_needed(conn)
                 except Exception:
                     log_event("ERROR", "DB_CONNECTION", None, "Failed to reconnect during fetch retry.")
                     return None # Cannot continue
@@ -334,10 +393,9 @@ def update_job_status(conn, run_id: str, status: str, error_message: Optional[st
     cursor = None
     try:
         # Ensure connection is valid
-        if conn is None or conn.closed:
-            log_event("INFO", "DB_CONNECTION", run_id, "Creating new DB connection for status update.")
-            conn = get_db_connection()
-            new_connection = True
+        conn = validate_and_reconnect_if_needed(conn)
+        if new_connection is False:  # Only set to True if we created a new connection
+            new_connection = False
 
         # Start building the SQL update query
         update_fields = ["status = %s"]
@@ -466,7 +524,7 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
     total_to_insert = len(products_to_insert)
 
     try: # Wrap the loop in a try block to handle potential connection issues
-        if conn.closed: conn = get_db_connection() # Ensure connection
+        conn = validate_and_reconnect_if_needed(conn) # Ensure connection
 
         with conn.cursor() as cur:
             for i in range(0, total_to_insert, DB_BATCH_SIZE):
@@ -501,7 +559,7 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
                             break # Break retry loop for this chunk
                         time.sleep(RETRY_DELAY_S * attempt) # Exponential backoff for retries
                         # Ensure connection is still valid before retrying
-                        if conn.closed: conn = get_db_connection()
+                        conn = validate_and_reconnect_if_needed(conn)
                         cur = conn.cursor() # Need a new cursor after rollback/reconnect
                     except Exception as e:
                         conn.rollback()
@@ -510,7 +568,7 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
                              log_event("ERROR", "DB_INSERT", run_id, f"Failed to insert chunk {chunk_number} due to unexpected error after {MAX_RETRIES} attempts. Error: {e}")
                              break # Break retry loop for this chunk
                         time.sleep(RETRY_DELAY_S * attempt)
-                        if conn.closed: conn = get_db_connection()
+                        conn = validate_and_reconnect_if_needed(conn)
                         cur = conn.cursor()
 
     except Exception as outer_e:
@@ -545,9 +603,7 @@ def process_job(conn, job):
 
     # Ensure DB connection is active at the start
     try:
-        if conn is None or conn.closed:
-            log_event("INFO", "DB_CONNECTION", run_id, "Re-establishing DB connection for job processing.")
-            conn = get_db_connection()
+        conn = validate_and_reconnect_if_needed(conn)
     except Exception as e:
         log_event("ERROR", "DB_CONNECTION", run_id, f"Failed to ensure DB connection at start: {e}")
         # Attempt to update status even if connection failed initially
@@ -584,7 +640,7 @@ def process_job(conn, job):
 
         # Re-check connection before fetching filter data
         try:
-            if conn.closed: conn = get_db_connection()
+            conn = validate_and_reconnect_if_needed(conn)
         except Exception as e:
             raise ConnectionError(f"DB connection lost before fetching filter data: {e}") # Raise to be caught by main try-except
 
@@ -748,7 +804,7 @@ def process_job(conn, job):
                                     # Update progress in database every 10 products
                                     if product_count % 10 == 0:
                                         try:
-                                            if conn.closed: conn = get_db_connection()
+                                            conn = validate_and_reconnect_if_needed(conn)
                                             update_job_status(conn, run_id, 'running', product_count=product_count)
                                             log_event("INFO", "PROGRESS_UPDATE", run_id, f"Updated product count in database: {product_count}")
                                         except Exception as count_update_err:
@@ -758,7 +814,7 @@ def process_job(conn, job):
                                     if len(products_buffer) >= DB_BATCH_SIZE:
                                         log_event("INFO", "DB_BATCH_SAVE", run_id, f"Saving batch of {len(products_buffer)} products...")
                                         # Ensure connection is valid before saving batch
-                                        if conn.closed: conn = get_db_connection()
+                                        conn = validate_and_reconnect_if_needed(conn)
                                         inserted = save_temp_competitors_scraped_data(conn, run_id, user_id, competitor_id, products_buffer)
                                         log_event("INFO", "DB_BATCH_SAVE", run_id, f"Successfully inserted {inserted} products.")
                                         products_buffer = [] # Clear buffer after saving
@@ -822,7 +878,7 @@ def process_job(conn, job):
                                     # Update progress in database
                                     try:
                                         # Ensure connection is valid
-                                        if conn.closed: conn = get_db_connection()
+                                        conn = validate_and_reconnect_if_needed(conn)
                                         update_job_status(
                                             conn, run_id, 'running',
                                             product_count=product_count,
@@ -853,7 +909,7 @@ def process_job(conn, job):
             if products_buffer:
                 log_event("INFO", "DB_BATCH_SAVE", run_id, f"Saving final batch of {len(products_buffer)} products...")
                 # Ensure connection is valid before saving final batch
-                if conn.closed: conn = get_db_connection()
+                conn = validate_and_reconnect_if_needed(conn)
                 inserted = save_temp_competitors_scraped_data(conn, run_id, user_id, competitor_id, products_buffer)
                 log_event("INFO", "DB_BATCH_SAVE", run_id, f"Successfully inserted {inserted} products.")
 
@@ -919,9 +975,7 @@ def process_job(conn, job):
 
     try:
         # Ensure connection is valid before final update
-        if conn is None or conn.closed:
-            log_event("INFO", "DB_CONNECTION", run_id, "Re-establishing DB connection for final status update.")
-            conn = get_db_connection()
+        conn = validate_and_reconnect_if_needed(conn)
 
         # Extract current_batch and total_batches from progress messages if available
         current_batch = None
@@ -1038,7 +1092,7 @@ def main():
 
         try:
             # Get a database connection for this iteration
-            conn = get_db_connection()
+            conn = validate_and_reconnect_if_needed(None)
 
             # Find and claim a job
             job = find_and_claim_job(conn)

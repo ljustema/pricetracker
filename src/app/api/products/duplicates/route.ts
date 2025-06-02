@@ -15,15 +15,15 @@ export async function GET(_request: NextRequest) {
     const userId = ensureUUID(session.user.id);
     const supabase = createSupabaseAdminClient();
 
-    // Get potential duplicates with a reasonable limit for performance
-    // Set a shorter statement timeout for large datasets
-    await supabase.rpc('set_statement_timeout', { p_milliseconds: 10000 });
+    // Get potential duplicates with minimal timeout for ultra-large datasets
+    // Set a very short statement timeout
+    await supabase.rpc('set_statement_timeout', { p_milliseconds: 5000 });
 
     const { data, error } = await supabase.rpc(
       "find_potential_duplicates",
       {
         p_user_id: userId,
-        p_limit: 50  // Smaller limit for ultra-fast performance
+        p_limit: 25  // Very small limit for minimal performance impact
       },
       { count: 'exact', head: false } // Request exact count
     );
