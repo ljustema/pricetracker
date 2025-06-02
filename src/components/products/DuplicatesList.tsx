@@ -65,6 +65,7 @@ export function DuplicatesList() {
     errorCount: 0,
     currentGroup: ''
   });
+  const [automaticMerging, setAutomaticMerging] = useState(false);
 
   // Extract fetchDuplicates function so it can be reused
   const fetchDuplicates = async () => {
@@ -179,6 +180,50 @@ export function DuplicatesList() {
       setSelectedGroups(new Set());
     } else {
       setSelectedGroups(new Set(duplicateGroups.map(g => g.group_id)));
+    }
+  };
+
+  const handleAutomaticMerge = async () => {
+    setAutomaticMerging(true);
+    setError(null);
+
+    try {
+      const response = await fetch('/api/products/duplicates/merge-automatic', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to perform automatic merge');
+      }
+
+      const result = await response.json();
+
+      // Show success message
+      if (result.mergedCount > 0) {
+        // Refresh the list
+        await fetchDuplicates();
+
+        // Clear selections
+        setSelectedGroups(new Set());
+        setSelectedProducts({});
+      }
+
+      // Show result message
+      if (result.errorCount > 0) {
+        setError(`Automatic merge completed: ${result.mergedCount} successful merges, ${result.errorCount} errors. Check console for details.`);
+      } else if (result.mergedCount === 0) {
+        setError('No products were eligible for automatic merging. Automatic merge only works for products with same brand and SKU where one has EAN and the other doesn\'t.');
+      }
+
+    } catch (err: unknown) {
+      console.error('Error during automatic merge:', err);
+      setError(err instanceof Error ? err.message : 'Failed to perform automatic merge');
+    } finally {
+      setAutomaticMerging(false);
     }
   };
 
@@ -384,13 +429,27 @@ export function DuplicatesList() {
               variant="outline"
               size="sm"
               onClick={handleSelectAllGroups}
-              disabled={bulkMerging}
+              disabled={bulkMerging || automaticMerging}
             >
               {selectedGroups.size === duplicateGroups.length ? 'Deselect All' : 'Select All'}
             </Button>
             <Button
+              onClick={handleAutomaticMerge}
+              disabled={bulkMerging || automaticMerging}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              {automaticMerging ? (
+                "Auto Merging..."
+              ) : (
+                <>
+                  <Merge className="h-4 w-4 mr-1" />
+                  Merge All Automatic
+                </>
+              )}
+            </Button>
+            <Button
               onClick={handleBulkMerge}
-              disabled={selectedGroups.size === 0 || bulkMerging}
+              disabled={selectedGroups.size === 0 || bulkMerging || automaticMerging}
               className="bg-blue-600 hover:bg-blue-700"
             >
               {bulkMerging ? (
@@ -428,7 +487,7 @@ export function DuplicatesList() {
                   id={`group-${group.group_id}`}
                   checked={selectedGroups.has(group.group_id)}
                   onCheckedChange={() => handleGroupSelection(group.group_id)}
-                  disabled={bulkMerging}
+                  disabled={bulkMerging || automaticMerging}
                 />
                 <div>
                   <h2 className="text-lg font-semibold">{group.match_reason}</h2>
@@ -441,7 +500,7 @@ export function DuplicatesList() {
                 variant="outline"
                 size="sm"
                 onClick={() => handleDismissGroup(group)}
-                disabled={dismissingGroups.has(group.group_id) || bulkMerging}
+                disabled={dismissingGroups.has(group.group_id) || bulkMerging || automaticMerging}
                 className="text-red-600 hover:text-red-700"
               >
                 {dismissingGroups.has(group.group_id) ? (
@@ -566,6 +625,7 @@ export function DuplicatesList() {
                 onClick={() => handleMergeClick(group)}
                 disabled={
                   bulkMerging ||
+                  automaticMerging ||
                   !selectedProducts[group.group_id]?.primaryId ||
                   !Object.values(selectedProducts[group.group_id]?.duplicateIds || {}).some(Boolean)
                 }
