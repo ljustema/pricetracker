@@ -15,10 +15,13 @@ export async function GET(request: NextRequest) {
     const userId = ensureUUID(session.user.id);
     const supabase = createSupabaseAdminClient();
 
-    // Get potential duplicates
+    // Get potential duplicates with a reasonable limit for performance
     const { data, error } = await supabase.rpc(
       "find_potential_duplicates",
-      { p_user_id: userId }
+      {
+        p_user_id: userId,
+        p_limit: 200  // Limit results for better performance
+      }
     );
 
     if (error) {

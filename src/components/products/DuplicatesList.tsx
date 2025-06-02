@@ -340,10 +340,18 @@ export function DuplicatesList() {
   };
 
   if (loading) return (
-    <div className="flex justify-center items-center py-10">
-      <div className="text-center">
-        <div className="text-lg font-medium">Loading potential duplicates...</div>
-        <div className="text-sm text-gray-500 mt-2">Fetching products and competitor prices</div>
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Potential Duplicate Products</h1>
+      <div className="bg-gray-50 p-6 rounded-lg text-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <div>
+            <p className="text-gray-700 font-medium">Analyzing products for duplicates...</p>
+            <p className="text-gray-500 text-sm mt-1">
+              This may take a moment for large product catalogs
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );

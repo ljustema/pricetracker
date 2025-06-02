@@ -11,11 +11,7 @@ interface BasicDuplicateItem {
   match_reason: string;
 }
 
-interface BasicDuplicateGroup {
-  group_id: string;
-  match_reason: string;
-  products: BasicDuplicateItem[];
-}
+
 
 interface ProductDetails {
   id: string;
@@ -34,13 +30,20 @@ interface ProductDetails {
 }
 
 interface PriceData {
+  id: string;
+  product_id: string;
+  competitor_id?: string;
+  integration_id?: string;
+  old_price?: number;
   new_price: number;
+  price_change_percentage?: number;
   currency_code: string;
-  source_name: string;
-  source_type: string;
-  source_platform?: string;
-  source_website?: string;
   changed_at: string;
+  source_type: string;
+  source_name: string;
+  source_website?: string;
+  source_platform?: string;
+  source_id: string;
   url?: string;
 }
 
@@ -82,7 +85,7 @@ function ensureUUID(id: string): string {
   return `${hash.substring(0, 8)}-${hash.substring(8, 12)}-${hash.substring(12, 16)}-${hash.substring(16, 20)}-${hash.substring(20, 32)}`;
 }
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Check authentication
     const session = await getServerSession(authOptions);
@@ -94,36 +97,39 @@ export async function GET(request: NextRequest) {
 
     const supabase = createSupabaseAdminClient();
 
-    // Get potential duplicates with basic info - try calling the basic API first
+    // Get potential duplicates directly from database function for better performance
     const duplicatesData: BasicDuplicateItem[] = [];
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/products/duplicates`, {
-        headers: {
-          'Cookie': request.headers.get('cookie') || ''
+      const { data, error } = await supabase.rpc(
+        "find_potential_duplicates",
+        {
+          p_user_id: userId,
+          p_limit: 200  // Limit results for better performance
         }
-      });
+      );
 
-      if (!response.ok) {
-        throw new Error(`Basic duplicates API failed: ${response.status}`);
+      if (error) {
+        console.error("Error finding potential duplicates:", error);
+        return NextResponse.json(
+          {
+            error: "Failed to find potential duplicates",
+            details: error.message,
+            code: error.code
+          },
+          { status: 500 }
+        );
       }
 
-      const basicDuplicates = await response.json();
-
-      // Extract products from the grouped response
-      if (Array.isArray(basicDuplicates)) {
-        basicDuplicates.forEach((group: BasicDuplicateGroup) => {
-          if (group.products && Array.isArray(group.products)) {
-            duplicatesData.push(...group.products);
-          }
-        });
+      if (data && data.length > 0) {
+        duplicatesData.push(...data);
       }
 
     } catch (err) {
-      console.error("Exception calling basic duplicates API:", err);
+      console.error("Exception calling find_potential_duplicates:", err);
       return NextResponse.json(
         {
-          error: "Exception calling basic duplicates API",
+          error: "Exception calling find_potential_duplicates",
           message: err instanceof Error ? err.message : String(err),
           details: err instanceof Error ? err.stack : String(err)
         },
@@ -138,35 +144,10 @@ export async function GET(request: NextRequest) {
     // Get all unique product IDs
     const productIds = [...new Set(duplicatesData.map((item: BasicDuplicateItem) => item.product_id))];
 
-    // Fetch product details
+    // Fetch product details for all duplicate products
     let productsData: ProductDetails[] = [];
-    let productsError = null;
 
     try {
-      // Test with just the first product ID
-      const testId = productIds[0];
-
-      const testResult = await supabase
-        .from("products")
-        .select("id, name, sku")
-        .eq("id", testId)
-        .eq("user_id", userId)
-        .single();
-
-      if (testResult.error) {
-        return NextResponse.json(
-          {
-            error: "Test query failed",
-            message: testResult.error.message,
-            details: testResult.error
-          },
-          { status: 500 }
-        );
-      }
-
-      // If test passes, try a small batch
-      const smallBatch = productIds.slice(0, 5);
-
       const result = await supabase
         .from("products")
         .select(`
@@ -184,32 +165,28 @@ export async function GET(request: NextRequest) {
           category,
           description
         `)
-        .in("id", smallBatch)
+        .in("id", productIds)
         .eq("user_id", userId);
 
       if (result.error) {
-        productsError = result.error;
-      } else {
-        productsData = result.data || [];
+        return NextResponse.json(
+          {
+            error: "Failed to fetch product details",
+            message: result.error.message,
+            details: result.error
+          },
+          { status: 500 }
+        );
       }
+
+      productsData = result.data || [];
 
     } catch (err) {
       return NextResponse.json(
         {
-          error: "Exception in product query test",
+          error: "Exception in product query",
           message: err instanceof Error ? err.message : String(err),
           details: err instanceof Error ? err.stack : String(err)
-        },
-        { status: 500 }
-      );
-    }
-
-    if (productsError) {
-      return NextResponse.json(
-        {
-          error: "Failed to fetch product details",
-          message: productsError.message,
-          details: productsError
         },
         { status: 500 }
       );
@@ -226,23 +203,30 @@ export async function GET(request: NextRequest) {
     // Create a map of latest prices for each product
     const productPricesMap = new Map<string, ProductPrices>();
 
-    // Fetch prices for each product using the database function
+    // Fetch prices for all products in a single batch query to avoid N+1 problem
     try {
-      for (const productId of productIds) { // Process all products
-
-        const { data: pricesData, error: pricesError } = await supabase.rpc(
-          'get_latest_competitor_prices',
-          {
-            p_user_id: userId,
-            p_product_id: productId
-          }
-        );
-
-        if (pricesError) {
-          continue;
+      // Use the new batch function to get latest prices for all products at once
+      const { data: allPricesData, error: pricesError } = await supabase.rpc(
+        'get_latest_competitor_prices_batch',
+        {
+          p_user_id: userId,
+          p_product_ids: productIds
         }
+      );
 
-        if (pricesData && pricesData.length > 0) {
+      if (!pricesError && allPricesData) {
+        // Group prices by product_id
+        const pricesByProduct = new Map<string, PriceData[]>();
+
+        allPricesData.forEach((price: PriceData) => {
+          if (!pricesByProduct.has(price.product_id)) {
+            pricesByProduct.set(price.product_id, []);
+          }
+          pricesByProduct.get(price.product_id)!.push(price);
+        });
+
+        // Convert to the expected format
+        pricesByProduct.forEach((pricesArray, productId) => {
           const prices = {
             our_prices: [] as Array<{
               price: number;
@@ -262,7 +246,7 @@ export async function GET(request: NextRequest) {
             }>
           };
 
-          pricesData.forEach((price: PriceData) => {
+          pricesArray.forEach((price: PriceData) => {
             if (price.source_type === 'integration') {
               prices.our_prices.push({
                 price: price.new_price,
@@ -285,7 +269,7 @@ export async function GET(request: NextRequest) {
           });
 
           productPricesMap.set(productId, prices);
-        }
+        });
       }
 
     } catch (_err) {
