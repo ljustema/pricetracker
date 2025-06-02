@@ -22,8 +22,7 @@ export async function GET(_request: NextRequest) {
     const { data, error } = await supabase.rpc(
       "find_potential_duplicates",
       {
-        p_user_id: userId,
-        p_limit: 25  // Very small limit for minimal performance impact
+        p_user_id: userId
       },
       { count: 'exact', head: false } // Request exact count
     );

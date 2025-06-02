@@ -28,7 +28,7 @@ DB_BATCH_SIZE = 100 # How many products to buffer before saving to DB
 
 # --- Logging Setup ---
 # Configure structured logging according to the plan
-log_formatter = logging.Formatter('{"ts": "%(asctime)s", "lvl": "%(levelname)s", "phase": "%(phase)s", "run_id": "%(run_id)s", "msg": "%(message)s"}')
+log_formatter = logging.Formatter('{"ts": "%(asctime)s", "lvl": "%(levelname)s", "phase": "%(phase)s", "run_id": "%(run_id)s", "msg": "%(message)s"}', defaults={'phase': 'UNKNOWN', 'run_id': 'N/A'})
 
 # Console handler - Specify UTF-8 encoding
 log_handler = logging.StreamHandler(sys.stdout)
@@ -75,7 +75,7 @@ def get_db_connection():
     if 'supabase' in DATABASE_URL.lower():
         connection_params['sslmode'] = 'require'
 
-    max_retries = 3
+    max_retries = 5  # Increased from 3 to 5
     retry_delay = 1
 
     for attempt in range(max_retries):
@@ -88,14 +88,18 @@ def get_db_connection():
             return conn
         except psycopg2.OperationalError as e:
             if attempt < max_retries - 1:
-                logger.warning(f"Database connection attempt {attempt + 1} failed: {e}. Retrying in {retry_delay} seconds...")
+                # Use extra parameter to ensure phase is present
+                logger.warning(f"Database connection attempt {attempt + 1} failed: {e}. Retrying in {retry_delay} seconds...", 
+                              extra={'phase': 'DB_CONNECTION', 'run_id': 'N/A'})
                 time.sleep(retry_delay)
                 retry_delay *= 2  # Exponential backoff
             else:
-                logger.critical(f"Database connection failed after {max_retries} attempts: {e}")
+                logger.critical(f"Database connection failed after {max_retries} attempts: {e}", 
+                               extra={'phase': 'DB_CONNECTION', 'run_id': 'N/A'})
                 raise
         except psycopg2.Error as e:
-            logger.critical(f"Database connection error: {e}")
+            logger.critical(f"Database connection error: {e}", 
+                           extra={'phase': 'DB_CONNECTION', 'run_id': 'N/A'})
             raise
 
 def validate_and_reconnect_if_needed(conn):
@@ -109,6 +113,8 @@ def validate_and_reconnect_if_needed(conn):
     try:
         # Check if connection is closed
         if conn.closed:
+            logger.info("Connection is closed, getting new connection", 
+                       extra={'phase': 'DB_CONNECTION', 'run_id': 'N/A'})
             return get_db_connection()
 
         # Test the connection with a simple query
@@ -117,15 +123,19 @@ def validate_and_reconnect_if_needed(conn):
             test_cur.fetchone()
 
         return conn  # Connection is valid
-    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+    except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
         # Connection is broken, get a new one
+        logger.warning(f"Database connection validation failed: {e}. Getting new connection.", 
+                      extra={'phase': 'DB_CONNECTION', 'run_id': 'N/A'})
         try:
             conn.close()
         except Exception:
             pass  # Ignore errors when closing broken connection
         return get_db_connection()
-    except Exception:
+    except Exception as e:
         # For any other error, try to get a new connection
+        logger.warning(f"Unexpected error validating connection: {e}. Getting new connection.", 
+                      extra={'phase': 'DB_CONNECTION', 'run_id': 'N/A'})
         try:
             conn.close()
         except Exception:
