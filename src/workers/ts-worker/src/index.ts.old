@@ -1,4 +1,5 @@
 import 'dotenv/config'; // Load environment variables
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { spawn } from 'child_process'; // Added for subprocess execution
 import fsPromises from 'fs/promises'; // Use fs/promises for async file operations
 import fsSync from 'fs'; // Use fs for synchronous operations like existsSync/mkdirSync
@@ -9,28 +10,10 @@ import { debugLog, logToDatabase } from './debug-logger'; // Import our debug lo
 
 // Log that the worker has started with our changes
 debugLog('TypeScript worker started with debug logging enabled');
+// import ivm from 'isolated-vm'; // Removed isolated-vm
 
 // Import Database type for type safety
 import type { Database } from './database.types';
-
-// Lazy loading functions for heavy dependencies
-let supabaseClient: any = null;
-
-async function getSupabaseClient() {
-  if (!supabaseClient) {
-    const { createClient } = await import('@supabase/supabase-js');
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
-      throw new Error('Missing Supabase URL or Service Role Key environment variables.');
-    }
-
-    supabaseClient = createClient<Database>(supabaseUrl, supabaseServiceRoleKey);
-    debugLog('Supabase client initialized');
-  }
-  return supabaseClient;
-}
 
 // Type for the data returned by the claim_next_scraper_job RPC
 interface ClaimedJobData {
@@ -86,79 +69,41 @@ interface ScriptMetadata {
   // Add other metadata fields
 }
 
-// Supabase client will be initialized lazily when needed
+// Placeholder for database client initialization
+// TODO: Initialize Supabase client using environment variables
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseServiceRoleKey) {
+  console.error('Missing Supabase URL or Service Role Key environment variables.');
+  process.exit(1);
+}
+
+// Use Database type for type safety
+const supabase = createClient<Database>(supabaseUrl, supabaseServiceRoleKey);
 
 const WORKER_TYPE = 'typescript'; // Define the type of scraper this worker handles
-const POLLING_INTERVAL_MS = 30000; // Poll every 30 seconds (reduced from 5 seconds)
+const POLLING_INTERVAL_MS = 5000; // Poll every 5 seconds (adjust as needed)
 const SCRIPT_TIMEOUT_SECONDS = 7200; // Timeout for script execution (2 hours) - Matches Python worker
 const DB_BATCH_SIZE = 100; // How many products to buffer before saving to DB
 const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 
 console.log(`Starting TypeScript Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
 
-// Memory monitoring and management
-function logMemoryUsage(context: string) {
-  const memUsage = process.memoryUsage();
-  const memMB = {
-    rss: Math.round(memUsage.rss / 1024 / 1024),
-    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
-    heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
-    external: Math.round(memUsage.external / 1024 / 1024)
-  };
-  console.log(`[MEMORY] ${context}: RSS=${memMB.rss}MB, Heap=${memMB.heapUsed}/${memMB.heapTotal}MB, External=${memMB.external}MB`);
-
-  // Log warning if memory usage is high
-  if (memMB.rss > 1000) {
-    console.warn(`[MEMORY WARNING] High memory usage detected: ${memMB.rss}MB RSS`);
-  }
-}
-
-// Force garbage collection and memory cleanup
-function forceMemoryCleanup(context: string) {
-  debugLog(`Forcing memory cleanup: ${context}`);
-
-  // Force garbage collection if available
-  if (global.gc) {
-    global.gc();
-    debugLog('Garbage collection triggered');
-  }
-
-  // Log memory usage after cleanup
-  logMemoryUsage(`After cleanup - ${context}`);
-}
-
-// Log initial memory usage
-logMemoryUsage('Worker startup');
-
 // Track last successful job time and last health check time
 let lastJobTime = Date.now();
 let lastHealthCheckTime = Date.now();
 let lastPollMessageTime = 0; // To reduce polling message frequency
 
-// Job processing state to prevent race conditions
-let isProcessingJob = false;
-let currentJobId: string | null = null;
-
 async function fetchAndProcessJob() {
   let job: any = null; // Define job variable in the outer scope for the catch block
 
   try {
-    // RACE CONDITION PROTECTION: Skip if already processing a job
-    if (isProcessingJob) {
-      console.log(`Skipping poll - already processing job ${currentJobId}`);
-      return;
-    }
-
     // Periodically check for long periods of inactivity and log health status
     const currentTime = Date.now();
     if (currentTime - lastHealthCheckTime > HEALTH_CHECK_INTERVAL_MS) {
       const inactivityDuration = (currentTime - lastJobTime) / 1000; // Convert to seconds
       console.log(`Worker health check: ${inactivityDuration.toFixed(1)} seconds since last job processed. Worker is still running.`);
-      logMemoryUsage('Health check');
-
-      // Force memory cleanup during health checks to prevent memory leaks
-      forceMemoryCleanup('Health check');
-
       lastHealthCheckTime = currentTime;
     }
 
@@ -169,7 +114,6 @@ async function fetchAndProcessJob() {
     }
 
     // 1. Atomically fetch and claim a pending job using RPC
-    const supabase = await getSupabaseClient();
     const { data: rpcData, error: rpcError } = await supabase.rpc(
       'claim_next_scraper_job',
       { worker_type_filter: WORKER_TYPE }
@@ -192,14 +136,9 @@ async function fetchAndProcessJob() {
 
     job = claimedJobs[0]; // Assign the first (and should be only) claimed job
 
-    // SET JOB PROCESSING STATE - Prevent race conditions
-    isProcessingJob = true;
-    currentJobId = job.id;
-
     // The job status is already 'running' and started_at is set by the RPC function.
     console.log(`Job ${job.id} claimed successfully via RPC. Scraper ID: ${job.scraper_id}`);
     logStructured(job.id, 'info', 'JOB_CLAIMED', `Job ${job.id} claimed successfully via RPC.`);
-    logMemoryUsage(`Job ${job.id} start`);
 
     // Update last job time when a job is successfully claimed
     lastJobTime = Date.now();
@@ -244,8 +183,8 @@ async function fetchAndProcessJob() {
         if (brandError) {
             logStructured(job.id, 'warn', 'SETUP', `Failed to fetch active brands: ${brandError.message}. Proceeding without brand filter.`);
         } else if (brands) {
-            activeBrandNames = brands.map((b: any) => b.name);
-            activeBrandIds = brands.map((b: any) => b.id);
+            activeBrandNames = brands.map(b => b.name);
+            activeBrandIds = brands.map(b => b.id);
             logStructured(job.id, 'info', 'SETUP', `Fetched ${activeBrandNames.length} active brands.`);
         }
     }
@@ -261,10 +200,10 @@ async function fetchAndProcessJob() {
         if (productError) {
             logStructured(job.id, 'warn', 'SETUP', `Failed to fetch own products: ${productError.message}. Proceeding without own product filter.`);
         } else if (products) {
-            ownProductEans = products.map((p: any) => p.ean).filter((ean: any): ean is string => !!ean);
+            ownProductEans = products.map(p => p.ean).filter((ean): ean is string => !!ean);
             ownProductSkuBrands = products
-                .filter((p: any) => p.sku && (p.brand || p.brand_id))
-                .map((p: any) => ({
+                .filter(p => p.sku && (p.brand || p.brand_id))
+                .map(p => ({
                     sku: p.sku as string,
                     brand: p.brand as string,
                     brand_id: p.brand_id as string
@@ -287,10 +226,8 @@ async function fetchAndProcessJob() {
         // Prepare context (simplified, not used in this version)
         logStructured(job.id, 'debug', 'SETUP', 'Prepared script context');
 
-        // Lazy load the TypeScript compiler
-        debugLog('Loading TypeScript compiler...');
+        // Import the TypeScript compiler
         const { compileTypeScriptScraper, cleanupCompilation } = await import('./typescript-compiler');
-        debugLog('TypeScript compiler loaded');
 
         // Compile the TypeScript script
         logStructured(job.id, 'info', 'TYPESCRIPT_COMPILATION', 'Compiling TypeScript script...');
@@ -465,7 +402,7 @@ async function fetchAndProcessJob() {
                                 productsBuffer.length = 0; // Clear buffer
                                 logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Saving batch of ${batchToSave.length} products...`);
                                 // Use job.fetched_competitor_id from the RPC response
-                                saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave, supabase)
+                                saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave)
                                     .then(() => logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted batch.`))
                                     .catch(err => logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save product batch: ${err.message}`));
                             }
@@ -712,7 +649,7 @@ async function fetchAndProcessJob() {
                     const batchToSave = [...productsBuffer];
                     productsBuffer.length = 0;
                     logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Saving final batch of ${batchToSave.length} products...`);
-                    saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave, supabase)
+                    saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave)
                          .then(() => logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted final batch.`))
                          .catch(err => logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save final product batch: ${err.message}`));
                 }
@@ -924,8 +861,7 @@ async function fetchAndProcessJob() {
             const errorDetails = JSON.stringify(errorObj, null, 2);
 
             // Update the job status
-            const supabaseForError = await getSupabaseClient();
-            await supabaseForError
+            await supabase
                 .from('scraper_runs')
                 .update({
                     status: 'failed',
@@ -947,7 +883,7 @@ async function fetchAndProcessJob() {
                 data: errorObj
             };
 
-            await supabaseForError.rpc('append_log_to_scraper_run', {
+            await supabase.rpc('append_log_to_scraper_run', {
                 p_run_id: job.id,
                 p_log_entry: errorLogEntry
             });
@@ -955,36 +891,6 @@ async function fetchAndProcessJob() {
             console.error(`Failed to update job ${job.id} status after unhandled error:`, updateError);
         }
     }
-  } finally {
-    // ALWAYS reset job processing state to prevent race conditions
-    isProcessingJob = false;
-    currentJobId = null;
-
-    // Log memory usage after job completion
-    if (job && job.id) {
-      logMemoryUsage(`Job ${job.id} complete`);
-    }
-
-    // Clean up log batch for this job to prevent memory leaks
-    if (job && job.id && LOG_BATCHES[job.id]) {
-      // Flush any remaining messages
-      try {
-        await flushLogBatch(job.id);
-      } catch (flushError) {
-        console.error(`Error flushing final log batch for job ${job.id}:`, flushError);
-      }
-
-      // Clear the timer and delete the batch
-      const timer = LOG_BATCHES[job.id].timer;
-      if (timer !== null) {
-        clearInterval(timer);
-        LOG_BATCHES[job.id].timer = null;
-      }
-      delete LOG_BATCHES[job.id];
-    }
-
-    // Force memory cleanup after job completion
-    forceMemoryCleanup('Job completion');
   }
 }
 
@@ -1011,13 +917,12 @@ interface LogBatch {
 }
 
 const LOG_BATCHES: Record<string, LogBatch> = {};
-const BATCH_FLUSH_INTERVAL_MS = 30000; // Flush every 30 seconds (reduced frequency)
-const BATCH_SIZE_THRESHOLD = 20; // Or flush when we have 20+ messages (increased threshold)
-const MAX_PROGRESS_MESSAGES = 100; // Maximum progress messages to keep (prevent memory leaks)
+const BATCH_FLUSH_INTERVAL_MS = 5000; // Flush every 5 seconds
+const BATCH_SIZE_THRESHOLD = 10; // Or flush when we have 10+ messages
 const IMPORTANT_PHASES = ['ERROR', 'ERROR_DETAILS', 'COMPLETION', 'JOB_CLAIMED', 'PHASE_UPDATE']; // These phases get flushed immediately
 
 // Function to flush a batch of log messages to the database
-async function flushLogBatch(jobId: string, supabaseClient?: any) {
+async function flushLogBatch(jobId: string) {
     if (!LOG_BATCHES[jobId] || LOG_BATCHES[jobId].messages.length === 0) return;
 
     const batch = LOG_BATCHES[jobId];
@@ -1032,9 +937,6 @@ async function flushLogBatch(jobId: string, supabaseClient?: any) {
         // The progress_messages column is TEXT[], not JSONB
         const stringifiedMessages = messagesToSend.map(msg => JSON.stringify(msg));
 
-        // Get supabase client if not provided
-        const supabase = supabaseClient || await getSupabaseClient();
-
         // First get the current progress_messages
         const { data: currentData, error: fetchError } = await supabase
             .from('scraper_runs')
@@ -1047,14 +949,9 @@ async function flushLogBatch(jobId: string, supabaseClient?: any) {
             throw fetchError;
         }
 
-        // Combine existing messages with new ones, but limit total size to prevent memory leaks
+        // Combine existing messages with new ones
         const existingMessages = currentData?.progress_messages || [];
-        const combinedMessages = [...existingMessages, ...stringifiedMessages];
-
-        // Keep only the most recent messages to prevent unlimited growth
-        const updatedMessages = combinedMessages.length > MAX_PROGRESS_MESSAGES
-            ? combinedMessages.slice(-MAX_PROGRESS_MESSAGES)
-            : combinedMessages;
+        const updatedMessages = [...existingMessages, ...stringifiedMessages];
 
         // Update with the combined array
         const { error } = await supabase
@@ -1179,7 +1076,7 @@ $$;
 
 
 // --- Function to save scraped products ---
-async function saveScrapedProducts(runId: string, userId: string, competitorId: string | undefined, products: ScrapedProductData[], supabaseClient?: any) {
+async function saveScrapedProducts(runId: string, userId: string, competitorId: string | undefined, products: ScrapedProductData[]) {
     if (!products || products.length === 0) return;
 
     // Check if competitorId is provided
@@ -1190,7 +1087,7 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
 
     logStructured(runId, 'debug', 'DB_INSERT', `Attempting to save ${products.length} products with competitor_id: ${competitorId}...`);
 
-    // Map ScrapedProductData to the structure needed for temp_competitors_scraped_data table
+    // Map ScrapedProductData to the structure needed for scraped_products table
     const productsToInsert = products.map(p => ({
         // Let DB generate UUID for id
         user_id: userId,
@@ -1224,8 +1121,7 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
             attempt++;
             try {
                 logStructured(runId, 'debug', 'DB_INSERT', `Attempt ${attempt}/${MAX_RETRIES} inserting chunk ${chunkNumber} (${chunk.length} products)...`);
-                const supabase = supabaseClient || await getSupabaseClient();
-                const { error } = await supabase.from('temp_competitors_scraped_data').insert(chunk);
+                const { error } = await supabase.from('scraped_products').insert(chunk);
 
                 if (error) {
                     logStructured(runId, 'warn', 'DB_INSERT', `Attempt ${attempt} failed for chunk ${chunkNumber}: ${error.message}`);

@@ -16,16 +16,33 @@ export async function GET(request: NextRequest) {
     const supabase = createSupabaseAdminClient();
 
     // Get potential duplicates with a reasonable limit for performance
+    // Set a statement timeout before running the query
+    await supabase.rpc('set_statement_timeout', { p_milliseconds: 15000 });
+    
     const { data, error } = await supabase.rpc(
       "find_potential_duplicates",
       {
         p_user_id: userId,
-        p_limit: 200  // Limit results for better performance
-      }
+        p_limit: 100  // Reduced limit for better performance
+      },
+      { count: 'exact', head: false } // Request exact count
     );
 
     if (error) {
       console.error("Error finding potential duplicates:", error);
+      
+      // Handle timeout errors specifically
+      if (error.code === '57014') {
+        return NextResponse.json(
+          {
+            error: "The duplicate detection query timed out. Try again later or contact support if this persists.",
+            details: "The database query took too long to complete. This usually happens when there are too many products to compare.",
+            code: error.code
+          },
+          { status: 504 } // Gateway Timeout status is more appropriate for timeouts
+        );
+      }
+      
       return NextResponse.json(
         {
           error: "Failed to find potential duplicates",
