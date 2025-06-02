@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth/options";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { ensureUUID } from "@/lib/utils";
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Check authentication
     const session = await getServerSession(authOptions);
@@ -58,7 +58,30 @@ export async function GET(request: NextRequest) {
     }
 
     // Group duplicates by group_id
-    const groupedDuplicates = data.reduce((acc: any, product: any) => {
+    // Define the product type based on the database function return type
+    interface ProductItem {
+      product_id: string;
+      group_id: string;
+      match_reason: string;
+      name: string;
+      sku: string | null;
+      ean: string | null;
+      brand: string | null;
+      brand_id: string | null;
+      [key: string]: unknown; // For any additional properties
+    }
+
+    interface DuplicateGroup {
+      group_id: string;
+      match_reason: string;
+      products: ProductItem[];
+    }
+
+    interface GroupedDuplicates {
+      [key: string]: DuplicateGroup;
+    }
+
+    const groupedDuplicates = data.reduce((acc: GroupedDuplicates, product: ProductItem) => {
       const key = product.group_id;
 
       if (!acc[key]) {
