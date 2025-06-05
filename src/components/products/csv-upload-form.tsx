@@ -2,13 +2,15 @@
 
 import { useState, useEffect } from "react";
 import { UploadIcon, CheckCircleIcon, XCircleIcon, DownloadIcon } from "lucide-react";
-import { uploadProductsCSV } from "@/lib/services/product-client-service";
+import { uploadProductsCSV, uploadOwnProductsCSV } from "@/lib/services/product-client-service";
 import Image from "next/image";
 
 interface Competitor {
   id: string;
   name: string;
 }
+
+type ProductType = 'own' | 'competitor';
 
 interface CSVUploadFormProps {
   onSuccess: () => void;
@@ -19,6 +21,7 @@ export default function CSVUploadForm({
   onSuccess,
   onCancel,
 }: CSVUploadFormProps) {
+  const [productType, setProductType] = useState<ProductType>('competitor');
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [selectedCompetitorId, setSelectedCompetitorId] = useState<string>("");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -150,7 +153,7 @@ export default function CSVUploadForm({
 
   const handleDownloadTemplate = async () => {
     try {
-      const templateUrl = '/api/products/csv-template';
+      const templateUrl = `/api/products/csv-template-enhanced?type=${productType}`;
       window.open(templateUrl, '_blank');
     } catch (error) {
       console.error("Error downloading template:", error);
@@ -161,7 +164,7 @@ export default function CSVUploadForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!selectedCompetitorId) {
+    if (productType === 'competitor' && !selectedCompetitorId) {
       alert("Please select a competitor");
       return;
     }
@@ -174,7 +177,13 @@ export default function CSVUploadForm({
     setIsSubmitting(true);
 
     try {
-      const result = await uploadProductsCSV(selectedCompetitorId, uploadedFile);
+      // Use enhanced upload for own products, existing upload for competitors
+      let result;
+      if (productType === 'own') {
+        result = await uploadOwnProductsCSV(uploadedFile);
+      } else {
+        result = await uploadProductsCSV(selectedCompetitorId, uploadedFile);
+      }
       setUploadResult(result as UploadResult);
 
       // Only call onSuccess if we actually succeeded
@@ -194,13 +203,55 @@ export default function CSVUploadForm({
   return (
     <div className="w-full max-w-4xl mx-auto rounded-lg border border-gray-200 bg-white shadow-sm">
       <div className="border-b border-gray-200 px-6 py-4">
-        <h2 className="text-lg font-medium text-gray-900">Upload Product Prices</h2>
+        <h2 className="text-lg font-medium text-gray-900">Upload Products</h2>
         <p className="mt-1 text-sm text-gray-500">
-          Upload a CSV file with product prices for a specific competitor
+          Upload a CSV file with products and prices
         </p>
       </div>
 
       <form onSubmit={handleSubmit} className="px-6 py-4 space-y-6">
+        {/* Product Type Selection */}
+        <div>
+          <label className="text-base font-medium text-gray-900">Product Type</label>
+          <p className="text-sm leading-5 text-gray-500">Choose what type of products you're uploading</p>
+          <fieldset className="mt-4">
+            <legend className="sr-only">Product type</legend>
+            <div className="space-y-4">
+              <div className="flex items-center">
+                <input
+                  id="own-products"
+                  name="product-type"
+                  type="radio"
+                  checked={productType === 'own'}
+                  onChange={() => setProductType('own')}
+                  className="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <label htmlFor="own-products" className="ml-3 block text-sm font-medium text-gray-700">
+                  Our Products
+                </label>
+              </div>
+              <div className="flex items-center">
+                <input
+                  id="competitor-products"
+                  name="product-type"
+                  type="radio"
+                  checked={productType === 'competitor'}
+                  onChange={() => setProductType('competitor')}
+                  className="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <label htmlFor="competitor-products" className="ml-3 block text-sm font-medium text-gray-700">
+                  Competitor Products
+                </label>
+              </div>
+            </div>
+          </fieldset>
+          <p className="mt-2 text-sm text-gray-500">
+            {productType === 'own'
+              ? 'Upload your own products with pricing information (our_price, wholesale_price)'
+              : 'Upload competitor products for price comparison'
+            }
+          </p>
+        </div>
         {uploadResult ? (
           <div className={`p-4 rounded-md ${uploadResult.success ? 'bg-green-50' : 'bg-red-50'}`}>
             <div className="flex">
@@ -227,25 +278,28 @@ export default function CSVUploadForm({
           </div>
         ) : (
           <div className="space-y-4">
-            <div>
-              <label htmlFor="competitor" className="block text-sm font-medium text-gray-700">
-                Competitor
-              </label>
-              <select
-                id="competitor"
-                value={selectedCompetitorId}
-                onChange={(e) => setSelectedCompetitorId(e.target.value)}
-                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
-                required
-              >
-                <option value="">Select a competitor</option>
-                {competitors.map((competitor) => (
-                  <option key={competitor.id} value={competitor.id}>
-                    {competitor.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {/* Competitor Selection - Only show for competitor products */}
+            {productType === 'competitor' && (
+              <div>
+                <label htmlFor="competitor" className="block text-sm font-medium text-gray-700">
+                  Competitor
+                </label>
+                <select
+                  id="competitor"
+                  value={selectedCompetitorId}
+                  onChange={(e) => setSelectedCompetitorId(e.target.value)}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+                  required
+                >
+                  <option value="">Select a competitor</option>
+                  {competitors.map((competitor) => (
+                    <option key={competitor.id} value={competitor.id}>
+                      {competitor.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-gray-700">
@@ -345,8 +399,17 @@ export default function CSVUploadForm({
                   </table>
                 </div>
                 <p className="mt-2 text-xs text-gray-500">
-                  Required columns: name, price<br />
-                  Optional columns: currency, sku, brand, ean, image_url, url
+                  {productType === 'own' ? (
+                    <>
+                      Required columns: name<br />
+                      Optional columns: our_price, wholesale_price, currency, sku, brand, ean, image_url, url, category, description
+                    </>
+                  ) : (
+                    <>
+                      Required columns: name, price<br />
+                      Optional columns: currency, sku, brand, ean, image_url, url
+                    </>
+                  )}
                 </p>
               </div>
             )}
@@ -364,7 +427,7 @@ export default function CSVUploadForm({
           {!uploadResult && (
             <button
               type="submit"
-              disabled={isSubmitting || !uploadedFile || !selectedCompetitorId}
+              disabled={isSubmitting || !uploadedFile || (productType === 'competitor' && !selectedCompetitorId)}
               className="rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
             >
               {isSubmitting ? "Uploading..." : "Upload Products"}

@@ -291,6 +291,28 @@ export async function uploadProductsCSV(
 }
 
 /**
+ * Upload a CSV file with own products
+ */
+export async function uploadOwnProductsCSV(
+  file: File
+): Promise<{ success: boolean; productsAdded: number; pricesUpdated: number }> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch('/api/products/csv-upload-enhanced', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to upload CSV file');
+  }
+
+  return response.json();
+}
+
+/**
  * Get a CSV template for product uploads
  */
 export async function getProductCSVTemplate(): Promise<string> {
