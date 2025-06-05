@@ -148,12 +148,37 @@ export default function CSVUploadForm({
     // Parse header row
     const headers = parseCSVLine(lines[0]);
 
-    // Check for required headers
-    const requiredHeaders = ['name', 'price'];
-    const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
-    if (missingHeaders.length > 0) {
-      alert(`CSV file is missing required headers: ${missingHeaders.join(', ')}`);
-      return;
+    // Check for required headers based on product type
+    let requiredHeaders: string[];
+    let missingHeaders: string[];
+
+    if (productType === 'own') {
+      // For own products, only name is required, but we should have either our_price or wholesale_price
+      requiredHeaders = ['name'];
+      missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
+
+      // Check if we have at least one price field
+      const hasOurPrice = headers.includes('our_price');
+      const hasWholesalePrice = headers.includes('wholesale_price');
+
+      if (missingHeaders.length > 0) {
+        alert(`CSV file is missing required headers: ${missingHeaders.join(', ')}`);
+        return;
+      }
+
+      if (!hasOurPrice && !hasWholesalePrice) {
+        alert(`CSV file is missing required price headers: either 'our_price' or 'wholesale_price' is required for own products`);
+        return;
+      }
+    } else {
+      // For competitor products, name and price are required
+      requiredHeaders = ['name', 'price'];
+      missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
+
+      if (missingHeaders.length > 0) {
+        alert(`CSV file is missing required headers: ${missingHeaders.join(', ')}`);
+        return;
+      }
     }
 
     // Parse data rows (limit to 5 for preview)

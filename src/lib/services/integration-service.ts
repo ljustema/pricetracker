@@ -18,7 +18,7 @@ export interface Integration {
   name: string;
   api_url: string;
   api_key: string;
-  status: 'pending_setup' | 'active' | 'inactive' | 'error';
+  status: 'pending_setup' | 'active' | 'inactive' | 'error' | 'pending_test_run';
   last_sync_at: string | null;
   last_sync_status: 'success' | 'failed' | null;
   sync_frequency: string;
@@ -55,7 +55,7 @@ export interface UpdateIntegrationData {
   name?: string;
   api_url?: string;
   api_key?: string;
-  status?: 'pending_setup' | 'active' | 'inactive' | 'error';
+  status?: 'pending_setup' | 'active' | 'inactive' | 'error' | 'pending_test_run';
   sync_frequency?: string;
   configuration?: IntegrationConfiguration;
 }

@@ -51,9 +51,6 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
   const { toast } = useToast();
   const isEditing = !!integration;
 
-  // Watch the platform field to conditionally show/hide API fields
-  const selectedPlatform = form.watch('platform');
-
   // Initialize the form with default values or existing integration values
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -68,6 +65,11 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
       },
     },
   });
+
+  // Watch the platform field to conditionally show/hide API fields
+  const selectedPlatform = form.watch('platform');
+  const apiUrl = form.watch('api_url');
+  const apiKey = form.watch('api_key');
 
   // Update form values when integration changes
   useEffect(() => {
@@ -88,7 +90,7 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
   // Reset test result when API URL or key changes
   useEffect(() => {
     setTestResult(null);
-  }, [form.watch('api_url'), form.watch('api_key')]);
+  }, [apiUrl, apiKey]);
 
   // Test API credentials
   const testCredentials = async () => {

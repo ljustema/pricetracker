@@ -147,20 +147,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Validate headers for own products
-    if (parsedCsv.data.length > 0) {
-      const headers = Object.keys(parsedCsv.data[0]);
-      const hasOurPrice = headers.includes('our_price');
-      const hasWholesalePrice = headers.includes('wholesale_price');
-
-      if (!hasOurPrice && !hasWholesalePrice) {
-        return NextResponse.json(
-          { error: "CSV file is missing required headers: either 'our_price' or 'wholesale_price' is required for own products" },
-          { status: 400 }
-        );
-      }
-    }
-
     // Use the admin client to bypass RLS
     const supabase = createSupabaseAdminClient();
 
@@ -179,7 +165,9 @@ export async function POST(req: NextRequest) {
       let brandId = null;
       if (row.brand && row.brand.trim() !== '') {
         try {
-          brandId = await BrandService.getOrCreateBrand(userId, row.brand.trim());
+          const brandService = new BrandService();
+          const brand = await brandService.findOrCreateBrandByName(userId, row.brand.trim());
+          brandId = brand?.id || null;
         } catch (error) {
           console.error(`Failed to get/create brand: ${error}`);
           // Continue without brand_id if brand creation fails
@@ -258,8 +246,8 @@ export async function POST(req: NextRequest) {
         }
 
         // Check if prices changed
-        if ((ourPrice !== null && ourPrice !== existingProduct.our_price) ||
-            (wholesalePrice !== null && wholesalePrice !== existingProduct.wholesale_price)) {
+        if ((ourPrice !== null && existingProduct && ourPrice !== existingProduct.our_price) ||
+            (wholesalePrice !== null && existingProduct && wholesalePrice !== existingProduct.wholesale_price)) {
           pricesUpdated++;
         }
       } else {
