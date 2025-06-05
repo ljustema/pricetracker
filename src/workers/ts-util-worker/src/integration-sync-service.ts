@@ -67,6 +67,8 @@ export class IntegrationSyncService {
 
     if (status === 'processing') {
       updateData.started_at = new Date().toISOString();
+      // Initialize last_progress_update when starting processing
+      updateData.last_progress_update = new Date().toISOString();
     } else if (status === 'completed' || status === 'failed') {
       updateData.completed_at = new Date().toISOString();
     }
@@ -74,6 +76,10 @@ export class IntegrationSyncService {
     if (stats) {
       if (stats.productsProcessed !== undefined) {
         updateData.products_processed = stats.productsProcessed;
+        // Update progress timestamp when products_processed changes during processing
+        if (status === 'processing') {
+          updateData.last_progress_update = new Date().toISOString();
+        }
       }
       if (stats.productsUpdated !== undefined) {
         updateData.products_updated = stats.productsUpdated;

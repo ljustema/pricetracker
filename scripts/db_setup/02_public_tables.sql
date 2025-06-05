@@ -43,7 +43,8 @@ CREATE TABLE public.integration_runs (
     log_details jsonb,
     created_at timestamp with time zone DEFAULT now(),
     test_products jsonb,
-    configuration jsonb
+    configuration jsonb,
+    last_progress_update timestamp with time zone
 );
 
 --
