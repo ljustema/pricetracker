@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-05-30 15:46:13
+-- Generated: 2025-06-05 13:39:40
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -222,8 +222,8 @@ COMMENT ON FUNCTION extensions.set_graphql_placeholder() IS 'Reintroduces placeh
 CREATE FUNCTION pgbouncer.get_auth(p_usename text) RETURNS TABLE(username text, password text)
     LANGUAGE plpgsql SECURITY DEFINER
     AS $_$
-  BEGIN
-      RAISE DEBUG 'PgBouncer auth request: %', p_usename;
+begin
+    raise debug 'PgBouncer auth request: %', p_usename;
 
 --
 -- Name: append_log_to_scraper_run(uuid, jsonb); Type: FUNCTION; Schema: public; Owner: -
@@ -465,6 +465,22 @@ DECLARE
     scraper_record record;
 
 --
+-- Name: dismiss_product_duplicates(uuid, uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.dismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    ordered_id_1 UUID;
+
+--
+-- Name: FUNCTION dismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.dismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid) IS 'Dismisses product duplicates to prevent them from appearing in future duplicate detection';
+
+--
 -- Name: ensure_one_active_scraper_per_competitor(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -526,55 +542,40 @@ DECLARE
 CREATE FUNCTION public.find_potential_duplicates(p_user_id uuid) RETURNS TABLE(group_id text, product_id uuid, name text, sku text, ean text, brand text, brand_id uuid, match_reason text)
     LANGUAGE plpgsql
     AS $$
-BEGIN
-    -- Products with same EAN (non-null)
-    RETURN QUERY
-    SELECT 
-        'ean_' || p.ean AS group_id,
-        p.id AS product_id,
-        p.name,
-        p.sku,
-        p.ean,
-        p.brand,
-        p.brand_id,
-        'Same EAN: ' || p.ean AS match_reason
-    FROM 
-        products p
-    WHERE 
-        p.user_id = p_user_id AND 
-        p.ean IS NOT NULL AND 
-        p.ean != '' AND
-        EXISTS (
-            SELECT 1 FROM products p2 
-            WHERE p2.ean = p.ean AND p2.user_id = p.user_id AND p2.id != p.id
-        )
-    
-    UNION ALL
-    
-    -- Products with same brand_id and SKU (non-null)
-    SELECT 
-        'brand_sku_' || p.brand_id::text || '_' || p.sku AS group_id,
-        p.id AS product_id,
-        p.name,
-        p.sku,
-        p.ean,
-        p.brand,
-        p.brand_id,
-        'Same brand+SKU: ' || COALESCE(p.brand, '') || ' + ' || p.sku AS match_reason
-    FROM 
-        products p
-    WHERE 
-        p.user_id = p_user_id AND 
-        p.brand_id IS NOT NULL AND 
-        p.sku IS NOT NULL AND 
-        p.sku != '' AND
-        EXISTS (
-            SELECT 1 FROM products p2 
-            WHERE p2.brand_id = p.brand_id AND p2.sku = p.sku 
-            AND p2.user_id = p.user_id AND p2.id != p.id
-        )
-    
-    ORDER BY group_id, product_id;
+DECLARE
+    settings JSONB;
+
+--
+-- Name: FUNCTION find_potential_duplicates(p_user_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.find_potential_duplicates(p_user_id uuid) IS 'Enhanced duplicate detection with user settings support, fuzzy matching, and dismissed duplicates exclusion';
+
+--
+-- Name: find_potential_duplicates(uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.find_potential_duplicates(p_user_id uuid, p_limit integer DEFAULT NULL::integer) RETURNS TABLE(group_id text, product_id uuid, name text, sku text, ean text, brand text, brand_id uuid, match_reason text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    settings JSONB;
+
+--
+-- Name: find_product_with_fuzzy_matching(uuid, text, text, text, text, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.find_product_with_fuzzy_matching(p_user_id uuid, p_ean text, p_brand text, p_sku text, p_name text, p_brand_id uuid DEFAULT NULL::uuid) RETURNS uuid
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    settings JSONB;
+
+--
+-- Name: FUNCTION find_product_with_fuzzy_matching(p_user_id uuid, p_ean text, p_brand text, p_sku text, p_name text, p_brand_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.find_product_with_fuzzy_matching(p_user_id uuid, p_ean text, p_brand text, p_sku text, p_name text, p_brand_id uuid) IS 'Enhanced product matching with user settings support and fuzzy matching';
 
 --
 -- Name: get_admin_user_stats(); Type: FUNCTION; Schema: public; Owner: -
@@ -856,6 +857,35 @@ BEGIN
     ORDER BY j.jobname;
 
 --
+-- Name: get_dismissed_product_duplicates(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_dismissed_product_duplicates(p_user_id uuid) RETURNS TABLE(id uuid, product_id_1 uuid, product_id_2 uuid, product_name_1 text, product_name_2 text, dismissal_key text, dismissed_at timestamp without time zone)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        pdd.id,
+        pdd.product_id_1,
+        pdd.product_id_2,
+        p1.name AS product_name_1,
+        p2.name AS product_name_2,
+        pdd.dismissal_key,
+        pdd.dismissed_at
+    FROM products_dismissed_duplicates pdd
+    LEFT JOIN products p1 ON pdd.product_id_1 = p1.id
+    LEFT JOIN products p2 ON pdd.product_id_2 = p2.id
+    WHERE pdd.user_id = p_user_id
+    ORDER BY pdd.dismissed_at DESC;
+
+--
+-- Name: FUNCTION get_dismissed_product_duplicates(p_user_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_dismissed_product_duplicates(p_user_id uuid) IS 'Gets all dismissed product duplicates for a user';
+
+--
 -- Name: get_integration_run_stats(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -967,14 +997,106 @@ CREATE FUNCTION public.get_latest_competitor_prices(p_user_id uuid, p_product_id
     ORDER BY new_price ASC;
 
 --
--- Name: get_or_create_company(uuid); Type: FUNCTION; Schema: public; Owner: -
+-- Name: get_latest_competitor_prices_batch(uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.get_or_create_company(p_user_id uuid) RETURNS uuid
-    LANGUAGE plpgsql SECURITY DEFINER
+CREATE FUNCTION public.get_latest_competitor_prices_batch(p_user_id uuid, p_product_ids uuid[]) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_price numeric, new_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
+    LANGUAGE plpgsql
     AS $$
-DECLARE
-  v_company_id UUID;
+BEGIN
+    -- Get competitor and integration prices for multiple products at once
+    RETURN QUERY
+    WITH LatestCompetitorPrices AS (
+        SELECT
+            pc.id AS id,
+            pc.product_id AS product_id,
+            pc.competitor_id AS competitor_id,
+            pc.integration_id AS integration_id,
+            pc.old_price AS old_price,
+            pc.new_price AS new_price,
+            pc.price_change_percentage AS price_change_percentage,
+            pc.currency_code AS currency_code,
+            pc.changed_at AS changed_at,
+            'competitor'::TEXT AS source_type,
+            c.name AS source_name,
+            c.website AS source_website,
+            NULL::TEXT AS source_platform,
+            pc.competitor_id AS source_id,
+            pc.url AS url,
+            ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
+        FROM price_changes pc
+        JOIN competitors c ON pc.competitor_id = c.id
+        WHERE pc.user_id = p_user_id
+        AND pc.product_id = ANY(p_product_ids)
+        AND pc.competitor_id IS NOT NULL
+    ),
+    LatestIntegrationPrices AS (
+        SELECT
+            pc.id AS id,
+            pc.product_id AS product_id,
+            pc.competitor_id AS competitor_id,
+            pc.integration_id AS integration_id,
+            pc.old_price AS old_price,
+            pc.new_price AS new_price,
+            pc.price_change_percentage AS price_change_percentage,
+            pc.currency_code AS currency_code,
+            pc.changed_at AS changed_at,
+            'integration'::TEXT AS source_type,
+            i.name AS source_name,
+            NULL::TEXT AS source_website,
+            i.platform AS source_platform,
+            pc.integration_id AS source_id,
+            COALESCE(pc.url, p.url) AS url,
+            ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
+        FROM price_changes pc
+        JOIN integrations i ON pc.integration_id = i.id
+        JOIN products p ON pc.product_id = p.id
+        WHERE pc.user_id = p_user_id
+        AND pc.product_id = ANY(p_product_ids)
+        AND pc.integration_id IS NOT NULL
+    )
+    (
+        SELECT
+            lcp.id AS id,
+            lcp.product_id AS product_id,
+            lcp.competitor_id AS competitor_id,
+            lcp.integration_id AS integration_id,
+            lcp.old_price AS old_price,
+            lcp.new_price AS new_price,
+            lcp.price_change_percentage AS price_change_percentage,
+            lcp.currency_code AS currency_code,
+            lcp.changed_at AS changed_at,
+            lcp.source_type AS source_type,
+            lcp.source_name AS source_name,
+            lcp.source_website AS source_website,
+            lcp.source_platform AS source_platform,
+            lcp.source_id AS source_id,
+            lcp.url AS url
+        FROM LatestCompetitorPrices lcp
+        WHERE lcp.rn = 1
+    )
+    UNION ALL
+    (
+        SELECT
+            lip.id AS id,
+            lip.product_id AS product_id,
+            lip.competitor_id AS competitor_id,
+            lip.integration_id AS integration_id,
+            lip.old_price AS old_price,
+            lip.new_price AS new_price,
+            lip.price_change_percentage AS price_change_percentage,
+            lip.currency_code AS currency_code,
+            lip.changed_at AS changed_at,
+            lip.source_type AS source_type,
+            lip.source_name AS source_name,
+            lip.source_website AS source_website,
+            lip.source_platform AS source_platform,
+            lip.source_id AS source_id,
+            lip.url AS url
+        FROM LatestIntegrationPrices lip
+        WHERE lip.rn = 1
+    )
+    ORDER BY product_id, new_price ASC;
 
 --
 -- Name: get_or_create_unknown_brand(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -985,6 +1107,16 @@ CREATE FUNCTION public.get_or_create_unknown_brand(user_id_param uuid) RETURNS u
     AS $$
 DECLARE
     brand_id_result UUID;
+
+--
+-- Name: get_or_create_user_settings(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_or_create_user_settings(p_user_id uuid) RETURNS uuid
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+DECLARE
+  v_settings_id UUID;
 
 --
 -- Name: get_product_price_history(uuid, uuid, uuid, integer); Type: FUNCTION; Schema: public; Owner: -
@@ -1302,6 +1434,22 @@ BEGIN
 COMMENT ON FUNCTION public.get_user_growth_stats(period_days integer) IS 'Returns user growth statistics over a specified period in days.';
 
 --
+-- Name: get_user_matching_settings(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_matching_settings(p_user_id uuid) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    settings JSONB;
+
+--
+-- Name: FUNCTION get_user_matching_settings(p_user_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_user_matching_settings(p_user_id uuid) IS 'Gets user matching settings with defaults';
+
+--
 -- Name: get_user_workload(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1459,6 +1607,42 @@ DECLARE
   updated_count INTEGER;
 
 --
+-- Name: merge_product_data(text, text, text, text, text, text, text, text, uuid, uuid, text, text, text, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.merge_product_data(existing_name text, new_name text, existing_sku text, new_sku text, existing_ean text, new_ean text, existing_brand text, new_brand text, existing_brand_id uuid, new_brand_id uuid, existing_image_url text, new_image_url text, existing_url text, new_url text) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN jsonb_build_object(
+        'name', CASE 
+            WHEN new_name IS NOT NULL AND LENGTH(TRIM(new_name)) > LENGTH(COALESCE(TRIM(existing_name), '')) 
+            THEN new_name 
+            ELSE COALESCE(existing_name, new_name) 
+        END,
+        'sku', COALESCE(existing_sku, new_sku), -- Keep existing SKU if present
+        'ean', COALESCE(existing_ean, new_ean), -- Add EAN if missing
+        'brand', COALESCE(existing_brand, new_brand), -- Keep existing brand if present
+        'brand_id', COALESCE(existing_brand_id, new_brand_id), -- Keep existing brand_id if present
+        'image_url', CASE 
+            WHEN new_image_url IS NOT NULL AND LENGTH(TRIM(new_image_url)) > 0 
+            THEN new_image_url 
+            ELSE existing_image_url 
+        END,
+        'url', CASE 
+            WHEN new_url IS NOT NULL AND LENGTH(TRIM(new_url)) > 0 
+            THEN new_url 
+            ELSE existing_url 
+        END
+    );
+
+--
+-- Name: FUNCTION merge_product_data(existing_name text, new_name text, existing_sku text, new_sku text, existing_ean text, new_ean text, existing_brand text, new_brand text, existing_brand_id uuid, new_brand_id uuid, existing_image_url text, new_image_url text, existing_url text, new_url text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.merge_product_data(existing_name text, new_name text, existing_sku text, new_sku text, existing_ean text, new_ean text, existing_brand text, new_brand text, existing_brand_id uuid, new_brand_id uuid, existing_image_url text, new_image_url text, existing_url text, new_url text) IS 'Intelligently merges product data preferring more complete information';
+
+--
 -- Name: merge_products_api(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1472,7 +1656,25 @@ DECLARE
 -- Name: FUNCTION merge_products_api(primary_id uuid, duplicate_id uuid); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.merge_products_api(primary_id uuid, duplicate_id uuid) IS 'Merges two products by updating the primary product with data from the duplicate, updating all foreign key references, and deleting the duplicate.';
+COMMENT ON FUNCTION public.merge_products_api(primary_id uuid, duplicate_id uuid) IS 'Enhanced product merging with intelligent data selection and no temp table updates';
+
+--
+-- Name: normalize_sku(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.normalize_sku(sku text) RETURNS text
+    LANGUAGE plpgsql IMMUTABLE
+    AS $$
+BEGIN
+  -- Return NULL if input is NULL or empty
+  IF sku IS NULL OR TRIM(sku) = '' THEN
+    RETURN NULL;
+
+--
+-- Name: FUNCTION normalize_sku(sku text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.normalize_sku(sku text) IS 'Normalizes SKU by removing separators and converting to uppercase. Used for fuzzy SKU matching.';
 
 --
 -- Name: optimize_scraper_schedules(); Type: FUNCTION; Schema: public; Owner: -
@@ -1505,7 +1707,7 @@ CREATE FUNCTION public.process_scraper_timeouts() RETURNS integer
 --
 
 CREATE FUNCTION public.process_staged_integration_product() RETURNS trigger
-    LANGUAGE plpgsql
+    LANGUAGE plpgsql SECURITY DEFINER
     AS $$
 DECLARE
     existing_product_id UUID;
@@ -1514,8 +1716,7 @@ DECLARE
 -- Name: FUNCTION process_staged_integration_product(); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.process_staged_integration_product() IS 'Processes staged integration products and updates the products table.
-Prices from integrations like Prestashop already include tax, so no tax adjustment is needed.';
+COMMENT ON FUNCTION public.process_staged_integration_product() IS 'Enhanced integration processing with user settings support and intelligent data merging';
 
 --
 -- Name: record_price_change(); Type: FUNCTION; Schema: public; Owner: -
@@ -1525,13 +1726,13 @@ CREATE FUNCTION public.record_price_change() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
 DECLARE
-  last_price DECIMAL(10, 2);
+    last_price DECIMAL(10, 2);
 
 --
 -- Name: FUNCTION record_price_change(); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.record_price_change() IS 'Processes scraped products to match them with existing products, creates new products when no match is found, and records price changes.';
+COMMENT ON FUNCTION public.record_price_change() IS 'Enhanced competitor price processing with user settings support and fuzzy matching';
 
 --
 -- Name: retry_error_integration_products(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -1569,6 +1770,16 @@ CREATE FUNCTION public.set_product_brand_id() RETURNS trigger
 BEGIN
   IF NEW.brand_id IS NULL AND NEW.brand IS NOT NULL THEN
     SELECT id INTO NEW.brand_id FROM brands WHERE name = NEW.brand LIMIT 1;
+
+--
+-- Name: set_statement_timeout(integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.set_statement_timeout(p_milliseconds integer) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  EXECUTE format('SET statement_timeout = %s', p_milliseconds);
 
 --
 -- Name: sync_brand_id(); Type: FUNCTION; Schema: public; Owner: -
@@ -1609,6 +1820,22 @@ DECLARE
 --
 
 COMMENT ON FUNCTION public.trim_progress_messages(p_run_id uuid, p_max_messages integer) IS 'Trims the progress_messages array to prevent database bloat';
+
+--
+-- Name: undismiss_product_duplicates(uuid, uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.undismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    ordered_id_1 UUID;
+
+--
+-- Name: FUNCTION undismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.undismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid) IS 'Undismisses product duplicates to allow them to appear in duplicate detection again';
 
 --
 -- Name: update_conversation_timestamp(); Type: FUNCTION; Schema: public; Owner: -
@@ -2144,24 +2371,6 @@ CREATE FUNCTION storage.update_updated_at_column() RETURNS trigger
     AS $$
 BEGIN
     NEW.updated_at = now();
-
---
--- Name: secrets_encrypt_secret_secret(); Type: FUNCTION; Schema: vault; Owner: -
---
-
-CREATE FUNCTION vault.secrets_encrypt_secret_secret() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-		BEGIN
-		        new.secret = CASE WHEN new.secret IS NULL THEN NULL ELSE
-			CASE WHEN new.key_id IS NULL THEN NULL ELSE pg_catalog.encode(
-			  pgsodium.crypto_aead_det_encrypt(
-				pg_catalog.convert_to(new.secret, 'utf8'),
-				pg_catalog.convert_to((new.id::text || new.description::text || new.created_at::text || new.updated_at::text)::text, 'utf8'),
-				new.key_id::uuid,
-				new.nonce
-			  ),
-				'base64') END END;
 
 --
 -- Name: users create_nextauth_user_trigger; Type: TRIGGER; Schema: auth; Owner: -

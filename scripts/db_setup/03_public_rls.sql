@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Row Level Security policies
 -- =========================================================================
--- Generated: 2025-05-30 15:46:13
+-- Generated: 2025-06-05 13:39:40
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -44,10 +44,10 @@ CREATE POLICY "Users can delete their own brand aliases" ON public.brand_aliases
 CREATE POLICY "Users can delete their own brands" ON public.brands FOR DELETE USING ((auth.uid() = user_id));
 
 --
--- Name: companies Users can delete their own company; Type: POLICY; Schema: public; Owner: -
+-- Name: user_settings Users can delete their own company; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can delete their own company" ON public.companies FOR DELETE USING ((auth.uid() = user_id));
+CREATE POLICY "Users can delete their own company" ON public.user_settings FOR DELETE USING ((auth.uid() = user_id));
 
 --
 -- Name: competitors Users can delete their own competitors; Type: POLICY; Schema: public; Owner: -
@@ -104,10 +104,10 @@ CREATE POLICY "Users can insert their own brand aliases" ON public.brand_aliases
 CREATE POLICY "Users can insert their own brands" ON public.brands FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
--- Name: companies Users can insert their own company; Type: POLICY; Schema: public; Owner: -
+-- Name: user_settings Users can insert their own company; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can insert their own company" ON public.companies FOR INSERT WITH CHECK ((auth.uid() = user_id));
+CREATE POLICY "Users can insert their own company" ON public.user_settings FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
 -- Name: competitors Users can insert their own competitors; Type: POLICY; Schema: public; Owner: -
@@ -188,10 +188,10 @@ CREATE POLICY "Users can update their own CSV uploads" ON public.csv_uploads FOR
 CREATE POLICY "Users can update their own brands" ON public.brands FOR UPDATE USING ((auth.uid() = user_id));
 
 --
--- Name: companies Users can update their own company; Type: POLICY; Schema: public; Owner: -
+-- Name: user_settings Users can update their own company; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can update their own company" ON public.companies FOR UPDATE USING ((auth.uid() = user_id));
+CREATE POLICY "Users can update their own company" ON public.user_settings FOR UPDATE USING ((auth.uid() = user_id));
 
 --
 -- Name: competitors Users can update their own competitors; Type: POLICY; Schema: public; Owner: -
@@ -274,10 +274,10 @@ CREATE POLICY "Users can view their own brand aliases" ON public.brand_aliases F
 CREATE POLICY "Users can view their own brands" ON public.brands FOR SELECT USING ((auth.uid() = user_id));
 
 --
--- Name: companies Users can view their own company; Type: POLICY; Schema: public; Owner: -
+-- Name: user_settings Users can view their own company; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can view their own company" ON public.companies FOR SELECT USING ((auth.uid() = user_id));
+CREATE POLICY "Users can view their own company" ON public.user_settings FOR SELECT USING ((auth.uid() = user_id));
 
 --
 -- Name: competitors Users can view their own competitors; Type: POLICY; Schema: public; Owner: -

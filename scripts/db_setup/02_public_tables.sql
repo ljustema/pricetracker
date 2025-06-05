@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-05-30 15:46:13
+-- Generated: 2025-06-05 13:39:40
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -503,26 +503,6 @@ CREATE TABLE public.brands (
 );
 
 --
--- Name: companies; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.companies (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    name text,
-    address text,
-    org_number text,
-    primary_currency text,
-    secondary_currencies text[],
-    currency_format text,
-    matching_rules jsonb,
-    price_thresholds jsonb,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT companies_primary_currency_check CHECK ((char_length(primary_currency) = 3))
-);
-
---
 -- Name: competitors; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -708,6 +688,20 @@ COMMENT ON COLUMN public.products.currency_code IS 'ISO 4217 currency code (e.g.
 --
 
 COMMENT ON COLUMN public.products.url IS 'URL to the product on the source platform';
+
+--
+-- Name: products_dismissed_duplicates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.products_dismissed_duplicates (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id_1 uuid NOT NULL,
+    product_id_2 uuid NOT NULL,
+    dismissal_key text NOT NULL,
+    dismissed_at timestamp without time zone DEFAULT now(),
+    CONSTRAINT product_id_order CHECK ((product_id_1 < product_id_2))
+);
 
 --
 -- Name: professional_scraper_requests; Type: TABLE; Schema: public; Owner: -
@@ -960,7 +954,6 @@ CREATE TABLE public.temp_integrations_scraped_data (
     error_message text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     processed_at timestamp with time zone,
-    product_id uuid,
     currency_code text,
     url text,
     CONSTRAINT temp_integrations_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
@@ -993,6 +986,26 @@ COMMENT ON COLUMN public.user_profiles.admin_role IS 'Defines the admin role for
 --
 
 COMMENT ON COLUMN public.user_profiles.is_suspended IS 'Indicates if the user account is currently suspended by an admin.';
+
+--
+-- Name: user_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_settings (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text,
+    address text,
+    org_number text,
+    primary_currency text,
+    secondary_currencies text[],
+    currency_format text,
+    matching_rules jsonb,
+    price_thresholds jsonb,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT companies_primary_currency_check CHECK ((char_length(primary_currency) = 3))
+);
 
 --
 -- Name: user_subscriptions; Type: TABLE; Schema: public; Owner: -
@@ -1362,10 +1375,10 @@ ALTER TABLE ONLY public.brands
     ADD CONSTRAINT brands_pkey PRIMARY KEY (id);
 
 --
--- Name: companies companies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: user_settings companies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.companies
+ALTER TABLE ONLY public.user_settings
     ADD CONSTRAINT companies_pkey PRIMARY KEY (id);
 
 --
@@ -1437,6 +1450,13 @@ ALTER TABLE ONLY public.newsletter_subscriptions
 
 ALTER TABLE ONLY public.price_changes
     ADD CONSTRAINT price_changes_pkey PRIMARY KEY (id);
+
+--
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_pkey PRIMARY KEY (id);
 
 --
 -- Name: products products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1521,6 +1541,13 @@ ALTER TABLE ONLY public.brand_aliases
 
 ALTER TABLE ONLY public.dismissed_duplicates
     ADD CONSTRAINT unique_dismissed_pair UNIQUE (user_id, brand_id_1, brand_id_2);
+
+--
+-- Name: products_dismissed_duplicates unique_dismissed_product_pair; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT unique_dismissed_product_pair UNIQUE (user_id, product_id_1, product_id_2);
 
 --
 -- Name: brands unique_user_brand; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1824,6 +1851,27 @@ ALTER TABLE ONLY public.products
     ADD CONSTRAINT products_brand_id_fkey FOREIGN KEY (brand_id) REFERENCES public.brands(id);
 
 --
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_product_id_1_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_product_id_1_fkey FOREIGN KEY (product_id_1) REFERENCES public.products(id);
+
+--
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_product_id_2_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_product_id_2_fkey FOREIGN KEY (product_id_2) REFERENCES public.products(id);
+
+--
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
 -- Name: products products_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1948,20 +1996,6 @@ ALTER TABLE ONLY public.temp_competitors_scraped_data
 
 ALTER TABLE ONLY public.temp_integrations_scraped_data
     ADD CONSTRAINT temp_integrations_scraped_data_integration_run_id_fkey FOREIGN KEY (integration_run_id) REFERENCES public.integration_runs(id) ON DELETE CASCADE;
-
---
--- Name: temp_integrations_scraped_data temp_integrations_scraped_data_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.temp_integrations_scraped_data
-    ADD CONSTRAINT temp_integrations_scraped_data_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
-
---
--- Name: user_profiles user_profiles_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.user_profiles
-    ADD CONSTRAINT user_profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id);
 
 --
 -- Name: user_subscriptions user_subscriptions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -2113,12 +2147,6 @@ ALTER TABLE public.brand_aliases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.brands ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: companies; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: competitors; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -2179,6 +2207,12 @@ ALTER TABLE public.price_changes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: products_dismissed_duplicates; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.products_dismissed_duplicates ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: professional_scraper_requests; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -2237,6 +2271,12 @@ ALTER TABLE public.temp_integrations_scraped_data ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_settings; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_settings ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: user_subscriptions; Type: ROW SECURITY; Schema: public; Owner: -

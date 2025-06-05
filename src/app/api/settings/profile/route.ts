@@ -17,6 +17,20 @@ interface ProfileUpdateData {
   notification_preferences?: Json;
 }
 
+// Define specific types for database updates
+interface UserProfileUpdateData {
+  name?: string;
+  avatar_url?: string;
+  updated_at?: string;
+}
+
+interface UserSettingsUpdateData {
+  primary_currency?: string;
+  secondary_currencies?: string[];
+  currency_format?: string;
+  updated_at?: string;
+}
+
 export async function PATCH(request: NextRequest) {
   try {
     // Get the current user from the session
@@ -77,24 +91,70 @@ export async function PATCH(request: NextRequest) {
     if (currency_format !== undefined) updateData.currency_format = currency_format;
     if (notification_preferences !== undefined) updateData.notification_preferences = notification_preferences;
 
-    // Update the user profile in next_auth.users
+    // Update the user profile and settings
     const userId = ensureUUID(session.user.id);
-    const { data, error } = await supabase
-      .schema("next_auth")
-      .from("users")
-      .update(updateData)
-      .eq("id", userId)
-      .select();
 
-    if (error) {
-      console.error("Error updating user profile:", error);
-      return NextResponse.json(
-        { error: "Failed to update user profile" },
-        { status: 500 }
-      );
+    // Separate profile data from settings data
+    const profileData: UserProfileUpdateData = {};
+    const settingsData: UserSettingsUpdateData = {};
+
+    // Profile data goes to user_profiles table
+    if (name !== undefined) profileData.name = name;
+    if (image !== undefined) profileData.avatar_url = image;
+
+    // Settings data goes to user_settings table
+    if (primary_currency !== undefined) settingsData.primary_currency = primary_currency;
+    if (secondary_currencies !== undefined) settingsData.secondary_currencies = secondary_currencies;
+    if (currency_format !== undefined) settingsData.currency_format = currency_format;
+
+    let profileResult = null;
+    let settingsResult = null;
+
+    // Update user profile if there's profile data
+    if (Object.keys(profileData).length > 0) {
+      profileData.updated_at = new Date().toISOString();
+      const { data: profileData_result, error: profileError } = await supabase
+        .from("user_profiles")
+        .update(profileData)
+        .eq("id", userId)
+        .select();
+
+      if (profileError) {
+        console.error("Error updating user profile:", profileError);
+        return NextResponse.json(
+          { error: "Failed to update user profile" },
+          { status: 500 }
+        );
+      }
+      profileResult = profileData_result;
     }
 
-    return NextResponse.json(data[0]);
+    // Update user settings if there's settings data
+    if (Object.keys(settingsData).length > 0) {
+      settingsData.updated_at = new Date().toISOString();
+      const { data: settingsData_result, error: settingsError } = await supabase
+        .from("user_settings")
+        .update(settingsData)
+        .eq("user_id", userId)
+        .select();
+
+      if (settingsError) {
+        console.error("Error updating user settings:", settingsError);
+        return NextResponse.json(
+          { error: "Failed to update user settings" },
+          { status: 500 }
+        );
+      }
+      settingsResult = settingsData_result;
+    }
+
+    // Combine results
+    const data = {
+      profile: profileResult?.[0] || null,
+      settings: settingsResult?.[0] || null
+    };
+
+    return NextResponse.json(data);
   } catch (error) {
     console.error("Error in PATCH /api/settings/profile:", error);
     return NextResponse.json(

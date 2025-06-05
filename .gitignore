@@ -19,7 +19,7 @@ next-env.d.ts
 /build
 /src/workers/*/dist
 
-# Docs for building
+# Documentation
 /docs
 # Allow deployment and architecture documentation
 !/docs/deployment
@@ -31,10 +31,9 @@ next-env.d.ts
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pricetracker/logs/
 src/workers/*/logs/
 
-# Local env files
+# Environment files
 .env*.local
 .env
 src/workers/*/.env
@@ -44,7 +43,7 @@ src/workers/*/.env
 .tscache/
 src/workers/*/.tscache/
 
-# IDE
+# IDE files
 .vscode/
 .idea/
 *.sublime-project
@@ -57,7 +56,7 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# Misc
+# Development tools
 .vercel
 .turbo
 .qodo
@@ -84,5 +83,9 @@ pip-delete-this-directory.txt
 # Supabase
 .supabase/
 
-# Duplicate project directory
-/pricetracker
+# Database dumps and backups
+scripts/db_setup/full_schema_dump_*.sql
+full_dump_*.sql
+
+# Batch files for database operations
+import_to_new_db.bat

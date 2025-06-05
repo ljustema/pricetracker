@@ -131,14 +131,16 @@ export const authOptions: NextAuthOptions = {
   },
   callbacks: {
     // Handle sign-in event
-    async signIn({ user: _user, account, profile, credentials }) {
+    async signIn({ user, account, profile, credentials }) {
+      console.log('NextAuth signIn callback called:', {
+        provider: account?.provider,
+        email: profile?.email,
+        userId: user?.id
+      });
+
       // If it's a Google sign-in
       if (account?.provider === 'google' && profile?.email) {
-        // The user object already contains the basic profile info from Google
-        // We don't need to do anything special here since we're using JWT sessions
-        // and not relying on the adapter to store user data
-
-        // Return true to allow sign in
+        // Just allow the sign-in, user creation will happen in jwt callback
         return true;
       }
 
@@ -177,6 +179,81 @@ export const authOptions: NextAuthOptions = {
       // On subsequent calls, user is undefined
       if (user?.id) {
         token.sub = user.id;
+
+        // If this is a new user sign-in (Google or credentials), create user profile/settings
+        if ((account?.provider === 'google' && _profile?.email) ||
+            (account?.provider === 'credentials' && user?.email)) {
+          try {
+            const supabase = createClient(supabaseUrl!, supabaseServiceRoleKey!);
+
+            // Check if user profile already exists
+            const { data: existingProfile } = await supabase
+              .from('user_profiles')
+              .select('id')
+              .eq('id', user.id)
+              .single();
+
+            // If profile doesn't exist, create it
+            if (!existingProfile) {
+              // Get user data from either profile (Google) or user object (credentials)
+              const userEmail = _profile?.email || user.email;
+              const userName = _profile?.name || user.name;
+              const userAvatar = (_profile as { picture?: string })?.picture || user.image;
+
+              console.log('Creating user profile and settings for:', userEmail);
+
+              // Create user profile
+              const { error: profileError } = await supabase
+                .from('user_profiles')
+                .insert({
+                  id: user.id,
+                  email: userEmail,
+                  name: userName,
+                  avatar_url: userAvatar,
+                  admin_role: null,
+                  is_suspended: false,
+                  subscription_tier: 'free',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                });
+
+              if (profileError) {
+                console.error('Error creating user profile:', profileError);
+              } else {
+                console.log('Created user profile for:', userEmail);
+              }
+
+              // Create user settings
+              const { error: settingsError } = await supabase
+                .from('user_settings')
+                .insert({
+                  user_id: user.id,
+                  name: userName,
+                  primary_currency: 'SEK',
+                  currency_format: 'sv-SE',
+                  matching_rules: {
+                    ean_priority: true,
+                    sku_brand_fallback: true,
+                    fuzzy_name_matching: false
+                  },
+                  price_thresholds: {
+                    low_stock: 10,
+                    price_change_alert: 5
+                  },
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                });
+
+              if (settingsError) {
+                console.error('Error creating user settings:', settingsError);
+              } else {
+                console.log('Created user settings for:', userEmail);
+              }
+            }
+          } catch (error) {
+            console.error('Error in JWT callback user creation:', error);
+          }
+        }
       }
 
       // Fetch admin role information if we have a user ID and don't already have it
