@@ -133,6 +133,34 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Validate headers for own products
+    if (parsedCsv.data.length > 0) {
+      const headers = Object.keys(parsedCsv.data[0]);
+      const hasOurPrice = headers.includes('our_price');
+      const hasWholesalePrice = headers.includes('wholesale_price');
+
+      if (!hasOurPrice && !hasWholesalePrice) {
+        return NextResponse.json(
+          { error: "CSV file is missing required headers: either 'our_price' or 'wholesale_price' is required for own products" },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Validate headers for own products
+    if (parsedCsv.data.length > 0) {
+      const headers = Object.keys(parsedCsv.data[0]);
+      const hasOurPrice = headers.includes('our_price');
+      const hasWholesalePrice = headers.includes('wholesale_price');
+
+      if (!hasOurPrice && !hasWholesalePrice) {
+        return NextResponse.json(
+          { error: "CSV file is missing required headers: either 'our_price' or 'wholesale_price' is required for own products" },
+          { status: 400 }
+        );
+      }
+    }
+
     // Use the admin client to bypass RLS
     const supabase = createSupabaseAdminClient();
 

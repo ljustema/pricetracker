@@ -53,10 +53,18 @@ export async function POST(request: NextRequest) {
     const userId = session.user.id;
     const body = await request.json();
 
-    // Validate required fields
-    if (!body.platform || !body.name || !body.api_url || !body.api_key) {
+    // Validate required fields - conditional based on platform
+    if (!body.platform || !body.name) {
       return NextResponse.json(
-        { error: 'Missing required fields: platform, name, api_url, api_key' },
+        { error: 'Missing required fields: platform, name' },
+        { status: 400 }
+      );
+    }
+
+    // For non-manual platforms, require API credentials
+    if (body.platform !== 'manual' && (!body.api_url || !body.api_key)) {
+      return NextResponse.json(
+        { error: 'Missing required fields for automated integration: api_url, api_key' },
         { status: 400 }
       );
     }
@@ -67,10 +75,10 @@ export async function POST(request: NextRequest) {
       user_id: userId,
       platform: body.platform,
       name: body.name,
-      api_url: body.api_url,
-      api_key: body.api_key,
-      status: 'pending_setup',
-      sync_frequency: body.sync_frequency || 'daily',
+      api_url: body.api_url || null,
+      api_key: body.api_key || null,
+      status: body.platform === 'manual' ? 'active' : 'pending_setup', // Manual integrations are immediately active
+      sync_frequency: body.platform === 'manual' ? 'manual' : (body.sync_frequency || 'daily'),
       configuration: body.configuration || null,
     };
 

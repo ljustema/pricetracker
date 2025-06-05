@@ -14,16 +14,25 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Integration } from '@/lib/services/integration-service';
 import { useToast } from '@/components/ui/use-toast';
 
-// Define the form schema with Zod
+// Define the form schema with Zod - conditional validation based on platform
 const formSchema = z.object({
   platform: z.string().min(1, 'Platform is required'),
   name: z.string().min(1, 'Name is required'),
-  api_url: z.string().url('Must be a valid URL'),
-  api_key: z.string().min(1, 'API key is required'),
+  api_url: z.string().optional(),
+  api_key: z.string().optional(),
   sync_frequency: z.string().optional(),
   configuration: z.object({
     activeOnly: z.boolean().optional(),
   }).optional(),
+}).refine((data) => {
+  // For non-manual platforms, require API credentials
+  if (data.platform !== 'manual') {
+    return data.api_url && data.api_key;
+  }
+  return true;
+}, {
+  message: "API URL and API Key are required for automated integrations",
+  path: ["api_url"],
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -41,6 +50,9 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const { toast } = useToast();
   const isEditing = !!integration;
+
+  // Watch the platform field to conditionally show/hide API fields
+  const selectedPlatform = form.watch('platform');
 
   // Initialize the form with default values or existing integration values
   const form = useForm<FormValues>({
@@ -189,6 +201,7 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
                     </FormControl>
                     <SelectContent>
                       <SelectItem value="prestashop">PrestaShop</SelectItem>
+                      <SelectItem value="manual">Manual (CSV Upload)</SelectItem>
                       {/* Add more platforms as they are supported */}
                       {/* <SelectItem value="shopify">Shopify</SelectItem> */}
                       {/* <SelectItem value="woocommerce">WooCommerce</SelectItem> */}
@@ -219,119 +232,141 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
               )}
             />
 
-            <FormField
-              control={form.control}
-              name="api_url"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>API URL</FormLabel>
-                  <FormControl>
-                    <Input placeholder="https://mystore.com" {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    The base URL of your store (e.g., https://mystore.com).
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="api_key"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>API Key</FormLabel>
-                  <div className="flex space-x-2">
-                    <FormControl className="flex-1">
-                      <Input type="password" placeholder="••••••••••••••••" {...field} />
-                    </FormControl>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={testCredentials}
-                      disabled={isTesting}
-                      className="whitespace-nowrap"
-                    >
-                      {isTesting ? (
-                        <>
-                          <RefreshCw className="h-4 w-4 mr-1 animate-spin" />
-                          Testing...
-                        </>
-                      ) : (
-                        'Test Connection'
-                      )}
-                    </Button>
-                  </div>
-                  {testResult && (
-                    <div className={`mt-2 text-sm flex items-center ${testResult.success ? 'text-green-600' : 'text-red-600'}`}>
-                      {testResult.success ? (
-                        <CheckCircle className="h-4 w-4 mr-1" />
-                      ) : (
-                        <AlertCircle className="h-4 w-4 mr-1" />
-                      )}
-                      {testResult.message}
-                    </div>
+            {/* Only show API fields for non-manual platforms */}
+            {selectedPlatform !== 'manual' && (
+              <>
+                <FormField
+                  control={form.control}
+                  name="api_url"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>API URL</FormLabel>
+                      <FormControl>
+                        <Input placeholder="https://mystore.com" {...field} />
+                      </FormControl>
+                      <FormDescription>
+                        The base URL of your store (e.g., https://mystore.com).
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
                   )}
-                  <FormDescription>
-                    Your API key or access token for authentication.
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+                />
 
-            <FormField
-              control={form.control}
-              name="sync_frequency"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Sync Frequency</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    defaultValue={field.value}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select frequency" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="hourly">Hourly</SelectItem>
-                      <SelectItem value="daily">Daily</SelectItem>
-                      <SelectItem value="weekly">Weekly</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormDescription>
-                    How often to automatically sync data (manual sync is always available).
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+                <FormField
+                  control={form.control}
+                  name="api_key"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>API Key</FormLabel>
+                      <div className="flex space-x-2">
+                        <FormControl className="flex-1">
+                          <Input type="password" placeholder="••••••••••••••••" {...field} />
+                        </FormControl>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={testCredentials}
+                          disabled={isTesting}
+                          className="whitespace-nowrap"
+                        >
+                          {isTesting ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-1 animate-spin" />
+                              Testing...
+                            </>
+                          ) : (
+                            'Test Connection'
+                          )}
+                        </Button>
+                      </div>
+                      {testResult && (
+                        <div className={`mt-2 text-sm flex items-center ${testResult.success ? 'text-green-600' : 'text-red-600'}`}>
+                          {testResult.success ? (
+                            <CheckCircle className="h-4 w-4 mr-1" />
+                          ) : (
+                            <AlertCircle className="h-4 w-4 mr-1" />
+                          )}
+                          {testResult.message}
+                        </div>
+                      )}
+                      <FormDescription>
+                        Your API key or access token for authentication.
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </>
+            )}
 
-            <FormField
-              control={form.control}
-              name="configuration.activeOnly"
-              render={({ field }) => (
-                <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
-                  <FormControl>
-                    <Checkbox
-                      checked={field.value !== false} // Default to true if undefined
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                  <div className="space-y-1 leading-none">
-                    <FormLabel>
-                      Only import active products
-                    </FormLabel>
-                    <FormDescription>
-                      When checked, only products marked as active in your store will be imported.
-                    </FormDescription>
-                  </div>
-                </FormItem>
-              )}
-            />
+            {/* Show description for manual integrations */}
+            {selectedPlatform === 'manual' && (
+              <div className="rounded-md border p-4 bg-blue-50">
+                <h4 className="font-medium text-blue-900 mb-2">Manual Integration</h4>
+                <p className="text-sm text-blue-700">
+                  This integration allows you to upload your own products via CSV files.
+                  No API credentials are required. You can upload product data and track
+                  price changes manually through the CSV upload feature.
+                </p>
+              </div>
+            )}
+
+            {/* Only show sync frequency for non-manual platforms */}
+            {selectedPlatform !== 'manual' && (
+              <>
+                <FormField
+                  control={form.control}
+                  name="sync_frequency"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Sync Frequency</FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        defaultValue={field.value}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select frequency" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="hourly">Hourly</SelectItem>
+                          <SelectItem value="daily">Daily</SelectItem>
+                          <SelectItem value="weekly">Weekly</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        How often to automatically sync data (manual sync is always available).
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="configuration.activeOnly"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value !== false} // Default to true if undefined
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                      <div className="space-y-1 leading-none">
+                        <FormLabel>
+                          Only import active products
+                        </FormLabel>
+                        <FormDescription>
+                          When checked, only products marked as active in your store will be imported.
+                        </FormDescription>
+                      </div>
+                    </FormItem>
+                  )}
+                />
+              </>
+            )}
 
             <DialogFooter>
               <Button

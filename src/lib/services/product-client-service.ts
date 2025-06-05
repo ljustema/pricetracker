@@ -291,7 +291,7 @@ export async function uploadProductsCSV(
 }
 
 /**
- * Upload a CSV file with own products
+ * Upload a CSV file with own products (legacy - direct processing)
  */
 export async function uploadOwnProductsCSV(
   file: File
@@ -300,6 +300,30 @@ export async function uploadOwnProductsCSV(
   formData.append('file', file);
 
   const response = await fetch('/api/products/csv-upload-enhanced', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to upload CSV file');
+  }
+
+  return response.json();
+}
+
+/**
+ * Upload a CSV file with own products via integration system
+ */
+export async function uploadOwnProductsCSVViaIntegration(
+  integrationId: string,
+  file: File
+): Promise<{ success: boolean; productsAdded: number; pricesUpdated: number }> {
+  const formData = new FormData();
+  formData.append('integrationId', integrationId);
+  formData.append('file', file);
+
+  const response = await fetch('/api/products/csv-upload-via-integration', {
     method: 'POST',
     body: formData,
   });

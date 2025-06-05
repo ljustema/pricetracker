@@ -2,12 +2,18 @@
 
 import { useState, useEffect } from "react";
 import { UploadIcon, CheckCircleIcon, XCircleIcon, DownloadIcon } from "lucide-react";
-import { uploadProductsCSV, uploadOwnProductsCSV } from "@/lib/services/product-client-service";
+import { uploadProductsCSV, uploadOwnProductsCSVViaIntegration } from "@/lib/services/product-client-service";
 import Image from "next/image";
 
 interface Competitor {
   id: string;
   name: string;
+}
+
+interface Integration {
+  id: string;
+  name: string;
+  platform: string;
 }
 
 type ProductType = 'own' | 'competitor';
@@ -23,7 +29,9 @@ export default function CSVUploadForm({
 }: CSVUploadFormProps) {
   const [productType, setProductType] = useState<ProductType>('competitor');
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
+  const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [selectedCompetitorId, setSelectedCompetitorId] = useState<string>("");
+  const [selectedIntegrationId, setSelectedIntegrationId] = useState<string>("");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [csvPreview, setCsvPreview] = useState<{
     headers: string[];
@@ -39,7 +47,7 @@ export default function CSVUploadForm({
 
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
 
-  // Fetch competitors when component mounts
+  // Fetch competitors and integrations when component mounts
   useEffect(() => {
     const fetchCompetitors = async () => {
       try {
@@ -58,7 +66,25 @@ export default function CSVUploadForm({
       }
     };
 
+    const fetchIntegrations = async () => {
+      try {
+        const response = await fetch('/api/integrations');
+        if (response.ok) {
+          const data = await response.json();
+          setIntegrations(data);
+          if (data.length > 0) {
+            setSelectedIntegrationId(data[0].id);
+          }
+        } else {
+          console.error("Failed to fetch integrations");
+        }
+      } catch (error) {
+        console.error("Error fetching integrations:", error);
+      }
+    };
+
     fetchCompetitors();
+    fetchIntegrations();
   }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -169,6 +195,11 @@ export default function CSVUploadForm({
       return;
     }
 
+    if (productType === 'own' && !selectedIntegrationId) {
+      alert("Please select an integration");
+      return;
+    }
+
     if (!uploadedFile) {
       alert("Please upload a CSV file first");
       return;
@@ -177,10 +208,10 @@ export default function CSVUploadForm({
     setIsSubmitting(true);
 
     try {
-      // Use enhanced upload for own products, existing upload for competitors
+      // Use integration upload for own products, existing upload for competitors
       let result;
       if (productType === 'own') {
-        result = await uploadOwnProductsCSV(uploadedFile);
+        result = await uploadOwnProductsCSVViaIntegration(selectedIntegrationId, uploadedFile);
       } else {
         result = await uploadProductsCSV(selectedCompetitorId, uploadedFile);
       }
@@ -298,6 +329,32 @@ export default function CSVUploadForm({
                     </option>
                   ))}
                 </select>
+              </div>
+            )}
+
+            {/* Integration Selection - Only show for own products */}
+            {productType === 'own' && (
+              <div>
+                <label htmlFor="integration" className="block text-sm font-medium text-gray-700">
+                  Integration
+                </label>
+                <select
+                  id="integration"
+                  value={selectedIntegrationId}
+                  onChange={(e) => setSelectedIntegrationId(e.target.value)}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+                  required
+                >
+                  <option value="">Select an integration</option>
+                  {integrations.map((integration) => (
+                    <option key={integration.id} value={integration.id}>
+                      {integration.name} ({integration.platform})
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-sm text-gray-500">
+                  Choose which integration this CSV upload belongs to. This helps organize your products and track price history.
+                </p>
               </div>
             )}
 
@@ -427,7 +484,7 @@ export default function CSVUploadForm({
           {!uploadResult && (
             <button
               type="submit"
-              disabled={isSubmitting || !uploadedFile || (productType === 'competitor' && !selectedCompetitorId)}
+              disabled={isSubmitting || !uploadedFile || (productType === 'competitor' && !selectedCompetitorId) || (productType === 'own' && !selectedIntegrationId)}
               className="rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
             >
               {isSubmitting ? "Uploading..." : "Upload Products"}
