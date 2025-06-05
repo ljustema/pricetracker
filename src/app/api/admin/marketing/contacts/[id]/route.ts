@@ -9,7 +9,7 @@ export async function PATCH(
 ) {
   try {
     // Validate admin access
-    const adminUser = await validateAdminApiAccess();
+    const _adminUser = await validateAdminApiAccess();
 
     const { id } = params;
     const body = await request.json();
@@ -70,7 +70,7 @@ export async function GET(
 ) {
   try {
     // Validate admin access
-    const adminUser = await validateAdminApiAccess();
+    const _adminUser = await validateAdminApiAccess();
 
     const { id } = params;
     const supabase = createSupabaseAdminClient();

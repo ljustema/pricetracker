@@ -9,7 +9,7 @@ const CACHE_MAX_AGE = 60; // Cache for 60 seconds
 /**
  * GET handler to fetch key performance indicators for the insights dashboard
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Get the authenticated user's session
     const session = await getServerSession(authOptions);

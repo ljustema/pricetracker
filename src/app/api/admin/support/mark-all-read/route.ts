@@ -3,7 +3,7 @@ import { validateAdminApiAccess } from '@/lib/admin/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 
 // POST /api/admin/support/mark-all-read - Mark all unread user messages as read by admin
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   try {
     // Validate admin access
     await validateAdminApiAccess();

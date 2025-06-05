@@ -3,7 +3,7 @@ import { checkAdminAccess } from '@/lib/admin/auth';
 
 // GET /api/admin/auth/check - Check admin status without throwing errors for non-admins
 // This endpoint is now primarily for server-side validation and debugging
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Check admin access without throwing errors
     const adminUser = await checkAdminAccess();

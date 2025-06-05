@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 
 // GET /api/admin/scheduling - Get scheduling statistics and status
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const supabase = createSupabaseAdminClient();
 
@@ -303,7 +303,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, ...params } = body;
+    const { action, ..._params } = body;
 
     const supabase = createSupabaseAdminClient();
 

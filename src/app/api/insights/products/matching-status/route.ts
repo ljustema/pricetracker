@@ -9,7 +9,7 @@ const CACHE_MAX_AGE = 60; // Cache for 60 seconds
 /**
  * GET handler to fetch product matching status data
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Get the authenticated user's session
     const session = await getServerSession(authOptions);
@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get products with at least one price change (matched products)
-    const { data: matchedProductsData, error: matchedProductsError } = await supabase
+    const { data: _matchedProductsData, error: matchedProductsError } = await supabase
       .from('price_changes')
       .select('product_id', { count: 'exact', head: true })
       .eq('user_id', userId)

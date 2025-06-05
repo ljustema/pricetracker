@@ -74,7 +74,11 @@ export async function POST(
     }
 
     // Update conversation timestamp and status if needed
-    const updateData: any = {
+    const updateData: {
+      updated_at: string;
+      status?: string;
+      resolved_at?: null;
+    } = {
       updated_at: new Date().toISOString()
     };
 

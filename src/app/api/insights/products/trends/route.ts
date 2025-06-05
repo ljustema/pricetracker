@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
       const productId = priceChange.product_id;
       const productName = priceChange.products?.name || 'Unknown Product';
       const competitorId = priceChange.competitor_id;
-      const competitorName = priceChange.competitors?.name || 'Unknown Competitor';
+      const _competitorName = priceChange.competitors?.name || 'Unknown Competitor';
       const priceChangePercentage = priceChange.price_change_percentage;
       const changedAt = new Date(priceChange.changed_at);
       

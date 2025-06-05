@@ -248,7 +248,22 @@ export async function DELETE(
       );
     }
 
-    // Then delete the integration
+    // Delete any temp_integrations_scraped_data records
+    const { error: tempDataError } = await supabase
+      .from('temp_integrations_scraped_data')
+      .delete()
+      .eq('integration_id', integrationId)
+      .eq('user_id', userId);
+
+    if (tempDataError) {
+      console.error('Error deleting temp integration data:', tempDataError);
+      return NextResponse.json(
+        { error: 'Failed to delete temp integration data' },
+        { status: 500 }
+      );
+    }
+
+    // Delete the integration (price_changes will be automatically deleted via CASCADE)
     const { error } = await supabase
       .from('integrations')
       .delete()

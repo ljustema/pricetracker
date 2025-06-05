@@ -301,21 +301,10 @@ export async function DELETE(
       );
     }
 
-    // Check if there are temp_integrations_scraped_data referencing this product
-    const { count: stagedProductsCount, error: stagedCountError } = await supabase
-      .from("temp_integrations_scraped_data")
-      .select("id", { count: 'exact', head: true })
-      .eq("product_id", productId);
+    // Note: temp_integrations_scraped_data table doesn't have a product_id column
+    // so we don't need to check for references there
 
-    if (stagedCountError) {
-      console.error("Error checking temp_integrations_scraped_data references:", stagedCountError);
-      return NextResponse.json(
-        { error: "Error checking temp_integrations_scraped_data references" },
-        { status: 500 }
-      );
-    }
-
-    // Delete price_changes records if they exist
+    // Delete ALL price_changes records for this product (both competitor and integration price changes)
     if (priceChangesCount && priceChangesCount > 0) {
       const { error: deleteChangesError } = await supabase
         .from("price_changes")
@@ -333,23 +322,7 @@ export async function DELETE(
       console.log(`Deleted ${priceChangesCount} price_changes records for product ${productId}`);
     }
 
-    // Delete temp_integrations_scraped_data records if they exist
-    if (stagedProductsCount && stagedProductsCount > 0) {
-      const { error: deleteStagedError } = await supabase
-        .from("temp_integrations_scraped_data")
-        .delete()
-        .eq("product_id", productId);
-
-      if (deleteStagedError) {
-        console.error("Error deleting temp_integrations_scraped_data:", deleteStagedError);
-        return NextResponse.json(
-          { error: `Cannot delete product: it has ${stagedProductsCount} temp integration product records. Please try again or contact support.` },
-          { status: 409 }
-        );
-      }
-
-      console.log(`Deleted ${stagedProductsCount} temp_integrations_scraped_data records for product ${productId}`);
-    }
+    // temp_integrations_scraped_data doesn't have product_id column, so no cleanup needed
 
     // Now delete the product
     const { error } = await supabase

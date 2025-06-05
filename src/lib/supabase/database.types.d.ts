@@ -340,7 +340,6 @@ export type Database = {
                     prestashop_product_id: string | null;
                     price: number | null;
                     processed_at: string | null;
-                    product_id: string | null;
                     raw_data: Json | null;
                     sku: string | null;
                     status: string;
@@ -362,7 +361,6 @@ export type Database = {
                     prestashop_product_id?: string | null;
                     price?: number | null;
                     processed_at?: string | null;
-                    product_id?: string | null;
                     raw_data?: Json | null;
                     sku?: string | null;
                     status?: string;
@@ -384,7 +382,6 @@ export type Database = {
                     prestashop_product_id?: string | null;
                     price?: number | null;
                     processed_at?: string | null;
-                    product_id?: string | null;
                     raw_data?: Json | null;
                     sku?: string | null;
                     status?: string;
@@ -405,13 +402,6 @@ export type Database = {
                         columns: ["integration_run_id"];
                         isOneToOne: false;
                         referencedRelation: "integration_runs";
-                        referencedColumns: ["id"];
-                    },
-                    {
-                        foreignKeyName: "temp_integrations_scraped_data_product_id_fkey";
-                        columns: ["product_id"];
-                        isOneToOne: false;
-                        referencedRelation: "products";
                         referencedColumns: ["id"];
                     }
                 ];
