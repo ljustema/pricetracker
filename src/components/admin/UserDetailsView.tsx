@@ -84,10 +84,10 @@ export function UserDetailsView({ userData, adminUser, userId }: UserDetailsView
   };
 
   // Format price
-  const formatPrice = (price: number) => {
+  const formatPrice = (price: number, currencyCode: string = 'SEK') => {
     return new Intl.NumberFormat('sv-SE', {
       style: 'currency',
-      currency: 'SEK'
+      currency: currencyCode
     }).format(price);
   };
 

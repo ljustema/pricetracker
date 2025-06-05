@@ -402,12 +402,12 @@ export default function CSVUploadForm({
                   {productType === 'own' ? (
                     <>
                       Required columns: name<br />
-                      Optional columns: our_price, wholesale_price, currency, sku, brand, ean, image_url, url, category, description
+                      Optional columns: our_price, wholesale_price, currency_code, sku, brand, ean, image_url, url, category, description
                     </>
                   ) : (
                     <>
                       Required columns: name, price<br />
-                      Optional columns: currency, sku, brand, ean, image_url, url
+                      Optional columns: currency_code, sku, brand, ean, image_url, url
                     </>
                   )}
                 </p>

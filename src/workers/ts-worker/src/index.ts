@@ -1199,7 +1199,7 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
         // product_id will be handled by DB trigger/matching logic later if implemented
         name: p.name,
         price: p.price,
-        currency: p.currency ?? 'SEK', // Default currency to SEK
+        currency_code: (p.currency ?? 'SEK').toUpperCase(), // Use currency_code instead of currency
         url: p.url,
         image_url: p.image_url,
         sku: p.sku,

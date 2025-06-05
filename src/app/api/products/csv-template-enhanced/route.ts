@@ -67,11 +67,11 @@ export async function GET(req: NextRequest) {
 
       filename = "own_products_template.csv";
     } else {
-      // Template for competitor products (existing format)
+      // Template for competitor products (updated to use currency_code)
       headers = [
         "name",
         "price",
-        "currency",
+        "currency_code",
         "sku",
         "brand",
         "ean",
@@ -83,7 +83,7 @@ export async function GET(req: NextRequest) {
         [
           "Example Product 1",
           "19.99",
-          "USD",
+          "SEK",
           "SKU123",
           "Example Brand",
           "1234567890123",
@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
         [
           "Example Product 2",
           "29.99",
-          "USD",
+          "SEK",
           "SKU456",
           "Example Brand",
           "2345678901234",

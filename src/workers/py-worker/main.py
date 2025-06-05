@@ -514,7 +514,7 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
             competitor_id,
             p.get('name'),
             price,
-            p.get('currency', 'SEK'), # Default currency
+            (p.get('currency', 'SEK')).upper(), # Default currency, ensure uppercase for currency_code
             p.get('url'),
             p.get('image_url'),
             p.get('sku'),
@@ -550,7 +550,7 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
                         # Use execute_values for efficient batch insertion
                         sql = """
                             INSERT INTO temp_competitors_scraped_data (
-                                user_id, competitor_id, name, price, currency,
+                                user_id, competitor_id, name, price, currency_code,
                                 url, image_url, sku, brand, ean, scraped_at
                             ) VALUES %s
                         """

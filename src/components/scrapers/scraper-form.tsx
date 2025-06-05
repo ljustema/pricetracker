@@ -328,7 +328,7 @@ def scrape():
         {
             'name': 'Product Name',
             'price': 99.99,
-            'currency': 'USD',
+            'currency': 'SEK',  # Note: scrapers use 'currency' field, gets mapped to 'currency_code' in database
             'image_url': 'https://example.com/image.jpg',
             'sku': 'SKU123',
             'brand': 'Brand Name',

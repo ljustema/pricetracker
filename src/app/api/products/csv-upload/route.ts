@@ -218,6 +218,8 @@ export async function POST(req: NextRequest) {
           brand: row.brand || null,
           brand_id: brandId, // Set the brand_id from the brand service
           image_url: row.image_url || null,
+          url: row.url || null,
+          currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
           is_active: true,
           created_at: now,
           updated_at: now,
@@ -268,6 +270,8 @@ export async function POST(req: NextRequest) {
           old_price: lastPrice,
           new_price: price,
           price_change_percentage: priceChangePercentage,
+          currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
+          url: row.url || null,
           changed_at: now
         });
 

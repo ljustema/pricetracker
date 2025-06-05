@@ -1,3 +1,3 @@
-name,price,currency,sku,brand,ean,image_url,url
+name,price,currency_code,sku,brand,ean,image_url,url
 "Smart Wireless Headphones",199.99,SEK,WH-SMART-001,"AudioTech",7340111222333,"https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400","https://competitor-example.com/wireless-headphones"
 "Bluetooth Speaker Portable",89.99,SEK,BT-SPEAK-002,"SoundWave",7340444555666,"https://images.unsplash.com/photo-1608043152269-423dbba4e7e1?w=400","https://competitor-example.com/bluetooth-speaker"

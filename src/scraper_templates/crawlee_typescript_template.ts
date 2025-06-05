@@ -174,7 +174,7 @@ interface ScriptContext {
 interface ScrapedProductData {
   name: string;
   price: number | null;
-  currency: string;
+  currency: string; // Keep as 'currency' for backward compatibility with scrapers, will be mapped to currency_code
   url: string;
   sku: string | null;
   brand: string | null;

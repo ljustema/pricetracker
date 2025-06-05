@@ -391,8 +391,8 @@ export default async function DashboardPage() {
                         {priceChange.price_change_percentage.toFixed(2)}%
                       </p>
                       <p className="text-sm text-gray-500">
-                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(priceChange.old_price)} →{' '}
-                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(priceChange.new_price)}
+                        {new Intl.NumberFormat('sv-SE', { style: 'currency', currency: priceChange.currency_code || 'SEK' }).format(priceChange.old_price)} →{' '}
+                        {new Intl.NumberFormat('sv-SE', { style: 'currency', currency: priceChange.currency_code || 'SEK' }).format(priceChange.new_price)}
                       </p>
                     </div>
                   </div>

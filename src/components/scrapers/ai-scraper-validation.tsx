@@ -69,17 +69,17 @@ export default function AiScraperValidation({
     }
   };
 
-  // Format price with currency
-  const formatPrice = (price: number | null, currency: string = 'SEK') => {
+  // Format price with currency code
+  const formatPrice = (price: number | null, currencyCode: string = 'SEK') => {
     if (price === null) return 'N/A';
-    
+
     try {
       return new Intl.NumberFormat('sv-SE', {
         style: 'currency',
-        currency: currency,
+        currency: currencyCode,
       }).format(price);
     } catch (e) {
-      return `${price} ${currency}`;
+      return `${price} ${currencyCode}`;
     }
   };
 

@@ -10,7 +10,7 @@ import { X, Merge, Eye } from 'lucide-react';
 
 interface PriceInfo {
   price: number;
-  currency: string;
+  currency_code: string;
   source: string;
   platform?: string;
   website?: string;
@@ -356,20 +356,20 @@ export function DuplicatesList() {
     window.open(productUrl, '_blank', 'noopener,noreferrer');
   };
 
-  const formatPrice = (price: number, currency: string | null | undefined = 'SEK') => {
-    // Ensure currency is valid and not null/undefined
-    const validCurrency = currency && currency.length === 3 ? currency : 'SEK';
+  const formatPrice = (price: number, currencyCode: string | null | undefined = 'SEK') => {
+    // Ensure currency code is valid and not null/undefined
+    const validCurrencyCode = currencyCode && currencyCode.length === 3 ? currencyCode : 'SEK';
 
     try {
       return new Intl.NumberFormat('sv-SE', {
         style: 'currency',
-        currency: validCurrency,
+        currency: validCurrencyCode,
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
       }).format(price);
     } catch (_error) {
-      // Fallback if currency is invalid
-      console.warn(`Invalid currency code: ${currency}, falling back to SEK`);
+      // Fallback if currency code is invalid
+      console.warn(`Invalid currency code: ${currencyCode}, falling back to SEK`);
       return new Intl.NumberFormat('sv-SE', {
         style: 'currency',
         currency: 'SEK',
@@ -576,7 +576,7 @@ export function DuplicatesList() {
                             {latestOurPrice ? (
                               <div className="text-sm bg-green-50 p-2 rounded">
                                 <span className="font-medium">Latest ({latestOurPrice.source}): </span>
-                                {formatPrice(latestOurPrice.price, latestOurPrice.currency)}
+                                {formatPrice(latestOurPrice.price, latestOurPrice.currency_code)}
                                 <div className="text-xs text-gray-500 mt-1">
                                   Updated: {new Date(latestOurPrice.updated_at).toLocaleDateString()}
                                 </div>
@@ -601,7 +601,7 @@ export function DuplicatesList() {
                                   .map((competitorPrice, index) => (
                                     <div key={index} className="text-sm bg-orange-50 p-2 rounded">
                                       <span className="font-medium">{competitorPrice.source}: </span>
-                                      {formatPrice(competitorPrice.price, competitorPrice.currency)}
+                                      {formatPrice(competitorPrice.price, competitorPrice.currency_code)}
                                       <div className="text-xs text-gray-500 mt-1">
                                         Updated: {new Date(competitorPrice.updated_at).toLocaleDateString()}
                                       </div>
