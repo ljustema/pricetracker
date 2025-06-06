@@ -1,16 +1,17 @@
 /**
- * TypeScript Scraper Template for PriceTracker
+ * TypeScript Supplier Scraper Template for PriceTracker
  *
  * IMPORTANT: Output one JSON object per product, per line (JSONL) to stdout using console.log().
  * This is required for compatibility with the PriceTracker worker and validation system.
  *
- * This template provides a structure for creating TypeScript-based scrapers
- * that integrate with the PriceTracker worker system.
+ * This template is specifically designed for scraping supplier websites to collect
+ * procurement and sourcing data including wholesale prices, minimum order quantities,
+ * lead times, and stock levels.
  *
  * CUSTOM FIELDS: You can scrape any additional fields you want! PriceTracker now supports
  * custom fields, so feel free to extract specifications, descriptions, dimensions, or any
- * other product data. Just add them to your ScrapedProductData interface and they will be
- * stored as custom fields automatically.
+ * other supplier-specific data. Just add them to your ScrapedSupplierData interface and 
+ * they will be stored as custom fields automatically.
  */
 
 // --- Dependencies ---
@@ -19,7 +20,6 @@
 import yargs from 'yargs'; // For command-line argument parsing
 // @ts-expect-error - Suppress TS7016 error until types are installed
 import { hideBin } from 'yargs/helpers';
-// import { promises as fs } from 'fs'; // Ensure this unused import is removed or commented
 // Add other necessary imports for your scraper here, e.g.:
 // import fetch from 'node-fetch';
 // import * as cheerio from 'cheerio';
@@ -27,22 +27,27 @@ import { hideBin } from 'yargs/helpers';
 // --- Types/Interfaces ---
 
 /**
- * Defines the structure for scraped product data.
- * Align this with the `temp_competitors_scraped_data` table schema.
+ * Defines the structure for scraped supplier product data.
+ * Align this with the `temp_suppliers_scraped_data` table schema.
  */
-interface ScrapedProductData {
+interface ScrapedSupplierData {
     url: string;
     name: string;
-    price: number | null;
-    currency: string | null;
-    sku?: string | null;
+    price: number | null; // Supplier's selling price to us
+    currency_code: string | null;
+    sku?: string | null; // Supplier's SKU (which becomes our SKU when we source from them)
     brand?: string | null;
     ean?: string | null;
-    description?: string | null;
+    product_description?: string | null;
+    category?: string | null;
     image_url?: string | null;
+    minimum_order_quantity?: number | null;
+    lead_time_days?: number | null;
+    stock_level?: number | null;
     is_available: boolean;
     raw_price?: string | null; // Optional: Store the raw price string
-    // Add other fields as needed
+    // Add other supplier-specific fields as needed
+    // Examples: volume_discounts, shipping_cost, payment_terms, etc.
 }
 
 /**
@@ -68,10 +73,9 @@ interface ScriptContext {
     ownProductSkuBrands?: { sku: string; brand: string }[];
     scrapeOnlyOwnProducts?: boolean;
     isTestRun?: boolean;
-    run_id?: string; // Added missing run_id from context
+    run_id?: string;
     // Worker might inject helper functions like log, safeFetch, dbClient etc.
     log?: (level: 'info' | 'warn' | 'error' | 'debug', message: string, data?: unknown) => void;
-    // safeFetch?: (url: string, options?: any) => Promise<Response>; // Example helper
 }
 
 // --- Logging Helper ---
@@ -89,52 +93,6 @@ function logError(message: string, error?: unknown): void {
     }
 }
 
-// --- Helper Functions ---
-// Define helper functions for fetching, parsing, etc.
-// Example:
-// async function fetchPage(context: ScriptContext, url: string): Promise<string | null> {
-//     const fetchFn = context.safeFetch || fetch; // Use injected fetch or global
-//     try {
-//         log(context, 'debug', `Fetching URL: ${url}`);
-//         const response = await fetchFn(url, {
-//             headers: { 'User-Agent': 'PriceTrackerBot/1.0' },
-//             // Add timeout handling if using node-fetch or similar
-//         });
-//         if (!response.ok) {
-//             throw new Error(`HTTP error! status: ${response.status}`);
-//         }
-//         return await response.text();
-//     } catch (error: any) {
-//         log(context, 'error', `Error fetching ${url}: ${error.message}`, { error });
-//         return null;
-//     }
-// }
-
-// function parseProductPage(context: ScriptContext, htmlContent: string, url: string): ScrapedProductData | null {
-//     try {
-//         // const $ = cheerio.load(htmlContent);
-//         // ... Extract data using cheerio selectors ...
-//         // Example structure:
-//         // const productData: ScrapedProductData = {
-//         //     url: url,
-//         //     name: $('h1').text().trim(),
-//         //     price: parseFloat($('.price').text().replace(/[^0-9.]/g, '')),
-//         //     currency: 'USD', // Extract currency
-//         //     sku: $('.sku').text().trim() || undefined,
-//         //     brand: $('.brand').text().trim() || undefined,
-//         //     ean: $('.ean').text().trim() || undefined,
-//         //     is_available: $('.availability').text().toLowerCase().includes('in stock'),
-//         //     // ... other fields
-//         // };
-//         // return productData;
-//         return null; // Replace with actual implementation
-//     } catch (error: any) {
-//         log(context, 'error', `Error parsing page ${url}: ${error.message}`, { error });
-//         return null;
-//     }
-// }
-
-
 // --- Core Scraper Functions ---
 
 /**
@@ -144,10 +102,10 @@ function getMetadata(): ScriptMetadata {
     // IMPORTANT: Only use standard libraries here.
     // Third-party libraries should be imported within the 'scrape' function.
     const metadata: ScriptMetadata = {
-        name: "My TypeScript Scraper Template", // CHANGE THIS
-        version: "1.1.0", // CHANGE THIS
-        description: "Description of what this TS scraper does.", // CHANGE THIS
-        target_url: "https://example.com", // Base URL or main entry point - CHANGE THIS
+        name: "My Supplier TypeScript Scraper Template", // CHANGE THIS
+        version: "1.0.0", // CHANGE THIS
+        description: "Description of what this supplier TS scraper does.", // CHANGE THIS
+        target_url: "https://supplier-example.com", // Base URL or main entry point - CHANGE THIS
         required_libraries: ["node-fetch", "cheerio"], // List libraries needed by 'scrape' function
         // Add other relevant metadata as needed
     };
@@ -155,48 +113,46 @@ function getMetadata(): ScriptMetadata {
 }
 
 /**
- * Main scraping function. It should:
- * 1. Perform the scraping logic (fetching pages, parsing data).
+ * Main scraping function for supplier data. It should:
+ * 1. Perform the scraping logic (fetching pages, parsing supplier data).
  * 2. Apply filtering based on the provided context if necessary.
  * 3. Print one JSON object per valid product found to stdout using console.log().
  *    IMPORTANT: Output one JSON object per product, per line (JSONL).
  * 4. Print progress and error messages to stderr using logProgress() and logError().
  */
 async function scrape(context: ScriptContext): Promise<void> {
-    logProgress("Scrape function started.");
-    logProgress(`Received context: ${JSON.stringify(context)}`); // Be careful logging full context
+    logProgress("Supplier scrape function started.");
+    logProgress(`Received context: ${JSON.stringify(context)}`);
 
     // --- Import required libraries listed in get_metadata() HERE ---
-    let fetch: unknown; // Use 'unknown' for safer dynamic imports
+    let fetch: unknown;
     let cheerio: unknown;
     try {
         // Use dynamic import for libraries that might not be globally available
-        // fetch = (await import('node-fetch')).default; // Commented out unused example assignment
-        // cheerio = await import('cheerio'); // Commented out unused example assignment
+        // fetch = (await import('node-fetch')).default;
+        // cheerio = await import('cheerio');
         // import other libraries...
     } catch (e) {
         logError(`Failed to import required libraries. Ensure they are installed and listed in get_metadata().`, e);
-        process.exit(1); // Exit if essential libraries are missing
+        process.exit(1);
     }
 
     // --- Extract context variables ---
-    // const runId = context.run_id || 'N/A'; // Commented out unused example assignment
     const isTestRun = context.isTestRun ?? false;
     const filterByActiveBrands = context.filterByActiveBrands ?? false;
     const activeBrandNames = filterByActiveBrands ? new Set(context.activeBrandNames || []) : null;
     const scrapeOnlyOwnProducts = context.scrapeOnlyOwnProducts ?? false;
     const ownProductEans = scrapeOnlyOwnProducts ? new Set(context.ownProductEans || []) : null;
-    // const ownProductSkuBrands = scrapeOnlyOwnProducts ? new Set((context.ownProductSkuBrands || []).map(p => `${p.sku}::${p.brand}`)) : null; // Add if needed
 
-    // --- Scraper Implementation ---
-    // Replace this example logic with your actual scraping code.
+    // --- Supplier Scraper Implementation ---
+    // Replace this example logic with your actual supplier scraping code.
 
-    const base_url = "https://example.com/products"; // Get from metadata or define here
-    logProgress(`Starting scrape for base URL: ${base_url}`);
+    const base_url = "https://supplier-example.com/catalog"; // Get from metadata or define here
+    logProgress(`Starting supplier scrape for base URL: ${base_url}`);
 
     // Example: Find product links (replace with actual logic)
-    let productLinks = Array.from({ length: 24 }, (_, i) => `${base_url}/item-ts-${i + 1}`); // Dummy links (TS equivalent)
-    logProgress(`Found ${productLinks.length} potential product links.`);
+    let productLinks = Array.from({ length: 20 }, (_, i) => `${base_url}/supplier-item-${i + 1}`);
+    logProgress(`Found ${productLinks.length} potential supplier product links.`);
 
     if (isTestRun) {
         logProgress("Test run detected, limiting to 5 products.");
@@ -206,7 +162,7 @@ async function scrape(context: ScriptContext): Promise<void> {
     let productCount = 0;
     for (const link of productLinks) {
         try {
-            logProgress(`Processing product link: ${link}`);
+            logProgress(`Processing supplier product link: ${link}`);
 
             // Example: Fetch product page
             // const response = await fetch(link);
@@ -216,70 +172,79 @@ async function scrape(context: ScriptContext): Promise<void> {
             // }
             // const productHtml = await response.text();
 
-            // Example: Parse product data (replace with actual parsing)
+            // Example: Parse supplier product data (replace with actual parsing)
             // const $ = cheerio.load(productHtml);
             // const name = $('h1').text().trim();
-            // const priceStr = $('.price').text().trim().replace(/[^0-9.]/g, '');
+            // const priceStr = $('.wholesale-price, .supplier-price').text().trim().replace(/[^0-9.]/g, '');
             // const price = parseFloat(priceStr);
             // const sku = $('.sku').text().trim() || undefined;
             // const brand = $('.brand').text().trim() || undefined;
             // const ean = $('.ean').text().trim() || undefined;
+            // const minOrderQty = parseInt($('.min-order').text().replace(/[^0-9]/g, '')) || 1;
+            // const leadTime = parseInt($('.lead-time').text().replace(/[^0-9]/g, '')) || null;
+            // const stockLevel = parseInt($('.stock-level').text().replace(/[^0-9]/g, '')) || null;
             // const imageUrl = $('img.product-image').attr('src');
-            // const isAvailable = $('.availability').text().toLowerCase().includes('in stock');
+            // const isAvailable = $('.availability').text().toLowerCase().includes('available');
 
             // Dummy data for example:
-            const name = `TS Product from ${link}`;
-            const price = 10.99 + productCount;
-            const sku = `TS_SKU_${productCount}`;
-            const brand = productCount % 2 === 0 ? "TypeScriptBrand" : "AnotherTSBrand";
-            const ean = productCount % 3 === 0 ? `9876543210${productCount.toString().padStart(3, '0')}` : undefined;
-            const imageUrl = `${link}/image.jpg`;
+            const name = `Supplier Product from ${link}`;
+            const price = 8.99 + productCount; // Wholesale/supplier price
+            const sku = `SUPP_SKU_${productCount}`;
+            const brand = productCount % 2 === 0 ? "SupplierBrand" : "WholesaleBrand";
+            const ean = productCount % 3 === 0 ? `1234567890${productCount.toString().padStart(3, '0')}` : undefined;
+            const minOrderQty = [1, 5, 10, 25][productCount % 4];
+            const leadTime = [7, 14, 21, 30][productCount % 4];
+            const stockLevel = Math.floor(Math.random() * 1000) + 100;
+            const imageUrl = `${link}/supplier-image.jpg`;
             const isAvailable = true;
 
-            const productData: ScrapedProductData = {
+            const supplierData: ScrapedSupplierData = {
                 name: name,
                 price: price,
-                currency: "SEK", // Or detect from page
+                currency_code: "SEK", // Or detect from page
                 url: link,
                 image_url: imageUrl,
                 sku: sku,
                 brand: brand,
                 ean: ean,
+                minimum_order_quantity: minOrderQty,
+                lead_time_days: leadTime,
+                stock_level: stockLevel,
                 is_available: isAvailable,
+                product_description: `High-quality ${name} from trusted supplier`,
+                category: "Electronics", // Extract from page
             };
 
             // --- Filtering Logic (Optional) ---
             let passesFilter = true;
             if (filterByActiveBrands && activeBrandNames) {
-                if (!productData.brand || !activeBrandNames.has(productData.brand)) {
-                    logProgress(`Skipping product (inactive brand): ${name} (${productData.brand})`);
+                if (!supplierData.brand || !activeBrandNames.has(supplierData.brand)) {
+                    logProgress(`Skipping product (inactive brand): ${name} (${supplierData.brand})`);
                     passesFilter = false;
                 }
             }
             if (passesFilter && scrapeOnlyOwnProducts && ownProductEans) {
-                 if (!productData.ean || !ownProductEans.has(productData.ean)) {
-                    // Add SKU/Brand check here if needed
-                    logProgress(`Skipping product (not own EAN): ${name} (${productData.ean})`);
+                if (!supplierData.ean || !ownProductEans.has(supplierData.ean)) {
+                    logProgress(`Skipping product (not own EAN): ${name} (${supplierData.ean})`);
                     passesFilter = false;
-                 }
+                }
             }
 
             // --- Output Product JSON ---
             if (passesFilter) {
-                // Print the valid product data as a JSON string to stdout
-                console.log(JSON.stringify(productData));
+                // Print the valid supplier product data as a JSON string to stdout
+                console.log(JSON.stringify(supplierData));
                 productCount++;
             }
 
         } catch (error) {
-            logError(`Error processing link ${link}`, error);
-            // Decide if you want to continue to the next link or exit
+            logError(`Error processing supplier link ${link}`, error);
+            // Continue to the next link
         }
     }
 
-    logProgress(`Scrape finished. Processed ${productLinks.length} links, found ${productCount} valid products.`);
+    logProgress(`Supplier scrape finished. Processed ${productLinks.length} links, found ${productCount} valid products.`);
 }
-
 
 // --- Main Execution Block ---
 
@@ -287,24 +252,23 @@ async function scrape(context: ScriptContext): Promise<void> {
 const argv = yargs(hideBin(process.argv))
     .command('metadata', 'Output scraper metadata as JSON')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Workaround until @types/yargs is installed
-    .command('scrape', 'Run the scraper', (yargs: any) => { // Use any and disable eslint rule
+    .command('scrape', 'Run the supplier scraper', (yargs: any) => {
         return yargs.option('context', {
             type: 'string',
             description: 'JSON string containing execution context',
-            demandOption: true, // Context is required for scrape
+            demandOption: true,
         });
     })
     .demandCommand(1, 'You must provide a command: metadata or scrape')
-    .strict() // Fail on unknown options
+    .strict()
     .help()
-    .parseSync(); // Use synchronous parsing for simplicity at startup
+    .parseSync();
 
 // Execute based on command
 (async () => {
     if (argv._[0] === 'metadata') {
         try {
             const metadata = getMetadata();
-            // Output metadata JSON to stdout
             console.log(JSON.stringify(metadata));
         } catch (e) {
             logError("Error generating metadata", e);
@@ -312,8 +276,8 @@ const argv = yargs(hideBin(process.argv))
         }
     } else if (argv._[0] === 'scrape') {
         if (!argv.context) {
-             logError("Missing --context argument for scrape command");
-             process.exit(1);
+            logError("Missing --context argument for scrape command");
+            process.exit(1);
         }
         try {
             let contextData: ScriptContext;
@@ -333,18 +297,17 @@ const argv = yargs(hideBin(process.argv))
             }
 
             await scrape(contextData);
-            process.exit(0); // Explicitly exit with success code
+            process.exit(0);
         } catch (e) {
             if (e instanceof SyntaxError) {
-                 logError("Failed to parse context JSON", e);
+                logError("Failed to parse context JSON", e);
             } else {
-                 logError("Unhandled error during scrape execution", e);
+                logError("Unhandled error during scrape execution", e);
             }
-            process.exit(1); // Exit with error code
+            process.exit(1);
         }
     }
 })().catch(e => {
-     // Catch any top-level async errors just in case
-     logError("Unhandled top-level error", e);
-     process.exit(1);
+    logError("Unhandled top-level error", e);
+    process.exit(1);
 });

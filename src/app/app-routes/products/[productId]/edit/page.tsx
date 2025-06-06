@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
+import ProductCustomFields from "@/components/products/ProductCustomFields";
 
 interface Brand {
   id: string;
@@ -18,6 +19,7 @@ export default function ProductEditPage() {
   const [isFetching, setIsFetching] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [brands, setBrands] = useState<Brand[]>([]);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
   const [formData, setFormData] = useState({
     name: "",
     sku: "",
@@ -135,6 +137,10 @@ export default function ProductEditPage() {
     }
   };
 
+  const handleCustomFieldChange = (values: Record<string, string>) => {
+    setCustomFieldValues(values);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -164,6 +170,27 @@ export default function ProductEditPage() {
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to update product');
+      }
+
+      // Save custom fields if there are any
+      if (Object.keys(customFieldValues).length > 0) {
+        const customFieldValuesToSave = Object.entries(customFieldValues).map(([fieldId, value]) => ({
+          custom_field_id: fieldId,
+          value: value.trim(),
+        }));
+
+        const customFieldsResponse = await fetch(`/api/products/${productId}/custom-fields`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ customFieldValues: customFieldValuesToSave }),
+        });
+
+        if (!customFieldsResponse.ok) {
+          console.error('Failed to save custom fields, but product was updated');
+          // Don't throw error here, as the main product was saved successfully
+        }
       }
 
       // Redirect back to the product detail page
@@ -399,6 +426,15 @@ export default function ProductEditPage() {
             <label htmlFor="is_active" className="ml-2 block text-sm text-gray-900">
               Active
             </label>
+          </div>
+
+          {/* Custom Fields Section */}
+          <div className="border-t border-gray-200 pt-6">
+            <ProductCustomFields
+              productId={productId}
+              alwaysEditable={true}
+              onValuesChange={handleCustomFieldChange}
+            />
           </div>
 
           <div className="flex justify-end space-x-3">

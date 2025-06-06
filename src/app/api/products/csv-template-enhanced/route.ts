@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
       ];
 
       filename = "own_products_template.csv";
-    } else {
+    } else if (productType === 'competitor') {
       // Template for competitor products (updated to use currency_code)
       headers = [
         "name",
@@ -103,6 +103,52 @@ export async function GET(req: NextRequest) {
       ];
 
       filename = "competitor_products_template.csv";
+    } else {
+      // Supplier products template
+      headers = [
+        "name",
+        "price",
+        "wholesale_price",
+        "currency_code",
+        "sku",
+        "brand",
+        "ean",
+        "image_url",
+        "url",
+        "minimum_order_quantity",
+        "lead_time_days"
+      ];
+
+      exampleRows = [
+        [
+          "Supplier Product 1",
+          "149.99",
+          "120.00",
+          "SEK",
+          "SUPP-SKU-001",
+          "Supplier Brand",
+          "1234567890123",
+          "https://supplier.com/images/product1.jpg",
+          "https://supplier.com/product1",
+          "10",
+          "7"
+        ],
+        [
+          "Supplier Product 2",
+          "249.99",
+          "200.00",
+          "SEK",
+          "SUPP-SKU-002",
+          "Supplier Brand",
+          "2345678901234",
+          "https://supplier.com/images/product2.jpg",
+          "https://supplier.com/product2",
+          "5",
+          "14"
+        ]
+      ];
+
+      filename = "supplier_products_template.csv";
     }
 
     // Build the CSV content

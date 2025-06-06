@@ -6,6 +6,7 @@ import Link from "next/link";
 import DeleteButton from "@/components/ui/delete-button";
 import { PriceChange } from "@/lib/services/product-service";
 import PriceHistoryChart from "@/components/products/PriceHistoryChart";
+import ProductCustomFields from "@/components/products/ProductCustomFields";
 
 interface Product {
   id: string;
@@ -351,6 +352,11 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
               </div>
             </div>
           )}
+
+          {/* Custom Fields */}
+          <div className="mt-8">
+            <ProductCustomFields productId={product.id} isEditable={false} />
+          </div>
         </div>
       </div>
     </div>

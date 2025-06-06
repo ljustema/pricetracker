@@ -16,6 +16,11 @@ The scraping process is divided into two phases:
 - Phase 1: URL Collection - Gathering all product URLs to scrape
 - Phase 2: Product Processing - Processing each URL and extracting product data
 
+CUSTOM FIELDS: You can scrape any additional fields you want! PriceTracker now supports
+custom fields, so feel free to extract specifications, descriptions, dimensions, or any
+other product data. Just add them to your product_data dictionary and they will be
+stored as custom fields automatically.
+
 IMPORTANT: The worker system imports and runs functions separately!
 For reliability, define all constants *inside* each function that uses them,
 rather than at the global scope. This prevents "name not defined" errors.

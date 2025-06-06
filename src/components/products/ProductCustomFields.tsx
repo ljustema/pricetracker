@@ -1,0 +1,271 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { Edit, Save, X, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card } from "@/components/ui/card";
+import { CustomField, CustomFieldsClientService } from "@/lib/services/custom-fields-client-service";
+
+interface ProductCustomFieldValue {
+  id: string;
+  value: string;
+  custom_field_id: string;
+  user_custom_fields: CustomField;
+}
+
+interface ProductCustomFieldsProps {
+  productId: string;
+  isEditable?: boolean;
+  alwaysEditable?: boolean; // New prop for always-on editing mode
+  onValuesChange?: (values: Record<string, string>) => void; // Callback for value changes
+}
+
+export default function ProductCustomFields({
+  productId,
+  isEditable = false,
+  alwaysEditable = false,
+  onValuesChange,
+}: ProductCustomFieldsProps) {
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [customFieldValues, setCustomFieldValues] = useState<ProductCustomFieldValue[]>([]);
+  const [editingValues, setEditingValues] = useState<Record<string, string>>({});
+  const [isEditing, setIsEditing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetchData();
+  }, [productId]);
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      
+      // Fetch custom fields and values in parallel
+      const [fieldsResponse, valuesResponse] = await Promise.all([
+        CustomFieldsClientService.getCustomFields(),
+        fetch(`/api/products/${productId}/custom-fields`)
+      ]);
+
+      setCustomFields(fieldsResponse);
+
+      if (valuesResponse.ok) {
+        const valuesData = await valuesResponse.json();
+        setCustomFieldValues(valuesData.customFieldValues || []);
+      }
+    } catch (error) {
+      console.error('Error fetching custom fields data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getFieldValue = (fieldId: string): string => {
+    const fieldValue = customFieldValues.find(cfv => cfv.custom_field_id === fieldId);
+    return fieldValue?.value || '';
+  };
+
+  const handleEdit = () => {
+    // Initialize editing values with current values
+    const initialValues: Record<string, string> = {};
+    customFields.forEach(field => {
+      initialValues[field.id] = getFieldValue(field.id);
+    });
+    setEditingValues(initialValues);
+    setIsEditing(true);
+  };
+
+  // Initialize editing values for always editable mode
+  useEffect(() => {
+    if (alwaysEditable && customFields.length > 0) {
+      const initialValues: Record<string, string> = {};
+      customFields.forEach(field => {
+        initialValues[field.id] = getFieldValue(field.id);
+      });
+      setEditingValues(initialValues);
+      setIsEditing(true);
+    }
+  }, [customFields, alwaysEditable]);
+
+  const handleCancel = () => {
+    setEditingValues({});
+    setIsEditing(false);
+  };
+
+  const handleSave = async () => {
+    try {
+      setSaving(true);
+
+      // Prepare custom field values for API
+      const customFieldValuesToSave = Object.entries(editingValues).map(([fieldId, value]) => ({
+        custom_field_id: fieldId,
+        value: value.trim(),
+      }));
+
+      const response = await fetch(`/api/products/${productId}/custom-fields`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ customFieldValues: customFieldValuesToSave }),
+      });
+
+      if (response.ok) {
+        await fetchData(); // Refresh data
+        setIsEditing(false);
+        setEditingValues({});
+      } else {
+        const error = await response.json();
+        alert(`Failed to save custom fields: ${error.error}`);
+      }
+    } catch (error) {
+      console.error('Error saving custom fields:', error);
+      alert('Failed to save custom fields');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleValueChange = (fieldId: string, value: string) => {
+    const newValues = {
+      ...editingValues,
+      [fieldId]: value,
+    };
+    setEditingValues(newValues);
+
+    // Call the callback if provided (for always editable mode)
+    if (onValuesChange) {
+      onValuesChange(newValues);
+    }
+  };
+
+  const renderFieldInput = (field: CustomField) => {
+    const value = editingValues[field.id] || '';
+
+    switch (field.field_type) {
+      case 'boolean':
+        return (
+          <select
+            value={value}
+            onChange={(e) => handleValueChange(field.id, e.target.value)}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500"
+          >
+            <option value="">Select...</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        );
+
+      case 'date':
+        return (
+          <Input
+            type="date"
+            value={value}
+            onChange={(e) => handleValueChange(field.id, e.target.value)}
+          />
+        );
+
+      case 'number':
+        return (
+          <Input
+            type="number"
+            value={value}
+            onChange={(e) => handleValueChange(field.id, e.target.value)}
+            placeholder={field.default_value || ''}
+          />
+        );
+
+      default:
+        return (
+          <Input
+            type={field.field_type === 'url' ? 'url' : 'text'}
+            value={value}
+            onChange={(e) => handleValueChange(field.id, e.target.value)}
+            placeholder={field.default_value || ''}
+          />
+        );
+    }
+  };
+
+  if (loading) {
+    return (
+      <Card className="p-4">
+        <div className="text-center text-gray-500">Loading custom fields...</div>
+      </Card>
+    );
+  }
+
+  if (customFields.length === 0) {
+    return (
+      <Card className="p-4">
+        <div className="text-center text-gray-500">
+          <Plus className="h-8 w-8 mx-auto mb-2 text-gray-300" />
+          <p>No custom fields defined yet.</p>
+          <p className="text-sm">
+            <a href="/app-routes/custom-fields" className="text-indigo-600 hover:text-indigo-800">
+              Create custom fields
+            </a> to capture additional product information.
+          </p>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-medium">Custom Fields</h3>
+        {!alwaysEditable && isEditable && !isEditing && (
+          <Button variant="outline" size="sm" onClick={handleEdit} className="flex items-center gap-1">
+            <Edit className="h-3 w-3" />
+            Edit
+          </Button>
+        )}
+        {!alwaysEditable && isEditing && (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleCancel}
+              className="flex items-center gap-1"
+            >
+              <X className="h-3 w-3" />
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={saving}
+              className="flex items-center gap-1"
+            >
+              <Save className="h-3 w-3" />
+              {saving ? 'Saving...' : 'Save'}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {customFields.map((field) => (
+          <div key={field.id}>
+            <Label htmlFor={`field-${field.id}`} className="flex items-center gap-1">
+              {field.field_name}
+              {field.is_required && <span className="text-red-500">*</span>}
+            </Label>
+            {(isEditing || alwaysEditable) ? (
+              <div className="mt-2">
+                {renderFieldInput(field)}
+              </div>
+            ) : (
+              <div className="mt-2 p-2 bg-gray-50 rounded-md text-sm">
+                {CustomFieldsClientService.formatFieldValue(field, getFieldValue(field.id))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}

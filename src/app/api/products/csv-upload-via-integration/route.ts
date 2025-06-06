@@ -187,7 +187,7 @@ export async function POST(req: NextRequest) {
       const ourPrice = row.our_price ? parseFloat(row.our_price) : null;
       const wholesalePrice = row.wholesale_price ? parseFloat(row.wholesale_price) : null;
 
-      // Insert into temp_integrations_scraped_data
+      // Insert into temp_integrations_scraped_data (including all fields in raw_data)
       const { error: insertError } = await supabase
         .from('temp_integrations_scraped_data')
         .insert({
@@ -203,6 +203,7 @@ export async function POST(req: NextRequest) {
           image_url: row.image_url || null,
           url: row.url || null,
           currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
+          raw_data: row, // Store all CSV data including custom fields
           status: 'pending',
           created_at: now
         });

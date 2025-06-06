@@ -9,7 +9,8 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 // Define expected request body structure
 type CreateScraperRequestBody = {
-  competitor_id: string;
+  competitor_id?: string;
+  supplier_id?: string;
   schedule: string;
   scraper_type: 'python' | 'typescript';
   python_script?: string;
@@ -48,6 +49,7 @@ export async function POST(req: NextRequest) {
 
     const {
       competitor_id,
+      supplier_id,
       schedule,
       scraper_type,
       python_script,
@@ -60,9 +62,15 @@ export async function POST(req: NextRequest) {
     const scriptContent = scraper_type === 'python' ? python_script : typescript_script;
 
     // Basic validation
-    if (!competitor_id || !schedule || !scraper_type || !scriptContent) {
+    if ((!competitor_id && !supplier_id) || (competitor_id && supplier_id)) {
       return NextResponse.json(
-        { error: "Missing required fields (competitor_id, schedule, scraper_type, scriptContent)" },
+        { error: "Must provide either competitor_id OR supplier_id, but not both" },
+        { status: 400 }
+      );
+    }
+    if (!schedule || !scraper_type || !scriptContent) {
+      return NextResponse.json(
+        { error: "Missing required fields (schedule, scraper_type, scriptContent)" },
         { status: 400 }
       );
     }
@@ -118,23 +126,48 @@ export async function POST(req: NextRequest) {
      }
 
     // 4. Generate scraper name
-    const { data: competitor, error: competitorError } = await supabase
-      .from('competitors')
-      .select('name')
-      .eq('id', competitor_id)
-      .single();
+    let targetName: string;
+    let targetId: string;
+    let targetColumn: string;
 
-    if (competitorError || !competitor) {
-      console.error("Failed to get competitor:", competitorError);
-      return NextResponse.json({ error: "Failed to find competitor for naming." }, { status: 404 });
+    if (competitor_id) {
+      const { data: competitor, error: competitorError } = await supabase
+        .from('competitors')
+        .select('name')
+        .eq('id', competitor_id)
+        .single();
+
+      if (competitorError || !competitor) {
+        console.error("Failed to get competitor:", competitorError);
+        return NextResponse.json({ error: "Failed to find competitor for naming." }, { status: 404 });
+      }
+
+      targetName = competitor.name;
+      targetId = competitor_id;
+      targetColumn = 'competitor_id';
+    } else {
+      const { data: supplier, error: supplierError } = await supabase
+        .from('suppliers')
+        .select('name')
+        .eq('id', supplier_id)
+        .single();
+
+      if (supplierError || !supplier) {
+        console.error("Failed to get supplier:", supplierError);
+        return NextResponse.json({ error: "Failed to find supplier for naming." }, { status: 404 });
+      }
+
+      targetName = supplier.name;
+      targetId = supplier_id!;
+      targetColumn = 'supplier_id';
     }
 
     const typeSuffix = scraper_type === 'python' ? 'Python' : 'TypeScript';
-    const baseScraperName = `${competitor.name} ${typeSuffix} Scraper`;
+    const baseScraperName = `${targetName} ${typeSuffix} Scraper`;
     const { data: existingScrapers, error: existingScrapersError } = await supabase
       .from('scrapers')
       .select('name')
-      .eq('competitor_id', competitor_id)
+      .eq(targetColumn, targetId)
       .eq('scraper_type', scraper_type) // Check only for the same type
       .ilike('name', `${baseScraperName}%`)
       .order('name', { ascending: true });
@@ -160,7 +193,8 @@ export async function POST(req: NextRequest) {
     const now = new Date().toISOString();
     const scraperConfig = {
       user_id: userId,
-      competitor_id: competitor_id,
+      competitor_id: competitor_id || null,
+      supplier_id: supplier_id || null,
       name: scraperName,
       url: targetUrl, // Use potentially updated URL from metadata
       scraper_type: scraper_type,

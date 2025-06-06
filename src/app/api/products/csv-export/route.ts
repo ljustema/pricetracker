@@ -106,6 +106,59 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Get custom fields for this user
+    const { data: customFields, error: customFieldsError } = await supabase
+      .from('user_custom_fields')
+      .select('id, field_name')
+      .eq('user_id', userId)
+      .order('field_name');
+
+    if (customFieldsError) {
+      console.error('Error fetching custom fields:', customFieldsError);
+    }
+
+    // Get custom field values for all products
+    const productIds = data.map(p => p.id);
+
+    // Fetch custom field values in batches to avoid "414 Request-URI Too Large" error
+    const customFieldMap = new Map();
+    const batchSize = 100; // Process 100 product IDs at a time
+
+    for (let i = 0; i < productIds.length; i += batchSize) {
+      const batchIds = productIds.slice(i, i + batchSize);
+
+      const { data: batchCustomFieldValues, error: customFieldError } = await supabase
+        .from('product_custom_field_values')
+        .select(`
+          product_id,
+          custom_field_id,
+          value,
+          user_custom_fields (
+            field_name
+          )
+        `)
+        .in('product_id', batchIds);
+
+      if (customFieldError) {
+        console.error('Error fetching custom field values for batch:', customFieldError);
+        continue; // Continue with next batch even if one fails
+      }
+
+      // Process this batch's results
+      if (batchCustomFieldValues) {
+        batchCustomFieldValues.forEach(cfv => {
+          if (!customFieldMap.has(cfv.product_id)) {
+            customFieldMap.set(cfv.product_id, new Map());
+          }
+          // Handle the nested structure from the join
+          const fieldName = cfv.user_custom_fields?.field_name;
+          if (fieldName) {
+            customFieldMap.get(cfv.product_id).set(fieldName, cfv.value);
+          }
+        });
+      }
+    }
+
     // Define CSV headers - removed id, category, description as requested
     const headers = [
       "name",
@@ -153,8 +206,11 @@ export async function POST(request: NextRequest) {
 
 
 
+    // Add custom field headers
+    const customFieldHeaders = customFields ? customFields.map(cf => cf.field_name) : [];
+
     // Combine all headers
-    const allHeaders = [...headers, ...Array.from(competitorPriceHeaders)];
+    const allHeaders = [...headers, ...Array.from(competitorPriceHeaders), ...customFieldHeaders];
 
     // Build the CSV content
     let csvContent = allHeaders.join(",") + "\n";
@@ -197,6 +253,13 @@ export async function POST(request: NextRequest) {
         }
 
         row.push(price);
+      });
+
+      // Add custom field values
+      customFieldHeaders.forEach(fieldName => {
+        const productCustomFields = customFieldMap.get(product.id);
+        const value = productCustomFields ? productCustomFields.get(fieldName) : '';
+        row.push(escapeCsvValue(value));
       });
 
       csvContent += row.join(",") + "\n";

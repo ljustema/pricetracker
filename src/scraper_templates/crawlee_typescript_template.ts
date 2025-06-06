@@ -8,6 +8,11 @@
  *
  * Configuration options are grouped at the top of the file for easy modification.
  *
+ * CUSTOM FIELDS: You can scrape any additional fields you want! PriceTracker now supports
+ * custom fields, so feel free to extract specifications, descriptions, dimensions, or any
+ * other product data. Just add them to your ScrapedProductData interface and they will be
+ * stored as custom fields automatically.
+ *
  * Version 1.1.0 - Optimized for performance with memory-only storage, improved
  * concurrency handling, and better error management.
  */
