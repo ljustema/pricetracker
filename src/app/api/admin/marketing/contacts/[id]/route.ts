@@ -5,13 +5,13 @@ import { validateAdminApiAccess } from "@/lib/admin/auth";
 // PATCH /api/admin/marketing/contacts/[id] - Update contact status
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     // Validate admin access
     const _adminUser = await validateAdminApiAccess();
 
-    const { id } = params;
+    const { id } = await params;
     const body = await request.json();
     const { status } = body;
 
@@ -66,13 +66,13 @@ export async function PATCH(
 // GET /api/admin/marketing/contacts/[id] - Get specific contact
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     // Validate admin access
     const _adminUser = await validateAdminApiAccess();
 
-    const { id } = params;
+    const { id } = await params;
     const supabase = createSupabaseAdminClient();
 
     const { data: contact, error } = await supabase

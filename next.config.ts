@@ -32,9 +32,6 @@ const nextConfig: NextConfig = {
     return config;
   },
   serverExternalPackages: ['got-scraping', 'header-generator'],
-  typescript: {
-    ignoreBuildErrors: true,
-  },
 };
 
 export default nextConfig;
