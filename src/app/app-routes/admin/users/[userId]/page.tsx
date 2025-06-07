@@ -67,7 +67,7 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
   ]);
 
   // Get recent activity (last 10 price changes)
-  const { data: recentActivity, error: activityError } = await supabase
+  const { data: recentActivity, error: _activityError } = await supabase
     .from('price_changes_competitors')
     .select(`
       id,
@@ -81,7 +81,7 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
     .limit(10);
 
   // Get communication history
-  const { data: communications, error: commError } = await supabase
+  const { data: communications, error: _commError } = await supabase
     .from('admin_communication_log')
     .select(`
       id,

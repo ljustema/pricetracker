@@ -943,7 +943,7 @@ private async getDefaultCurrency(): Promise<string> {
         const ourWholesalePrice = this.getNumberValue(product.wholesale_price, 0);
 
         // Only use supplier_reference as SKU, never use reference as fallback
-        let reference = this.getStringValue(product.supplier_reference);
+        const reference = this.getStringValue(product.supplier_reference);
 
         // Extract EAN13
         const ean13 = this.getStringValue(product.ean13);
@@ -1250,8 +1250,8 @@ private async getDefaultCurrency(): Promise<string> {
         return products.slice(0, limit);
       }
 
-      let totalProducts = productIds.length;
-      let maxProductId = productIds.length > 0 ? Math.max(...productIds) : 5000;
+      const totalProducts = productIds.length;
+      const maxProductId = productIds.length > 0 ? Math.max(...productIds) : 5000;
 
       console.log(`Found ${totalProducts} total products, max ID approximately ${maxProductId}`);
 
@@ -1633,7 +1633,7 @@ private async getDefaultCurrency(): Promise<string> {
       console.log(`Using fallback price calculation method for product ${id}`);
 
       // Get base price
-      let basePrice = this.getNumberValue(product.price, 0);
+      const basePrice = this.getNumberValue(product.price, 0);
 
       // Get potential discounts
       const specificPricesResponse = await this.makeRequest(`specific_prices?filter[id_product]=${id}`, false);

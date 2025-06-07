@@ -16,7 +16,7 @@ export default function PageTitle() {
     // Extract the page name from the pathname
     if (pathname) {
       // Get the path segments
-      let path = pathname.split('/').filter(Boolean);
+      const path = pathname.split('/').filter(Boolean);
 
       // Handle special cases for nested routes
       if (path.length > 0) {

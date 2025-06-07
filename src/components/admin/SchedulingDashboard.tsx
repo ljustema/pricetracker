@@ -245,7 +245,7 @@ export default function SchedulingDashboard() {
     const timeOfDay = schedule.time || '02:00';
     const [hours, minutes] = timeOfDay.split(':').map(Number);
 
-    let nextRun = new Date();
+    const nextRun = new Date();
     nextRun.setHours(hours, minutes, 0, 0);
 
     if (schedule.frequency === 'daily') {
@@ -280,7 +280,7 @@ export default function SchedulingDashboard() {
 
   const calculateNextIntegrationRunTime = (syncFrequency: string, lastSyncAt: string | null): Date => {
     const now = new Date();
-    let nextRun = new Date();
+    const nextRun = new Date();
 
     if (syncFrequency === 'daily') {
       nextRun.setHours(3, 0, 0, 0); // 3 AM

@@ -227,7 +227,7 @@ export default async function DashboardPage() {
               </h3>
               <div className="mt-2 text-sm text-yellow-700">
                 <p>
-                  We're experiencing high database load. Brand statistics will be available shortly.
+                  We&apos;re experiencing high database load. Brand statistics will be available shortly.
                   Other dashboard features are working normally.
                 </p>
               </div>

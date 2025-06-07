@@ -76,7 +76,7 @@ export function BulkEmailSender({ adminUser }: BulkEmailSenderProps) {
 
   // Apply filters
   useEffect(() => {
-    let filtered = users.filter(user => {
+    const filtered = users.filter(user => {
       // Filter by subscription tier
       if (!filters.subscriptionTiers.includes(user.subscription_tier)) {
         return false;
