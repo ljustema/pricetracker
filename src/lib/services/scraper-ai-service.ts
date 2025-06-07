@@ -58,8 +58,8 @@ export class ScraperAIService {
    */
   static async generateScraperWithAI(
     url: string,
-    userId: string,
-    competitorId: string
+    _userId: string,
+    _competitorId: string
   ): Promise<{ script: string; metadata: ScraperMetadata }> {
     try {
       console.log(`Generating AI scraper for URL: ${url}`);
@@ -97,7 +97,7 @@ export class ScraperAIService {
       console.log('Extracting metadata from script...');
 
       // For now, create basic metadata
-      const baseUrl = getBaseUrl(url);
+      const _baseUrl = getBaseUrl(url);
       const hostname = new URL(url).hostname;
 
       const metadata: ScraperMetadata = {

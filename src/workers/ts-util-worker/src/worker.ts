@@ -52,7 +52,7 @@ const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 console.log(`Starting TypeScript Utility Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
 
 // Interface for sync results
-interface SyncResult {
+interface _SyncResult {
   success: boolean;
   productsProcessed: number;
   productsUpdated: number;

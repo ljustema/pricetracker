@@ -1,5 +1,3 @@
-import { createSupabaseServerClient } from "@/lib/supabase/server";
-
 /**
  * Service for managing scrapers (approval, activation)
  */

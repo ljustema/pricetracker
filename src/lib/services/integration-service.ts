@@ -1,5 +1,4 @@
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
-import { SupabaseClient } from '@supabase/supabase-js';
 
 // Define configuration type for integrations
 export interface IntegrationConfiguration {
@@ -235,9 +234,9 @@ export async function deleteIntegration(userId: string, integrationId: string): 
  * Test an integration's API credentials
  */
 export async function testIntegrationCredentials(
-  platform: string,
-  apiUrl: string,
-  apiKey: string
+  _platform: string,
+  _apiUrl: string,
+  _apiKey: string
 ): Promise<{ success: boolean; message: string }> {
   // This would typically involve making a test call to the platform's API
   // For now, we'll just return success
@@ -267,7 +266,7 @@ export async function createIntegrationRun(
   const uuid = userId;
 
   // First, check if the integration exists and belongs to the user
-  const { data: integration, error: integrationError } = await supabase
+  const { data: _integration, error: integrationError } = await supabase
     .from('integrations')
     .select('id')
     .eq('id', integrationId)

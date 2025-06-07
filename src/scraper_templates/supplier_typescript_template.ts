@@ -126,8 +126,8 @@ async function scrape(context: ScriptContext): Promise<void> {
     logProgress(`Received context: ${JSON.stringify(context)}`);
 
     // --- Import required libraries listed in get_metadata() HERE ---
-    let fetch: unknown;
-    let cheerio: unknown;
+    let _fetch: unknown;
+    let _cheerio: unknown;
     try {
         // Use dynamic import for libraries that might not be globally available
         // fetch = (await import('node-fetch')).default;

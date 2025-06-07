@@ -78,7 +78,7 @@ export default function AiScraperValidation({
         style: 'currency',
         currency: currencyCode,
       }).format(price);
-    } catch (e) {
+    } catch (_e) {
       return `${price} ${currencyCode}`;
     }
   };

@@ -1,6 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
-import { ensureUUID } from './utils';
-
 // This is a simplified version of the integration service for the worker
 // It only includes the functions needed for the worker
 
