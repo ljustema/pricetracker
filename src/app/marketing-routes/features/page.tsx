@@ -1,5 +1,6 @@
 import React from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { Metadata } from 'next';
 
 export const metadata: Metadata = {
@@ -93,10 +94,12 @@ export default function FeaturesPage() {
             </div>
             <div className="mt-16 sm:mt-20 lg:mt-24">
               <div className="relative overflow-hidden rounded-xl bg-gray-900 shadow-xl">
-                <img
+                <Image
                   src="/screenshots/dashboard_1.jpg"
                   alt="PriceTracker Dashboard"
                   className="w-full"
+                  width={800}
+                  height={600}
                 />
               </div>
               <div className="mt-8 text-center text-lg text-gray-600">
@@ -157,10 +160,12 @@ export default function FeaturesPage() {
                 </div>
               </div>
               <div className="relative overflow-hidden rounded-xl bg-gray-50 shadow-xl">
-                <img
+                <Image
                   src="/screenshots/products_1.jpg"
                   alt="Product management interface"
                   className="w-full"
+                  width={800}
+                  height={600}
                 />
               </div>
             </div>

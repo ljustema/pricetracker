@@ -458,7 +458,7 @@ export class ScraperClientService {
           try {
             const error = await response.json();
             errorMessage = error.error || errorMessage;
-          } catch (error) {
+          } catch (_error) {
             // If response.json() fails, use the status text
             errorMessage = `${errorMessage}: ${response.statusText}`;
           }

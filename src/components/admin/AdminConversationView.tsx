@@ -17,7 +17,6 @@ import {
   CheckCircle,
   XCircle,
   Loader2,
-  Eye,
   EyeOff
 } from "lucide-react";
 

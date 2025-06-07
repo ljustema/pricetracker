@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 
 type Tab = 'dashboard' | 'competitors' | 'products';
 
@@ -102,10 +103,12 @@ export default function InteractiveLandingPage() {
                       {/* Screenshot content */}
                       <div className="px-6 pb-14 pt-6 relative">
                         <div className="relative transition-all duration-200 ease-in-out">
-                          <img
+                          <Image
                             src={tabScreenshots[activeTab]}
                             alt={tabAltText[activeTab]}
                             className="rounded-lg shadow-md w-full"
+                            width={800}
+                            height={600}
                           />
                           
                           {/* Add a subtle overlay to indicate interactivity */}

@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import { SupplierClientService } from "@/lib/services/supplier-client-service";
-import { Supplier } from "@/lib/services/supplier-service";
 
 interface EditSupplierPageProps {
   params: Promise<{ supplierId: string }>;
