@@ -481,7 +481,7 @@ export default function ScriptScraperForm({ // Renamed component
               Validation Logs
             </label>
             <pre className="mt-1 p-2 bg-blue-50 text-blue-900 rounded-md text-xs overflow-auto max-h-60 font-mono whitespace-pre-wrap break-words">
-              {validationResult.logs.map((log, index) =>
+              {validationResult.logs.map((log, _index) =>
                 `[${log.ts}] [${log.lvl}] [${log.phase}] ${log.msg}${log.data ? `\n  Data: ${JSON.stringify(log.data, null, 2)}` : ''}`
               ).join('\n')}
             </pre>

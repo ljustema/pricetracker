@@ -39,7 +39,7 @@ export default function ScraperRunProgress({
   const [error, setError] = useState<string | null>(null);
   const [pollingInterval, setPollingInterval] = useState<number>(5000); // 5 seconds - reduced frequency to lower database load
   const [consecutiveErrors, setConsecutiveErrors] = useState<number>(0);
-  const [stoppedPollingOnError, setStoppedPollingOnError] = useState<boolean>(false); // Track if polling stopped due to errors
+  const [_stoppedPollingOnError, _setStoppedPollingOnError] = useState<boolean>(false); // Track if polling stopped due to errors
   const [isStopping, setIsStopping] = useState<boolean>(false); // Track if we're in the process of stopping
 
   // Format elapsed time as mm:ss
@@ -181,7 +181,7 @@ export default function ScraperRunProgress({
     }
 
     return 0;
-  }, [progress, simulatedProgress, determinePhase]);
+  }, [progress, simulatedProgress, determinePhase, maxBatchValues.total]);
 
   // Store the previous phase and batch info to prevent UI flickering
   const [prevPhase, setPrevPhase] = useState<string>('');
@@ -316,7 +316,7 @@ export default function ScraperRunProgress({
         setPollingInterval(prev => Math.min(prev * 1.5, 10000));
       }
     }
-  }, [scraperId, runId, onComplete, consecutiveErrors, error]);
+  }, [scraperId, runId, onComplete, consecutiveErrors, determinePhase, maxBatchValues, prevPhase]);
 
   // Set up polling
   useEffect(() => {
@@ -689,7 +689,7 @@ export default function ScraperRunProgress({
 
                         // If not JSON, display as plain text
                         return <pre className="whitespace-pre-wrap">{progress.errorDetails}</pre>;
-                      } catch (e) {
+                      } catch (_e) {
                         // If JSON parsing fails, display as plain text
                         return <pre className="whitespace-pre-wrap">{progress.errorDetails}</pre>;
                       }

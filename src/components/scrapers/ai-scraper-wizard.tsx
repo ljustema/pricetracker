@@ -324,7 +324,7 @@ export default function AiScraperWizard({
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [currentPhase, session?.id, fetchSession]);
+  }, [currentPhase, session?.id, fetchSession, session]);
 
   // Render the current phase component
   const renderPhaseComponent = () => {
