@@ -24,7 +24,7 @@ export default function AiDataValidation({ session, onComplete, onBack }: AiData
 
   // Use the state variable instead of the prop directly
   const dataExtractionData = sessionData.dataExtractionData;
-  const urlCollectionData = sessionData.urlCollectionData;
+  const _urlCollectionData = sessionData.urlCollectionData;
   const analysisData = sessionData.analysisData;
 
   // Check if we have product data to display
@@ -364,9 +364,9 @@ export default function AiDataValidation({ session, onComplete, onBack }: AiData
                                   alt={product.name}
                                   fill
                                   className="object-contain"
-                                  onError={(e) => {
+                                  onError={(_e) => {
                                     // Replace with placeholder on error
-                                    (e.target as HTMLImageElement).src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 24 24' fill='none' stroke='%23d1d5db' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Ccircle cx='8.5' cy='8.5' r='1.5'%3E%3C/circle%3E%3Cpolyline points='21 15 16 10 5 21'%3E%3C/polyline%3E%3C/svg%3E";
+                                    (_e.target as HTMLImageElement).src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 24 24' fill='none' stroke='%23d1d5db' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Ccircle cx='8.5' cy='8.5' r='1.5'%3E%3C/circle%3E%3Cpolyline points='21 15 16 10 5 21'%3E%3C/polyline%3E%3C/svg%3E";
                                   }}
                                 />
                               </div>

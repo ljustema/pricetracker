@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { ScraperAISession, ScraperAIPhase } from "@/lib/services/scraper-session-service";
 import { CheckCircle, Circle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,11 +24,11 @@ const AiScriptAssembly = dynamic(() => import("./ai-script-assembly"), {
 });
 
 // Legacy components - kept for backward compatibility
-const AiUrlCollection = dynamic(() => import("./ai-url-collection"), {
+const _AiUrlCollection = dynamic(() => import("./ai-url-collection"), {
   loading: () => <div>Loading URL Collection...</div>,
 });
 
-const AiDataExtraction = dynamic(() => import("./ai-data-extraction"), {
+const _AiDataExtraction = dynamic(() => import("./ai-data-extraction"), {
   loading: () => <div>Loading Data Extraction...</div>,
 });
 
@@ -70,7 +70,7 @@ export default function AiScraperWizard({
     } else {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, fetchSession]);
 
   // Fetch competitor data to get the website URL
   const fetchCompetitorData = async (id: string) => {
@@ -95,7 +95,7 @@ export default function AiScraperWizard({
   };
 
   // Fetch session data from the API
-  const fetchSession = async (id: string) => {
+  const fetchSession = useCallback(async (id: string) => {
     try {
       setLoading(true);
       console.log(`Fetching session data for ID: ${id}`);
@@ -137,7 +137,7 @@ export default function AiScraperWizard({
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentPhase]);
 
   // Create a new session
   const createSession = async (websiteUrl: string) => {
@@ -324,7 +324,7 @@ export default function AiScraperWizard({
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [currentPhase, session?.id]);
+  }, [currentPhase, session?.id, fetchSession]);
 
   // Render the current phase component
   const renderPhaseComponent = () => {
