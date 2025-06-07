@@ -184,7 +184,7 @@ export default function AiScraperValidation({
                         {product.name || 'N/A'}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {formatPrice(product.price, product.currency)}
+                        {formatPrice(product.competitor_price, product.currency_code)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {product.brand || 'N/A'}

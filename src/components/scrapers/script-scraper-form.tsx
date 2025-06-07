@@ -562,13 +562,13 @@ export default function ScriptScraperForm({ // Renamed component
                           </div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs">
-                          <div className={`${product.price !== undefined ? 'text-green-600 font-medium' : 'text-red-500'}`}>
-                            {product.price !== undefined ? product.price : 'Missing'}
+                          <div className={`${product.competitor_price !== undefined ? 'text-green-600 font-medium' : 'text-red-500'}`}>
+                            {product.competitor_price !== undefined ? product.competitor_price : 'Missing'}
                           </div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs">
-                          <div className={`${product.currency ? 'text-gray-900' : (!product.ean ? 'text-red-500' : 'text-yellow-600 italic')}`}>
-                            {product.currency || 'Not set'}
+                          <div className={`${product.currency_code ? 'text-gray-900' : (!product.ean ? 'text-red-500' : 'text-yellow-600 italic')}`}>
+                            {product.currency_code || 'Not set'}
                           </div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs">

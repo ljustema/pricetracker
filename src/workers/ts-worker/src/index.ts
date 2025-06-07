@@ -68,8 +68,8 @@ interface ScriptContext {
 
 interface ScrapedProductData {
   name: string;
-  price: number;
-  currency?: string;
+  competitor_price: number; // Updated field name to match temp_competitors_scraped_data table
+  currency_code?: string; // Updated field name to match temp_competitors_scraped_data table
   url?: string;
   image_url?: string;
   sku?: string;
