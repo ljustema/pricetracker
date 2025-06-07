@@ -125,7 +125,7 @@ export class IntegrationSyncService {
 
     if (error) {
       console.error('Error updating run status:', error);
-      const errorMessage = error && typeof error === 'object' && 'message' in error ? (error as any).message : 'Unknown error';
+      const errorMessage = error && typeof error === 'object' && 'message' in error ? (error as { message: string }).message : 'Unknown error';
       throw new Error(`Failed to update run status: ${errorMessage}`);
     }
   }
@@ -205,10 +205,10 @@ export class IntegrationSyncService {
       .eq('integration_run_id', this.runId);
 
     if (countError) {
-      const errorMessage = countError && typeof countError === 'object' && 'message' in countError ? (countError as any).message : 'Unknown error';
+      const errorMessage = countError && typeof countError === 'object' && 'message' in countError ? (countError as { message: string }).message : 'Unknown error';
       this.log('error', 'DB_COUNT_ERROR', `Error counting staged products: ${errorMessage}`);
     } else {
-      const countArray = stagedCount as any[];
+      const countArray = stagedCount as unknown[];
       this.log('info', 'DB_COUNT', `Staged ${countArray?.length || 0} products for run ${this.runId}`);
 
       // Set the processed count to the number of staged products
@@ -223,7 +223,7 @@ export class IntegrationSyncService {
         .rpc('process_pending_integration_products', { run_id: this.runId });
 
       if (finalProcessError) {
-        const errorMessage = finalProcessError && typeof finalProcessError === 'object' && 'message' in finalProcessError ? (finalProcessError as any).message : 'Unknown error';
+        const errorMessage = finalProcessError && typeof finalProcessError === 'object' && 'message' in finalProcessError ? (finalProcessError as { message: string }).message : 'Unknown error';
         this.log('error', 'FINAL_PROCESSING_ERROR', `Error in final processing: ${errorMessage}`);
       } else {
         this.log('info', 'FINAL_PROCESSING_COMPLETE', `Final processing complete: ${JSON.stringify(finalProcessResult)}`);
@@ -244,14 +244,14 @@ export class IntegrationSyncService {
         .eq('integration_run_id', this.runId);
 
       if (statsError) {
-        const errorMessage = statsError && typeof statsError === 'object' && 'message' in statsError ? (statsError as any).message : 'Unknown error';
+        const errorMessage = statsError && typeof statsError === 'object' && 'message' in statsError ? (statsError as { message: string }).message : 'Unknown error';
         this.log('error', 'DB_STATS_ERROR', `Error getting product statistics: ${errorMessage}`);
       } else if (stats) {
         // Count products by status
-        const statsArray = stats as any[];
-        const processed = statsArray.filter((p: { status: string }) => p.status === 'processed').length;
-        const errors = statsArray.filter((p: { status: string }) => p.status === 'error').length;
-        const pending = statsArray.filter((p: { status: string }) => p.status === 'pending').length;
+        const statsArray = stats as { status: string }[];
+        const processed = statsArray.filter((p) => p.status === 'processed').length;
+        const errors = statsArray.filter((p) => p.status === 'error').length;
+        const pending = statsArray.filter((p) => p.status === 'pending').length;
 
         // Estimate created vs updated (we don't have this info directly)
         // For now, assume all processed products are created
@@ -328,12 +328,12 @@ export class IntegrationSyncService {
 
     console.log(`Insert response: ${insertError ? 'ERROR' : 'SUCCESS'}`);
     if (insertData) {
-      const insertArray = insertData as any[];
+      const insertArray = insertData as unknown[];
       console.log(`Inserted ${insertArray.length} rows`);
     }
 
     if (insertError) {
-      const errorMessage = insertError && typeof insertError === 'object' && 'message' in insertError ? (insertError as any).message : 'Unknown error';
+      const errorMessage = insertError && typeof insertError === 'object' && 'message' in insertError ? (insertError as { message: string }).message : 'Unknown error';
       this.log('error', 'STAGING_ERROR', `Error staging batch ${batchNumber}: ${errorMessage}`);
       throw new Error(`Failed to stage products: ${errorMessage}`);
     }
@@ -349,7 +349,7 @@ export class IntegrationSyncService {
         .rpc('process_pending_integration_products', { run_id: this.runId });
 
       if (processError) {
-        const errorMessage = processError && typeof processError === 'object' && 'message' in processError ? (processError as any).message : 'Unknown error';
+        const errorMessage = processError && typeof processError === 'object' && 'message' in processError ? (processError as { message: string }).message : 'Unknown error';
         this.log('error', 'BATCH_PROCESSING_ERROR', `Error processing batch ${batchNumber}: ${errorMessage}`);
       } else {
         this.log('info', 'BATCH_PROCESSED', `Processed batch ${batchNumber}/${totalBatches}: ${JSON.stringify(processResult)}`);
@@ -377,7 +377,7 @@ export class IntegrationSyncService {
         .single();
 
       if (integrationError || !integration) {
-        const errorMessage = integrationError && typeof integrationError === 'object' && 'message' in integrationError ? (integrationError as any).message : 'Integration not found';
+        const errorMessage = integrationError && typeof integrationError === 'object' && 'message' in integrationError ? (integrationError as { message: string }).message : 'Integration not found';
         throw new Error(`Failed to fetch integration: ${errorMessage}`);
       }
 
@@ -405,7 +405,7 @@ export class IntegrationSyncService {
 
       // Update integration status
       await updateIntegrationStatus(
-        this.supabase as any,
+        this.supabase as { from: (table: string) => { update: (data: Record<string, unknown>) => { eq: (column: string, value: string) => Promise<{ error: unknown }> } } },
         this.integrationId,
         'active',
         'success'
@@ -423,7 +423,7 @@ export class IntegrationSyncService {
 
       // Update integration status
       await updateIntegrationStatus(
-        this.supabase as any,
+        this.supabase as { from: (table: string) => { update: (data: Record<string, unknown>) => { eq: (column: string, value: string) => Promise<{ error: unknown }> } } },
         this.integrationId,
         'error',
         'failed'

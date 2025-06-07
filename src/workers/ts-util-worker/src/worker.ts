@@ -189,7 +189,7 @@ async function fetchAndProcessIntegrationJob() {
         console.log('API connection successful');
 
         // Update run status to processing
-        const updateResult1 = await (supabase as any)
+        const updateResult1 = await (supabase as { from: (table: string) => { update: (data: Record<string, unknown>) => { eq: (column: string, value: string) => Promise<{ error: unknown }> } } })
           .from('integration_runs')
           .update({
             status: 'processing',
@@ -216,7 +216,7 @@ async function fetchAndProcessIntegrationJob() {
         });
 
         // Type assertion to ensure products is treated as an array
-        const products = productsResult as any[];
+        const products = productsResult as { id: string; name: string; active: boolean }[];
 
         console.log(`Fetched ${products.length} products for test run`);
 
@@ -226,7 +226,7 @@ async function fetchAndProcessIntegrationJob() {
         });
 
         // Store the test products in the run
-        const updateResult2 = await (supabase as any)
+        const updateResult2 = await (supabase as { from: (table: string) => { update: (data: Record<string, unknown>) => { eq: (column: string, value: string) => Promise<{ error: unknown }> } } })
           .from('integration_runs')
           .update({
             status: 'completed',
@@ -253,7 +253,7 @@ async function fetchAndProcessIntegrationJob() {
         console.error('Test run failed:', error);
 
         // Update run status to failed
-        const updateResult3 = await (supabase as any)
+        const updateResult3 = await (supabase as { from: (table: string) => { update: (data: Record<string, unknown>) => { eq: (column: string, value: string) => Promise<{ error: unknown }> } } })
           .from('integration_runs')
           .update({
             status: 'failed',
@@ -283,7 +283,7 @@ async function fetchAndProcessIntegrationJob() {
         job.user_id,
         job.integration_id,
         job.id,
-        supabase as any // Type assertion to work around the unknown type
+        supabase as { from: (table: string) => { update: (data: Record<string, unknown>) => { eq: (column: string, value: string) => Promise<{ error: unknown }> } }; select: (columns?: string) => { eq: (column: string, value: string) => { single: () => Promise<{ data: unknown; error: unknown }> } }; insert: (data: Record<string, unknown>[]) => { select: () => Promise<{ data: unknown[]; error: unknown }> } }; rpc: (fn: string, params?: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }> } // Type assertion to work around the unknown type
       );
 
       // Execute the sync process
@@ -304,7 +304,7 @@ async function fetchAndProcessIntegrationJob() {
     // Attempt to mark the job as failed if an error occurred after it was claimed
     if (job && job.id) { // Check if job was successfully fetched and potentially claimed
       try {
-        const updateResult4 = await (supabase as any)
+        const updateResult4 = await (supabase as { from: (table: string) => { update: (data: Record<string, unknown>) => { eq: (column: string, value: string) => Promise<{ error: unknown }> } } })
           .from('integration_runs')
           .update({
             status: 'failed',

@@ -5,7 +5,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { ensureUUID } from "@/lib/utils";
 
 export async function GET(
-  req: NextRequest,
+  _req: NextRequest,
   context: { params: Promise<{ competitorId: string }> }
 ) {
   try {
@@ -18,7 +18,7 @@ export async function GET(
     // Safely extract competitorId with error handling
     let competitorId;
     try {
-      const params = await params;
+      const params = await context.params;
       competitorId = params?.competitorId;
     } catch (error) {
       console.error("Error parsing params:", error);
