@@ -127,6 +127,22 @@ export type Database = {
         }
         Returns: undefined
       }
+      get_latest_competitor_prices: {
+        Args: {
+          p_user_id: string
+          p_product_id: string
+        }
+        Returns: Json
+      }
+      get_product_price_history: {
+        Args: {
+          p_user_id: string
+          p_product_id: string
+          p_source_id?: string
+          p_limit?: number
+        }
+        Returns: Json
+      }
       get_products_filtered: {
         Args: {
           p_user_id: string
@@ -138,8 +154,10 @@ export type Database = {
           p_category?: string
           p_search?: string
           p_is_active?: boolean
-          p_competitor_id?: string
+          p_competitor_ids?: string[]
           p_has_price?: boolean
+          p_price_lower_than_competitors?: boolean
+          p_price_higher_than_competitors?: boolean
         }
         Returns: Json
       }

@@ -172,8 +172,8 @@ async function scrape(context: ScriptContext): Promise<void> {
     // Example implementation - replace with actual scraping logic
     const productData = {
         name: "Example Product",
-        price: 199.99,
-        currency: "SEK",
+        competitor_price: 199.99,
+        currency_code: "SEK",
         url: "https://example.com/product/123",
         is_available: true
     };

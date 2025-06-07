@@ -88,8 +88,8 @@ export interface ScrapedProductData {
 // Define expected product structure for validation results
 export interface ValidationProduct {
   name: string;
-  price: number | null; // Allow null if price not found
-  currency?: string;
+  competitor_price: number | null; // Updated field name to match new pricing structure
+  currency_code?: string; // Updated field name to match new pricing structure
   url?: string;
   image_url?: string;
   sku?: string;

@@ -1125,12 +1125,17 @@ export class ScraperExecutionService {
 
         // Validate that products have required fields
         // (We already checked that parsedProducts.length > 0)
-        const invalidProducts = parsedProducts.filter(p => !p.name || p.price === undefined || p.price === null);
+        // Check for new field names only: competitor_price and currency_code
+        const invalidProducts = parsedProducts.filter(p => {
+          const hasName = !!p.name;
+          const hasCompetitorPrice = p.competitor_price !== undefined && p.competitor_price !== null;
+          return !hasName || !hasCompetitorPrice;
+        });
         if (invalidProducts.length > 0) {
-          addLog('ERROR', 'TYPESCRIPT_VALIDATION', `${invalidProducts.length} products are missing required fields (name, price).`);
+          addLog('ERROR', 'TYPESCRIPT_VALIDATION', `${invalidProducts.length} products are missing required fields (name, competitor_price).`);
           return {
             valid: false,
-            error: 'Validation failed: Some products are missing required fields (name, price).',
+            error: 'Validation failed: Some products are missing required fields (name, competitor_price).',
             logs,
             products: parsedProducts,
             metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined

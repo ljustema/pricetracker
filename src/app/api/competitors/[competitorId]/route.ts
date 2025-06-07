@@ -232,7 +232,7 @@ export async function DELETE(
 
     // Delete any associated price changes
     const { error: deletePriceChangesError } = await supabase
-      .from("price_changes")
+      .from("price_changes_competitors")
       .delete()
       .eq("competitor_id", competitorId);
 

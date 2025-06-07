@@ -33,8 +33,8 @@ import { hideBin } from 'yargs/helpers';
 interface ScrapedProductData {
     url: string;
     name: string;
-    price: number | null;
-    currency: string | null;
+    competitor_price: number | null; // Updated field name to match temp_competitors_scraped_data table
+    currency_code: string | null; // Updated field name to match temp_competitors_scraped_data table
     sku?: string | null;
     brand?: string | null;
     ean?: string | null;
@@ -238,8 +238,8 @@ async function scrape(context: ScriptContext): Promise<void> {
 
             const productData: ScrapedProductData = {
                 name: name,
-                price: price,
-                currency: "SEK", // Or detect from page
+                competitor_price: price,
+                currency_code: "SEK", // Or detect from page
                 url: link,
                 image_url: imageUrl,
                 sku: sku,

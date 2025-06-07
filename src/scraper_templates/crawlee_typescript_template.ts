@@ -178,8 +178,8 @@ interface ScriptContext {
 
 interface ScrapedProductData {
   name: string;
-  price: number | null;
-  currency: string; // Keep as 'currency' for backward compatibility with scrapers, will be mapped to currency_code
+  competitor_price: number | null; // Updated field name to match temp_competitors_scraped_data table
+  currency_code: string; // Updated field name to match temp_competitors_scraped_data table
   url: string;
   sku: string | null;
   brand: string | null;
@@ -577,8 +577,8 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
       // This conversion needs to be customized based on the specific API response format
       return {
         name: apiProduct.name,
-        price: typeof apiProduct.price === 'number' ? apiProduct.price : parseFloat(String(apiProduct.price)),
-        currency: apiProduct.currency_code || 'SEK', // Default to SEK if not specified
+        competitor_price: typeof apiProduct.price === 'number' ? apiProduct.price : parseFloat(String(apiProduct.price)),
+        currency_code: apiProduct.currency_code || 'SEK', // Default to SEK if not specified
         url: `${CONFIG.SITE.BASE_URL}/product/${apiProduct.id}`, // Construct URL based on product ID
         sku: apiProduct.sku || null,
         brand: apiProduct.brand || null,
@@ -610,8 +610,8 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
     // Initialize product data with defaults
     const productData: ScrapedProductData = {
       name: '',
-      price: null,
-      currency: 'SEK', // Default currency
+      competitor_price: null,
+      currency_code: 'SEK', // Default currency
       url,
       sku: null,
       brand: null,
@@ -641,12 +641,12 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
                   }
 
                   // Extract Price & Currency
-                  if (productData.price === null && product.offers && product.offers.price) {
+                  if (productData.competitor_price === null && product.offers && product.offers.price) {
                     const priceStr = String(product.offers.price);
                     productData.raw_price = priceStr;
-                    productData.price = parseFloat(priceStr);
+                    productData.competitor_price = parseFloat(priceStr);
                     if (product.offers.priceCurrency) {
-                      productData.currency = product.offers.priceCurrency;
+                      productData.currency_code = product.offers.priceCurrency;
                     }
                   }
 
@@ -709,7 +709,7 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
     }
 
     // Extract Price
-    if (productData.price === null) {
+    if (productData.competitor_price === null) {
       const priceEl = $(selectors.PRICE);
       if (priceEl.length > 0) {
         productData.raw_price = priceEl.text().trim();
@@ -724,10 +724,10 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
           if (!isNaN(price)) {
             // Sanity check for large numbers (possible formatting issues)
             if (price > 100000) {
-              productData.price = price / 1000;
+              productData.competitor_price = price / 1000;
             } else {
               // Convert to integer if it's a whole number
-              productData.price = price % 1 === 0 ? Math.floor(price) : price;
+              productData.competitor_price = price % 1 === 0 ? Math.floor(price) : price;
             }
           }
         }
@@ -735,10 +735,10 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
     }
 
     // Extract Currency
-    if (productData.currency === 'SEK' && selectors.CURRENCY) {
+    if (productData.currency_code === 'SEK' && selectors.CURRENCY) {
       const currencyEl = $(selectors.CURRENCY);
       if (currencyEl.length > 0) {
-        productData.currency = currencyEl.text().trim();
+        productData.currency_code = currencyEl.text().trim();
       }
     }
 
