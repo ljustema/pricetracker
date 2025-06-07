@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth/options";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 // GET /api/support/unread-count - Get unread message count for current user
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Get user session
     const session = await getServerSession(authOptions);

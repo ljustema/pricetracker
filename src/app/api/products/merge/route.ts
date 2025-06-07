@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
     // If field selections are provided, we need to handle them before merging
     if (fieldSelections && Object.keys(fieldSelections).length > 0) {
       // Get both products to apply field selections
-      const { data: primaryProduct, error: primaryError } = await supabase
+      const { data: _primaryProduct, error: primaryError } = await supabase
         .from("products")
         .select("*")
         .eq("id", primaryId)

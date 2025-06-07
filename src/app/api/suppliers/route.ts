@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
 
     // Check if user profile exists, create if it doesn't
     try {
-      const { data: existingProfile, error: profileCheckError } = await supabase
+      const { data: _existingProfile, error: profileCheckError } = await supabase
         .from('user_profiles')
         .select('id')
         .eq('id', userId)

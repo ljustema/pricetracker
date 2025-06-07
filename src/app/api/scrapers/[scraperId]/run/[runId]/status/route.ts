@@ -3,8 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import fs from 'fs';
-import path from 'path';
+
 
 /**
  * Get recent progress messages from the database
@@ -332,7 +331,7 @@ export async function GET(
                 try {
                   const parsedEntry = typeof entry === 'string' ? JSON.parse(entry) : entry;
                   return parsedEntry.msg || JSON.stringify(parsedEntry);
-                } catch (e) {
+                } catch (_e) {
                   return typeof entry === 'string' ? entry : JSON.stringify(entry);
                 }
               });

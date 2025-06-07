@@ -254,7 +254,7 @@ export async function POST(req: NextRequest) {
         }
       } else {
         // Create new product
-        const { data: newProduct, error: productError } = await supabase
+        const { data: _newProduct, error: productError } = await supabase
           .from('products')
           .insert({
             user_id: userId,

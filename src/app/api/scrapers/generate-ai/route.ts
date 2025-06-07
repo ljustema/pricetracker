@@ -32,11 +32,11 @@ export async function POST(request: NextRequest) {
     let body: { url: string; competitorId: string; name?: string };
     try {
       body = await request.json();
-    } catch (error) {
+    } catch (_error) {
       return NextResponse.json({ error: "Invalid request body: Malformed JSON." }, { status: 400 });
     }
 
-    const { url, competitorId, name } = body;
+    const { url, competitorId, name: _name } = body;
 
     if (!url || !competitorId) {
       return NextResponse.json(

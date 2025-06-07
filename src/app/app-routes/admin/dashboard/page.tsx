@@ -1,7 +1,7 @@
 import { Metadata } from "next";
 import { requireAdmin } from "@/lib/admin/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
@@ -12,7 +12,7 @@ import {
   Crown, 
   Shield, 
   UserX,
-  TrendingUp,
+
   Calendar,
   MessageSquare
 } from "lucide-react";
@@ -146,7 +146,7 @@ export default async function AdminDashboardPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
         <p className="text-gray-600">
-          Welcome back, {adminUser.name}. Here's an overview of your system.
+          Welcome back, {adminUser.name}. Here&apos;s an overview of your system.
         </p>
       </div>
 

@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import crypto from 'crypto';
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import { BrandService } from "@/lib/services/brand-service";
+
 
 export async function POST(req: NextRequest) {
   try {
