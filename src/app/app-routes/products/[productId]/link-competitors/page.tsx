@@ -27,9 +27,9 @@ interface Product {
 }
 
 interface LinkCompetitorsPageProps {
-  params: {
+  params: Promise<{
     productId: string;
-  };
+  }>;
 }
 
 export default function LinkCompetitorsPage({ params: _params }: LinkCompetitorsPageProps) {

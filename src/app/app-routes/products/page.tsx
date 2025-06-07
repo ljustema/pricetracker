@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 
 // Define the props structure for the page component
 interface ProductsPageProps {
-  searchParams?: { [key: string]: string | string[] | undefined };
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
 }
 
 // This is the main Server Component for the page route

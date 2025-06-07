@@ -33,9 +33,9 @@ interface Product {
 }
 
 interface LinkScrapersPageProps {
-  params: {
+  params: Promise<{
     productId: string;
-  };
+  }>;
 }
 
 export default function LinkScrapersPage({ params: _params }: LinkScrapersPageProps) {
