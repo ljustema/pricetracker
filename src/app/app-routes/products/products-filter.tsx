@@ -74,6 +74,7 @@ export default function ProductsFilter({
     if (currentSearch !== searchValue) {
       setSearchValue(currentSearch);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFilters.search]); // Removed searchValue from dependencies
 
   // Handler for immediate search input change (updates UI instantly)

@@ -38,7 +38,7 @@ interface LinkScrapersPageProps {
   };
 }
 
-export default function LinkScrapersPage({ params }: LinkScrapersPageProps) {
+export default function LinkScrapersPage({ params: _params }: LinkScrapersPageProps) {
   const router = useRouter();
   const { data: session } = useSession();
   const [isLoading, setIsLoading] = useState(false);

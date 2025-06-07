@@ -7,7 +7,7 @@ import { ScraperConfig, ScrapedProduct } from "@/lib/services/scraper-service";
 import ScraperTypeSelector from "@/components/scrapers/scraper-type-selector";
 import ScriptScraperForm from "@/components/scrapers/script-scraper-form";
 import TestResultsModal from "@/components/scrapers/test-results-modal";
-import AiScraperValidation from "@/components/scrapers/ai-scraper-validation";
+
 import AiScraperWizard from "@/components/scrapers/ai-scraper-wizard";
 import ProfessionalScraperForm from "@/components/scrapers/professional-scraper-form";
 
@@ -37,7 +37,7 @@ export default function NewScraperPage() {
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [selectedScriptType, setSelectedScriptType] = useState<'python' | 'typescript' | null>(null);
-  const [selectedScraperId, setSelectedScraperId] = useState<string | null>(null);
+  const [_selectedScraperId, _setSelectedScraperId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<ScrapedProduct[]>([]);

@@ -65,7 +65,7 @@ interface BrandFocusData {
 }
 
 // Custom tooltip for price comparison chart
-const PriceComparisonTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; avg_diff_percentage: number; total_products: number } }>; label?: string }) => {
+const PriceComparisonTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; avg_diff_percentage: number; total_products: number } }>; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -84,7 +84,7 @@ const PriceComparisonTooltip = ({ active, payload, label }: { active?: boolean; 
 };
 
 // Custom tooltip for change frequency chart
-const ChangeFrequencyTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; count: number } }>; label?: string }) => {
+const ChangeFrequencyTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; count: number } }>; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -100,7 +100,7 @@ const ChangeFrequencyTooltip = ({ active, payload, label }: { active?: boolean; 
 };
 
 // Custom tooltip for market coverage chart
-const MarketCoverageTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; coverage_percentage: number; product_count: number; total_products: number } }>; label?: string }) => {
+const MarketCoverageTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; coverage_percentage: number; product_count: number; total_products: number } }>; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (

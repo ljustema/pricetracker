@@ -58,7 +58,7 @@ export default function NewScraperPage() {
     }
   };
 
-  const handleSubmit = async (data: Partial<ScraperConfig>) => {
+  const _handleSubmit = async (data: Partial<ScraperConfig>) => {
     setIsLoading(true);
     setError(null);
 
@@ -98,7 +98,7 @@ export default function NewScraperPage() {
     router.back();
   };
 
-  const handleTest = async (data: Partial<ScraperConfig>) => {
+  const _handleTest = async (data: Partial<ScraperConfig>) => {
     setIsLoading(true);
     setError(null);
 
@@ -190,7 +190,7 @@ export default function NewScraperPage() {
         return (
           <AiScraperWizard
             competitorId={competitorId}
-            onComplete={(scraperId) => {
+            onComplete={(_scraperId) => {
               // Navigate to the main scrapers list page after completion
               router.push(`/app-routes/scrapers`);
             }}

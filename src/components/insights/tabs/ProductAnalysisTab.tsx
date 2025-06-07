@@ -16,8 +16,8 @@ import {
   PieChart,
   Pie,
   Cell,
-  LineChart,
-  Line
+  LineChart as _LineChart,
+  Line as _Line
 } from 'recharts';
 
 // Types for product analysis data
@@ -57,7 +57,7 @@ interface ProductMatchingStatus {
 }
 
 // Custom tooltip for trends chart
-const TrendsTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { product_name: string; overall_change_percentage: number; first_price: number; last_price: number; total_changes: number; last_changed_at: string } }>; label?: string }) => {
+const TrendsTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { product_name: string; overall_change_percentage: number; first_price: number; last_price: number; total_changes: number; last_changed_at: string } }>; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -87,7 +87,7 @@ const TrendsTooltip = ({ active, payload, label }: { active?: boolean; payload?:
 };
 
 // Custom tooltip for sensitivity chart
-const SensitivityTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { product_name: string; count: number; our_price?: number } }>; label?: string }) => {
+const SensitivityTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { product_name: string; count: number; our_price?: number } }>; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -108,7 +108,7 @@ const SensitivityTooltip = ({ active, payload, label }: { active?: boolean; payl
 };
 
 // Colors for charts
-const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088fe', '#00C49F', '#FFBB28', '#FF8042'];
+const _COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088fe', '#00C49F', '#FFBB28', '#FF8042'];
 const MATCHING_COLORS = ['#10b981', '#ef4444']; // Green for matched, red for unmatched
 
 const ProductAnalysisTab: React.FC = () => {

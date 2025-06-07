@@ -3,8 +3,8 @@ import { spawn } from 'child_process'; // Added for subprocess execution
 import fsPromises from 'fs/promises'; // Use fs/promises for async file operations
 import fsSync from 'fs'; // Use fs for synchronous operations like existsSync/mkdirSync
 import path from 'path'; // Added for path manipulation
-import os from 'os'; // Added for temp directory
-import util from 'util'; // Added for promisify (if needed later)
+import _os from 'os'; // Added for temp directory
+import _util from 'util'; // Added for promisify (if needed later)
 import { debugLog, logToDatabase } from './debug-logger'; // Import our debug logger
 
 // Log that the worker has started with our changes
@@ -51,7 +51,7 @@ interface ClaimedJobData {
 }
 
 // Define types for context and results (align with scraper template)
-interface ScriptContext {
+interface _ScriptContext {
   activeBrandNames?: string[];
   activeBrandIds?: string[];
   filterByActiveBrands?: boolean;
@@ -66,7 +66,7 @@ interface ScriptContext {
   // So, we might not need to pass a log function in the context object itself.
 }
 
-interface ScrapedProductData {
+interface _ScrapedProductData {
   name: string;
   competitor_price: number; // Updated field name to match temp_competitors_scraped_data table
   currency_code?: string; // Updated field name to match temp_competitors_scraped_data table
@@ -79,7 +79,7 @@ interface ScrapedProductData {
   // Add other fields as needed
 }
 
-interface ScriptMetadata {
+interface _ScriptMetadata {
   required_libraries?: string[];
   target_url?: string;
   batch_size?: number;
@@ -278,7 +278,7 @@ async function fetchAndProcessJob() {
     let errorMessage: string | null = null;
     let errorDetails: string | null = null;
     let productCount = 0;
-    const productsBuffer: ScrapedProductData[] = [];
+    const productsBuffer: _ScrapedProductData[] = [];
     let tmpScriptPath: string | null = null;
     let compilationResult: { success: boolean; outputPath?: string; error?: string; tempDir?: string } | null = null; // Store compilation result for cleanup
     const startTime = Date.now();
@@ -438,7 +438,7 @@ async function fetchAndProcessJob() {
                     try {
                         const product = JSON.parse(line);
                         if (typeof product === 'object' && product !== null && product.name && product.competitor_price !== undefined) {
-                            productsBuffer.push(product as ScrapedProductData);
+                            productsBuffer.push(product as _ScrapedProductData);
                             productCount++;
 
                             // Update product count in database every 10 products
@@ -1184,7 +1184,7 @@ $$;
 
 
 // --- Function to save scraped products ---
-async function saveScrapedProducts(runId: string, userId: string, competitorId: string | undefined, products: ScrapedProductData[], supabaseClient?: ReturnType<typeof import('@supabase/supabase-js').createClient>) {
+async function saveScrapedProducts(runId: string, userId: string, competitorId: string | undefined, products: _ScrapedProductData[], supabaseClient?: ReturnType<typeof import('@supabase/supabase-js').createClient>) {
     if (!products || products.length === 0) return;
 
     // Check if competitorId is provided

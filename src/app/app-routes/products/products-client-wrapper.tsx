@@ -163,6 +163,7 @@ export default function ProductsClientWrapper({
        router.push(newUrl, { scroll: false });
     }
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [complexFilters, router]); // Only depend on complexFilters and router, not searchParams to avoid circular updates
 
   // Callback function for ProductsFilter to update complex filters
