@@ -66,7 +66,7 @@ async function validateSharedDependencies(): Promise<boolean> {
           debugLog('Corrupted Crawlee type definitions detected');
           return false;
         }
-      } catch (readError) {
+      } catch (_readError) {
         debugLog('Failed to read Crawlee type definitions');
         return false;
       }

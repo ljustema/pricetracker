@@ -104,7 +104,7 @@ export function SubscriptionEditor({ user, onUpdate }: SubscriptionEditorProps) 
           Subscription Management
         </CardTitle>
         <CardDescription>
-          Change the user's subscription tier and access level
+          Change the user&apos;s subscription tier and access level
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -188,7 +188,7 @@ export function SubscriptionEditor({ user, onUpdate }: SubscriptionEditorProps) 
         {selectedTier === 'free' && user.subscription_tier !== 'free' && (
           <div className="p-3 bg-yellow-50 rounded-lg border border-yellow-200">
             <p className="text-sm text-yellow-800">
-              <strong>Warning:</strong> Downgrading to free may limit the user's access to premium features.
+              <strong>Warning:</strong> Downgrading to free may limit the user&apos;s access to premium features.
             </p>
           </div>
         )}

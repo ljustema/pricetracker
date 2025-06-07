@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 export const metadata: Metadata = {
   title: "Not Authorized - PriceTracker",
-  description: "You don't have permission to access this page.",
+  description: "You don&apos;t have permission to access this page.",
 };
 
 export default function NotAuthorizedPage() {

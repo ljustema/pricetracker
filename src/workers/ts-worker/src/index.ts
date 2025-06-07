@@ -296,7 +296,7 @@ async function fetchAndProcessJob() {
         logStructured(job.id, 'info', 'TYPESCRIPT_COMPILATION', 'Compiling TypeScript script...');
         debugLog(`Compiling TypeScript script for job ${job.id}`);
 
-        // Use the compilationResult variable declared at higher scope
+        // Use the compilationResult variable declared at the higher scope
 
         try {
           // Log the first 100 characters of the script for debugging
@@ -472,7 +472,7 @@ async function fetchAndProcessJob() {
                         } else {
                             logStructured(job.id, 'warn', 'SCRIPT_STDOUT', `Skipping invalid product JSON structure: ${line.substring(0, 100)}...`);
                         }
-                    } catch (e) {
+                    } catch (_e) {
                         // Instead of warning about JSON decode failure, treat it as a log message
                         logStructured(job.id, 'info', 'SCRIPT_LOG', `STDOUT: ${line}`);
                     }
