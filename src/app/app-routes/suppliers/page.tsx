@@ -6,6 +6,17 @@ import Link from "next/link";
 import { getSuppliers } from "@/lib/services/supplier-service";
 import { Plus, Building2, Globe, Phone, Mail } from "lucide-react";
 
+interface Supplier {
+  id: string;
+  name: string;
+  website?: string;
+  contact_email?: string;
+  contact_phone?: string;
+  notes?: string;
+  is_active: boolean;
+  sync_frequency?: string;
+}
+
 export default async function SuppliersPage() {
   // Check if the user is authenticated
   const session = await getServerSession(authOptions);
@@ -55,7 +66,7 @@ export default async function SuppliersPage() {
 }
 
 interface SuppliersGridProps {
-  suppliers: any[];
+  suppliers: Supplier[];
 }
 
 function SuppliersGrid({ suppliers }: SuppliersGridProps) {

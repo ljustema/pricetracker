@@ -73,7 +73,7 @@ export default function IntegrationsPage() {
       // Create a map of integration IDs to run IDs
       const activeRunsMap: {[key: string]: string} = {};
       if (data && data.runs) {
-        data.runs.forEach((run: any) => {
+        data.runs.forEach((run: { integration_id: string; id: string }) => {
           activeRunsMap[run.integration_id] = run.id;
         });
       }

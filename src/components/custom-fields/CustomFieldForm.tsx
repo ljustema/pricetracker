@@ -6,13 +6,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
+interface ValidationRules {
+  min_length?: number;
+  max_length?: number;
+  pattern?: string;
+}
+
 interface CustomField {
   id: string;
   field_name: string;
   field_type: 'text' | 'number' | 'boolean' | 'url' | 'date';
   is_required: boolean;
   default_value: string | null;
-  validation_rules: any;
+  validation_rules: ValidationRules | null;
 }
 
 interface CustomFieldFormProps {
@@ -99,7 +105,7 @@ export default function CustomFieldForm({
     }
   };
 
-  const handleChange = (field: string, value: any) => {
+  const handleChange = (field: string, value: string | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }));
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));

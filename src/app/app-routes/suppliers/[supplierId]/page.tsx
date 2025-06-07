@@ -228,8 +228,22 @@ export default async function SupplierDetailPage({ params }: SupplierDetailPageP
   );
 }
 
+interface SupplierPriceChange {
+  id: string;
+  old_price?: number;
+  new_price: number;
+  currency_code: string;
+  price_change_percentage?: number;
+  changed_at: string;
+  change_source: string;
+  products?: {
+    name: string;
+    sku?: string;
+  };
+}
+
 interface SupplierPriceHistoryProps {
-  priceChanges: any[];
+  priceChanges: SupplierPriceChange[];
 }
 
 function SupplierPriceHistory({ priceChanges }: SupplierPriceHistoryProps) {

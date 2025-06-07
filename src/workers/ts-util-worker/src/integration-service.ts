@@ -5,12 +5,12 @@ import { ensureUUID } from './utils';
 // It only includes the functions needed for the worker
 
 export async function updateIntegrationStatus(
-  supabase: any,
+  supabase: { from: (table: string) => { update: (data: Record<string, unknown>) => { eq: (column: string, value: string) => Promise<{ error: unknown }> } } },
   integrationId: string,
   status: 'active' | 'inactive' | 'error',
   lastSyncStatus: 'success' | 'failed' | null = null
 ): Promise<void> {
-  const dataToUpdate: Record<string, any> = {
+  const dataToUpdate: Record<string, unknown> = {
     status,
     updated_at: new Date().toISOString(),
   };

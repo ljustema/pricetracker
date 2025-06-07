@@ -11,6 +11,22 @@ import { Database } from '@/lib/supabase/database.types';
 type Brand = Database['public']['Tables']['brands']['Row'];
 // Product type removed as it's not used in this file
 
+interface BrandWithAnalytics {
+  id: string;
+  name: string;
+  is_active: boolean;
+  needs_review: boolean;
+  product_count: number;
+  our_products_count: number;
+  competitor_count: number;
+}
+
+interface CompetitorData {
+  competitors: {
+    name: string;
+  };
+}
+
 export class BrandService {
   // Using the admin client to bypass RLS and session issues, aligning with product-service.ts.
   // WARNING: This bypasses RLS. Security relies solely on filtering by user_id in the service methods.
@@ -977,7 +993,7 @@ export class BrandService {
       }
 
       // Get competitor names for each brand with competitors
-      const brandsWithCompetitors = brandsWithAnalytics.filter((brand: any) => brand.competitor_count > 0);
+      const brandsWithCompetitors = brandsWithAnalytics.filter((brand: BrandWithAnalytics) => brand.competitor_count > 0);
 
       // Create a map to store competitor names for each brand
       const competitorNamesMap = new Map<string, string[]>();
@@ -986,7 +1002,7 @@ export class BrandService {
       // Make this optional to avoid breaking the entire function if it fails
       if (brandsWithCompetitors.length > 0) {
         try {
-          await Promise.all(brandsWithCompetitors.map(async (brand: any) => {
+          await Promise.all(brandsWithCompetitors.map(async (brand: BrandWithAnalytics) => {
             try {
               const { data: competitorNames, error: competitorNamesError } = await supabase.rpc(
                 'get_competitor_names_for_brand',
@@ -1016,7 +1032,7 @@ export class BrandService {
                     });
 
                   if (!fallbackError && fallbackData) {
-                    const names = [...new Set(fallbackData.map((item: any) => item.competitors.name))];
+                    const names = [...new Set(fallbackData.map((item: CompetitorData) => item.competitors.name))];
                     competitorNamesMap.set(brand.id, names);
                   }
                 } catch (fallbackError) {
@@ -1045,15 +1061,7 @@ export class BrandService {
       }
 
       // Add aliases and competitor names to each brand
-      const result = brandsWithAnalytics.map((brand: {
-        id: string;
-        name: string;
-        is_active: boolean;
-        needs_review: boolean;
-        product_count: number;
-        our_products_count: number;
-        competitor_count: number;
-      }) => ({
+      const result = brandsWithAnalytics.map((brand: BrandWithAnalytics) => ({
         ...brand,
         aliases: aliasMap.get(brand.id) || [],
         competitor_names: competitorNamesMap.get(brand.id) || []

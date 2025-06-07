@@ -7,13 +7,19 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import CustomFieldForm from "@/components/custom-fields/CustomFieldForm";
 
+interface ValidationRules {
+  min_length?: number;
+  max_length?: number;
+  pattern?: string;
+}
+
 interface CustomField {
   id: string;
   field_name: string;
   field_type: 'text' | 'number' | 'boolean' | 'url' | 'date';
   is_required: boolean;
   default_value: string | null;
-  validation_rules: any;
+  validation_rules: ValidationRules | null;
   created_at: string;
 }
 

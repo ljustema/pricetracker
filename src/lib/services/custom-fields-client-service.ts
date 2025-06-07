@@ -1,10 +1,16 @@
+interface ValidationRules {
+  min_length?: number;
+  max_length?: number;
+  pattern?: string;
+}
+
 export interface CustomField {
   id: string;
   field_name: string;
   field_type: 'text' | 'number' | 'boolean' | 'url' | 'date';
   is_required: boolean;
   default_value: string | null;
-  validation_rules: any;
+  validation_rules: ValidationRules | null;
   created_at: string;
 }
 
@@ -13,7 +19,7 @@ export interface CreateCustomFieldRequest {
   field_type: 'text' | 'number' | 'boolean' | 'url' | 'date';
   is_required?: boolean;
   default_value?: string;
-  validation_rules?: any;
+  validation_rules?: ValidationRules;
 }
 
 export interface UpdateCustomFieldRequest {
@@ -21,7 +27,7 @@ export interface UpdateCustomFieldRequest {
   field_type: 'text' | 'number' | 'boolean' | 'url' | 'date';
   is_required?: boolean;
   default_value?: string;
-  validation_rules?: any;
+  validation_rules?: ValidationRules;
 }
 
 /**
@@ -117,7 +123,7 @@ export class CustomFieldsClientService {
   /**
    * Validate a custom field value based on its type and validation rules
    */
-  static validateFieldValue(field: CustomField, value: any): { isValid: boolean; error?: string } {
+  static validateFieldValue(field: CustomField, value: unknown): { isValid: boolean; error?: string } {
     // Check if required field is empty
     if (field.is_required && (value === null || value === undefined || value === '')) {
       return { isValid: false, error: `${field.field_name} is required` };
@@ -186,7 +192,7 @@ export class CustomFieldsClientService {
   /**
    * Format a field value for display based on its type
    */
-  static formatFieldValue(field: CustomField, value: any): string {
+  static formatFieldValue(field: CustomField, value: unknown): string {
     if (value === null || value === undefined || value === '') {
       return '-';
     }

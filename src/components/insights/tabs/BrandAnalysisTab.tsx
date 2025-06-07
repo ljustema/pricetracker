@@ -59,7 +59,7 @@ interface BrandChangeActivity {
 }
 
 // Custom tooltip for competition chart
-const CompetitionTooltip = ({ active, payload, label }: any) => {
+const CompetitionTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; competitor_count: number; total_products?: number } }>; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -78,7 +78,7 @@ const CompetitionTooltip = ({ active, payload, label }: any) => {
 };
 
 // Custom tooltip for uniqueness chart
-const UniquenessTooltip = ({ active, payload, label }: any) => {
+const UniquenessTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; uniqueness_percentage: number; unique_products: number; total_products: number } }>; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -97,7 +97,7 @@ const UniquenessTooltip = ({ active, payload, label }: any) => {
 };
 
 // Custom tooltip for price positioning chart
-const PricePositioningTooltip = ({ active, payload, label }: any) => {
+const PricePositioningTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; avg_price_difference: number; cheaper_count: number; same_count: number; more_expensive_count: number } }>; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -124,7 +124,7 @@ const PricePositioningTooltip = ({ active, payload, label }: any) => {
 };
 
 // Custom tooltip for change activity chart
-const ChangeActivityTooltip = ({ active, payload, label }: any) => {
+const ChangeActivityTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; changes_per_product: number; total_changes: number; total_products: number } }>; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (

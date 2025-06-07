@@ -500,7 +500,7 @@ export default function AiScraperWizard({
         );
 
       // Legacy phases - handle for backward compatibility
-      case "url-collection" as any:
+      case "url-collection" as "url-collection":
         console.warn("Legacy phase 'url-collection' detected, redirecting to 'data-validation'");
         setCurrentPhase("data-validation");
         return (
@@ -510,7 +510,7 @@ export default function AiScraperWizard({
             onBack={() => setCurrentPhase("analysis")}
           />
         );
-      case "data-extraction" as any:
+      case "data-extraction" as "data-extraction":
         console.warn("Legacy phase 'data-extraction' detected, redirecting to 'data-validation'");
         setCurrentPhase("data-validation");
         return (

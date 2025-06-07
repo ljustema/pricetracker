@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Create an update object for the primary product
-      const updateData: any = {};
+      const updateData: Record<string, unknown> = {};
 
       // Apply field selections
       for (const [field, selectedProductId] of Object.entries(fieldSelections)) {
@@ -185,13 +185,13 @@ export async function POST(request: NextRequest) {
       // If we get here, the merge was successful
       console.log("Merge successful:", JSON.stringify(result, null, 2));
       return NextResponse.json(result);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Exception during merge operation:", error);
 
       return NextResponse.json(
         {
           error: "Failed to merge products",
-          details: error.message || "Unknown error"
+          details: error instanceof Error ? error.message : "Unknown error"
         },
         { status: 500 }
       );

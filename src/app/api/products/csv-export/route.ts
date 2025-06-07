@@ -4,6 +4,21 @@ import { authOptions } from "@/lib/auth/options";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { ensureUUID } from "@/lib/utils/uuid";
 
+interface ProductForExport {
+  id: string;
+  name: string;
+  sku: string;
+  ean: string;
+  brand: string;
+  image_url: string;
+  our_retail_price: number | null;
+  our_wholesale_price: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  source_prices?: Record<string, { price: number }>;
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Get the current user from the session
@@ -51,7 +66,7 @@ export async function POST(request: NextRequest) {
     };
 
     // Fetch all products using pagination
-    let allProducts: any[] = [];
+    let allProducts: ProductForExport[] = [];
     let currentPage = 1;
     let totalPages = 1;
     const pageSize = 1000; // Maximum page size
