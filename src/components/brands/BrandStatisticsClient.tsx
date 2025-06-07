@@ -4,6 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Database } from '@/lib/supabase/database.types';
+import NumberDisplay from './NumberDisplay';
 
 // Simple SVG icons
 const BrandIcon = () => (
@@ -99,7 +100,9 @@ const BrandStatisticsClient: React.FC<BrandStatisticsClientProps> = ({
                 >
                   <span className="inline-block w-5 text-gray-500">{index + 1}.</span> {brand.name}
                 </Link>
-                <span className="text-gray-600 font-medium">{(brand.product_count || 0).toLocaleString()} products</span>
+                <span className="text-gray-600 font-medium">
+                  <NumberDisplay value={brand.product_count || 0} /> products
+                </span>
               </li>
             ))}
           </ul>
@@ -111,7 +114,9 @@ const BrandStatisticsClient: React.FC<BrandStatisticsClientProps> = ({
         <div className="flex justify-between items-start">
           <div>
             <h3 className="text-lg font-medium text-gray-900 mb-1">Total Products</h3>
-            <p className="text-3xl font-bold text-indigo-600">{totalProducts.toLocaleString()}</p>
+            <p className="text-3xl font-bold text-indigo-600">
+              <NumberDisplay value={totalProducts} />
+            </p>
           </div>
           <div className="bg-indigo-50 p-2 rounded-full">
             <ProductIcon />
@@ -130,7 +135,9 @@ const BrandStatisticsClient: React.FC<BrandStatisticsClientProps> = ({
                   >
                     <span className="inline-block w-5 text-gray-500">{index + 1}.</span> {competitor.name}
                   </Link>
-                  <span className="text-gray-600 font-medium">{competitor.totalProducts.toLocaleString()} products</span>
+                  <span className="text-gray-600 font-medium">
+                    <NumberDisplay value={competitor.totalProducts} /> products
+                  </span>
                 </li>
               ))}
             </ul>

@@ -38,12 +38,10 @@ export interface ScraperConfig {
     day?: number; // Day of week (0-6) or day of month (1-31)
   };
   is_active: boolean;
-  is_approved: boolean;
   python_script?: string;
   script_metadata?: ScraperMetadata; // Use the extracted interface
   typescript_script?: string; // Added for TypeScript scrapers
   test_results?: Record<string, unknown>;
-  approved_at?: string;
   created_at?: string;
   updated_at?: string;
   last_run?: string;

@@ -8,6 +8,7 @@ import Link from "next/link";
 import crypto from 'crypto';
 import BrandStatisticsServer from "@/components/brands/BrandStatisticsServer";
 import GenerateReportButton from "@/components/dashboard/generate-report-button";
+import PriceChangeDisplay from "@/components/dashboard/PriceChangeDisplay";
 import { Database } from "@/lib/supabase/database.types";
 
 // Helper function to ensure user ID is a valid UUID
@@ -61,8 +62,8 @@ export default async function DashboardPage() {
     .not("our_retail_price", "is", null);
 
   // Get recent price changes (last 7 days)
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  // Use a fixed calculation to avoid hydration mismatches
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   const { count: priceChangesCount, error: priceChangesError } = await supabase
     .from("price_changes_competitors")
@@ -386,15 +387,12 @@ export default async function DashboardPage() {
                         {priceChange.competitors?.name || priceChange.integrations?.name || "Unknown"} • SKU: {priceChange.products.sku}
                       </p>
                     </div>
-                    <div className="text-right">
-                      <p className="text-lg font-medium text-red-600">
-                        {priceChange.price_change_percentage.toFixed(2)}%
-                      </p>
-                      <p className="text-sm text-gray-500">
-                        {new Intl.NumberFormat('sv-SE', { style: 'currency', currency: priceChange.currency_code || 'SEK' }).format(priceChange.old_competitor_price || 0)} →{' '}
-                        {new Intl.NumberFormat('sv-SE', { style: 'currency', currency: priceChange.currency_code || 'SEK' }).format(priceChange.new_competitor_price || 0)}
-                      </p>
-                    </div>
+                    <PriceChangeDisplay
+                      oldPrice={priceChange.old_competitor_price || 0}
+                      newPrice={priceChange.new_competitor_price || 0}
+                      currencyCode={priceChange.currency_code || 'SEK'}
+                      percentage={priceChange.price_change_percentage}
+                    />
                   </div>
                 </div>
               ))}

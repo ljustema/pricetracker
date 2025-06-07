@@ -203,7 +203,6 @@ export async function POST(req: NextRequest) {
       script_metadata: scriptMetadata,
       schedule: schedule,
       is_active: false,
-      is_approved: false,
       created_at: now,
       updated_at: now,
       status: 'idle' as const,

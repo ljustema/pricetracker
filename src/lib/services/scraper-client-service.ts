@@ -217,7 +217,6 @@ export class ScraperClientService {
         time: '02:00', // Run at 2 AM
       },
       is_active: false, // Default to inactive until tested
-      is_approved: false, // Default to not approved until tested
     };
 
     return mockConfig;

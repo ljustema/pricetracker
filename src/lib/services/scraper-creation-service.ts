@@ -99,8 +99,7 @@ export class ScraperCreationService {
       python_script: config.python_script,
       script_metadata: scriptMetadata,
       schedule: config.schedule,
-      is_active: false, // Default to inactive until tested and approved
-      is_approved: false, // Default to not approved until tested
+      is_active: false, // Default to inactive until tested
     };
     
     // Create the scraper
@@ -214,7 +213,6 @@ export class ScraperCreationService {
       script_metadata: scriptMetadata,
       schedule: config.schedule,
       is_active: false, // Default to inactive
-      is_approved: false, // Default to not approved
     };
 
     // Create the scraper
