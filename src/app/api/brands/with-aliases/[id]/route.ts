@@ -5,7 +5,7 @@ import { authOptions } from '@/lib/auth/options';
 
 export async function GET(
   request: NextRequest,
-  { params: _params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     // Get the authenticated user's session
@@ -15,12 +15,8 @@ export async function GET(
     }
     const userId = session.user.id;
 
-    // Extract the ID from the URL directly
-    const id = request.nextUrl.pathname.split('/').pop();
-
-    if (!id) {
-      return NextResponse.json({ error: 'Brand ID is required' }, { status: 400 });
-    }
+    // Extract the ID from params
+    const { id } = await params;
 
     const brandService = new BrandService();
     const brandWithAliases = await brandService.getBrandWithAliases(userId, id);

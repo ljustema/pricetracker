@@ -15,7 +15,7 @@ const updateBrandSchema = z.object({
   // Add other updatable fields from database.types.ts if needed
 }).strict(); // Use strict to prevent extra fields
 
-export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   // Get the authenticated user's session
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -24,7 +24,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
   const userId = session.user.id;
 
   // Extract brandId from params
-  const { id: brandId } = params;
+  const { id: brandId } = await params;
   if (!brandId) {
     return NextResponse.json({ error: 'Brand ID is required' }, { status: 400 });
   }
@@ -73,7 +73,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
   }
 }
 
-export async function DELETE(_request: NextRequest, context: { params: { id: string } }) {
+export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   // Get the authenticated user's session
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -81,9 +81,8 @@ export async function DELETE(_request: NextRequest, context: { params: { id: str
   }
   const userId = session.user.id;
 
-  // Extract brandId from params - must await params in App Router
-  const params = await context.params;
-  const brandId = params.id;
+  // Extract brandId from params
+  const { id: brandId } = await params;
   if (!brandId) {
     return NextResponse.json({ error: 'Brand ID is required' }, { status: 400 });
   }
