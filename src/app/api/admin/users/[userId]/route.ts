@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { validateAdminApiAccess } from '@/lib/admin/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 
+interface UserUpdateData {
+  subscription_tier?: string;
+  is_suspended?: boolean;
+  admin_role?: string | null;
+  updated_at: string;
+}
+
 // GET /api/admin/users/[userId] - Get detailed user information
 export async function GET(
   request: NextRequest,
@@ -131,7 +138,9 @@ export async function PUT(
     const supabase = createSupabaseAdminClient();
 
     // Build update object
-    const updateData: any = {};
+    const updateData: UserUpdateData = {
+      updated_at: new Date().toISOString()
+    };
 
     if (subscription_tier !== undefined) {
       updateData.subscription_tier = subscription_tier;
@@ -144,8 +153,6 @@ export async function PUT(
     if (admin_role !== undefined) {
       updateData.admin_role = admin_role;
     }
-
-    updateData.updated_at = new Date().toISOString();
 
     // Update user profile
     const { data: updatedUser, error } = await supabase

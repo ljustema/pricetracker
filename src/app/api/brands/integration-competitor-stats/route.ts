@@ -6,6 +6,12 @@ import { createSupabaseAdminClient } from '@/lib/supabase/server';
 // Add cache headers to improve performance
 const CACHE_MAX_AGE = 60; // Cache for 60 seconds
 
+interface CompetitorStatistic {
+  competitor_id: string;
+  product_count: number;
+  brand_count: number;
+}
+
 /**
  * GET handler to fetch integration and competitor statistics for the brands page
  */
@@ -151,7 +157,7 @@ export async function GET(_request: NextRequest) {
     // Create a map of competitor_id to stats for quick lookup
     const statsMap = new Map<string, { product_count: number, brand_count: number }>();
     if (competitorStatsData) {
-      competitorStatsData.forEach((stat: any) => {
+      competitorStatsData.forEach((stat: CompetitorStatistic) => {
         statsMap.set(stat.competitor_id, {
           product_count: stat.product_count || 0,
           brand_count: stat.brand_count || 0

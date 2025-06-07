@@ -1,5 +1,8 @@
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
+type FieldValue = string | number | boolean | null | undefined;
+type ScrapedData = Record<string, FieldValue>;
+
 /**
  * Service for automatically creating custom fields from scraped data
  */
@@ -20,7 +23,7 @@ export class AutoCustomFieldsService {
   /**
    * Detect field type from value
    */
-  private static detectFieldType(value: any): 'text' | 'number' | 'boolean' | 'url' | 'date' {
+  private static detectFieldType(value: FieldValue): 'text' | 'number' | 'boolean' | 'url' | 'date' {
     if (typeof value === 'boolean') {
       return 'boolean';
     }
@@ -55,8 +58,8 @@ export class AutoCustomFieldsService {
    * Create custom fields automatically from scraped data
    */
   static async createCustomFieldsFromScrapedData(
-    userId: string, 
-    scrapedData: Record<string, any>
+    userId: string,
+    scrapedData: ScrapedData
   ): Promise<{ customFieldIds: Record<string, string>; errors: string[] }> {
     const supabase = createSupabaseAdminClient();
     const customFieldIds: Record<string, string> = {};
@@ -78,7 +81,7 @@ export class AutoCustomFieldsService {
     const existingFieldMap = new Map(existingFields?.map(f => [f.field_name, f.id]) || []);
 
     // Identify custom fields (fields not in standard fields)
-    const customFields: Record<string, any> = {};
+    const customFields: ScrapedData = {};
     for (const [key, value] of Object.entries(scrapedData)) {
       if (!this.STANDARD_FIELDS.has(key) && value !== null && value !== undefined && value !== '') {
         customFields[key] = value;
@@ -141,7 +144,7 @@ export class AutoCustomFieldsService {
   static async storeCustomFieldValues(
     productId: string,
     customFieldIds: Record<string, string>,
-    scrapedData: Record<string, any>
+    scrapedData: ScrapedData
   ): Promise<{ success: boolean; errors: string[] }> {
     const supabase = createSupabaseAdminClient();
     const errors: string[] = [];
@@ -199,7 +202,7 @@ export class AutoCustomFieldsService {
   static async processScrapedProductWithCustomFields(
     userId: string,
     productId: string,
-    scrapedData: Record<string, any>
+    scrapedData: ScrapedData
   ): Promise<{ success: boolean; customFieldsCreated: number; errors: string[] }> {
     try {
       // Create custom fields from scraped data
@@ -228,13 +231,13 @@ export class AutoCustomFieldsService {
   /**
    * Extract custom fields from raw scraped data (for temp tables)
    */
-  static extractCustomFieldsFromRawData(rawData: any): Record<string, any> {
+  static extractCustomFieldsFromRawData(rawData: unknown): ScrapedData {
     if (!rawData || typeof rawData !== 'object') {
       return {};
     }
 
-    const customFields: Record<string, any> = {};
-    for (const [key, value] of Object.entries(rawData)) {
+    const customFields: ScrapedData = {};
+    for (const [key, value] of Object.entries(rawData as Record<string, FieldValue>)) {
       if (!this.STANDARD_FIELDS.has(key) && value !== null && value !== undefined && value !== '') {
         customFields[key] = value;
       }

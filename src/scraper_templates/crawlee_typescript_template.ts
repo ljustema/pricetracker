@@ -538,7 +538,7 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
       // This needs to be customized based on the API's response format
       const pageProducts: ApiProduct[] = Array.isArray(data)
         ? data as ApiProduct[]
-        : ((data as any)?.products || (data as any)?.items || []);
+        : ((data as Record<string, unknown>)?.products || (data as Record<string, unknown>)?.items || []);
 
       if (pageProducts.length > 0) {
         products.push(...pageProducts);
@@ -605,7 +605,7 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
  * Helper function to extract product data using various methods
  * This function should be customized for each specific site
  */
-async function extractProductData($: any, url: string): Promise<ScrapedProductData | null> {
+async function extractProductData($: cheerio.CheerioAPI, url: string): Promise<ScrapedProductData | null> {
   try {
     // Initialize product data with defaults
     const productData: ScrapedProductData = {
@@ -626,7 +626,7 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
     if (CONFIG.PRODUCT_EXTRACTION.SCHEMA_ORG.ENABLED) {
       const schemaScripts = $(CONFIG.PRODUCT_EXTRACTION.SCHEMA_ORG.SCRIPT_SELECTOR);
       if (schemaScripts.length > 0) {
-        schemaScripts.each((_i: number, elem: any) => {
+        schemaScripts.each((_i: number, elem: unknown) => {
           try {
             const scriptContent = $(elem).html();
             if (scriptContent && scriptContent.includes('Product')) {

@@ -6,6 +6,11 @@ import { createSupabaseAdminClient } from '@/lib/supabase/server';
 // Add cache headers to improve performance
 const CACHE_MAX_AGE = 60; // Cache for 60 seconds
 
+interface BrandForCompetitorItem {
+  brand_id: string;
+  brand_name: string;
+}
+
 /**
  * GET handler to fetch brand focus data for competitors
  */
@@ -41,7 +46,7 @@ export async function GET(request: NextRequest) {
         // Process the data to get top brands by product count
         const brandCounts = new Map();
         
-        functionData.forEach((item: any) => {
+        functionData.forEach((item: BrandForCompetitorItem) => {
           const brandId = item.brand_id;
           const brandName = item.brand_name;
           
@@ -188,7 +193,7 @@ export async function GET(request: NextRequest) {
             // Process the data to get top brand by product count
             const brandCounts = new Map();
             
-            functionData.forEach((item: any) => {
+            functionData.forEach((item: BrandForCompetitorItem) => {
               const brandId = item.brand_id;
               const brandName = item.brand_name;
               

@@ -38,7 +38,7 @@ export default async function AdminDashboardPage() {
 
   // Fetch user statistics
   const { data: userStats, error: statsError } = await supabase
-    .rpc('get_admin_user_stats') as { data: UserStats[] | null, error: any };
+    .rpc('get_admin_user_stats') as { data: UserStats[] | null, error: unknown };
 
   const stats = userStats?.[0] || {
     total_users: 0,

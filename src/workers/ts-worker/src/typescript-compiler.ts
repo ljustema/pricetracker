@@ -74,8 +74,9 @@ async function validateSharedDependencies(): Promise<boolean> {
 
     debugLog('Shared dependencies validation passed');
     return true;
-  } catch (error: any) {
-    debugLog(`Shared dependencies validation failed: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    debugLog(`Shared dependencies validation failed: ${errorMessage}`);
     return false;
   }
 }
@@ -90,8 +91,9 @@ async function cleanupSharedDependencies(): Promise<void> {
       await fsPromises.rm(SHARED_DEPS_DIR, { recursive: true, force: true });
       debugLog('Corrupted shared dependencies removed');
     }
-  } catch (error: any) {
-    debugLog(`Failed to cleanup shared dependencies: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    debugLog(`Failed to cleanup shared dependencies: ${errorMessage}`);
   }
 }
 
@@ -155,8 +157,9 @@ async function initializeSharedDependencies(): Promise<void> {
 
     sharedDepsInitialized = true;
     debugLog('Shared dependencies cache initialized successfully');
-  } catch (error: any) {
-    debugLog(`Failed to initialize shared dependencies: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    debugLog(`Failed to initialize shared dependencies: ${errorMessage}`);
     // Clean up failed installation
     await cleanupSharedDependencies();
     sharedDepsInitialized = false;
@@ -242,8 +245,9 @@ export async function compileTypeScriptScraper(
               execSync(`cp -r "${sharedPkgPath}" "${tempPkgPath}"`, { stdio: 'pipe' });
             }
             debugLog(`Copied shared package: ${pkg}`);
-          } catch (copyError: any) {
-            debugLog(`Failed to copy shared package ${pkg}: ${copyError.message}`);
+          } catch (copyError: unknown) {
+            const errorMessage = copyError instanceof Error ? copyError.message : String(copyError);
+            debugLog(`Failed to copy shared package ${pkg}: ${errorMessage}`);
           }
         }
       }
@@ -260,9 +264,10 @@ export async function compileTypeScriptScraper(
         timeout: 300000 // 5 minutes timeout for npm install
       });
       debugLog('Dependencies installed successfully');
-    } catch (installError: any) {
-      debugLog(`npm install failed: ${installError.message}`);
-      throw new Error(`Failed to install dependencies: ${installError.message}`);
+    } catch (installError: unknown) {
+      const errorMessage = installError instanceof Error ? installError.message : String(installError);
+      debugLog(`npm install failed: ${errorMessage}`);
+      throw new Error(`Failed to install dependencies: ${errorMessage}`);
     }
 
     // Create a tsconfig.json file with very permissive settings to effectively skip type checking
@@ -450,19 +455,19 @@ export async function compileTypeScriptScraper(
           };
         }
       }
-    } catch (tscError: any) {
-      let errorMessage = tscError.message;
+    } catch (tscError: unknown) {
+      let errorMessage = tscError instanceof Error ? tscError.message : String(tscError);
       let stderrOutput = '';
 
       // Try to extract the stderr output
-      if (tscError.stderr) {
-        stderrOutput = tscError.stderr.toString().trim();
+      if (tscError && typeof tscError === 'object' && 'stderr' in tscError) {
+        stderrOutput = String(tscError.stderr).trim();
         debugLog(`Compilation errors:\n${stderrOutput}`);
         errorMessage = stderrOutput || errorMessage;
       }
 
       // If stderr is empty, just use the error message directly
-      if (!stderrOutput && tscError.message) {
+      if (!stderrOutput && tscError instanceof Error && tscError.message) {
         errorMessage = tscError.message;
         debugLog(`Error message: ${errorMessage}`);
       }
@@ -474,12 +479,13 @@ export async function compileTypeScriptScraper(
         tempDir
       };
     }
-  } catch (error: any) {
-    debugLog(`Error during TypeScript compilation: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    debugLog(`Error during TypeScript compilation: ${errorMessage}`);
     return {
       success: false,
       outputPath: null,
-      error: `Error during TypeScript compilation: ${error.message}`,
+      error: `Error during TypeScript compilation: ${errorMessage}`,
       tempDir
     };
   }
@@ -496,7 +502,8 @@ export async function cleanupCompilation(tempDir: string): Promise<void> {
       await fsPromises.rm(tempDir, { recursive: true, force: true });
       debugLog(`Temporary directory removed: ${tempDir}`);
     }
-  } catch (error: any) {
-    debugLog(`Error cleaning up temporary directory: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    debugLog(`Error cleaning up temporary directory: ${errorMessage}`);
   }
 }

@@ -6,17 +6,42 @@ interface SyncResult {
   productsUpdated: number;
   productsCreated: number;
   errorMessage?: string;
-  logDetails?: Record<string, any>[];
+  logDetails?: Record<string, unknown>[];
+}
+
+interface SupabaseQueryBuilder {
+  select: (columns?: string) => SupabaseQueryBuilder;
+  insert: (data: unknown) => SupabaseQueryBuilder;
+  update: (data: Record<string, unknown>) => SupabaseQueryBuilder;
+  eq: (column: string, value: unknown) => SupabaseQueryBuilder;
+  single: () => Promise<{ data: unknown; error: unknown }>;
+  then: (callback: (result: { data: unknown; error: unknown }) => void) => Promise<void>;
+  catch: (callback: (error: unknown) => void) => Promise<void>;
+}
+
+interface SupabaseClient {
+  from: (table: string) => SupabaseQueryBuilder;
+  rpc: (fn: string, params?: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+}
+
+interface Integration {
+  id: string;
+  platform: string;
+  api_url: string;
+  api_key: string;
+  configuration?: {
+    activeOnly?: boolean;
+  };
 }
 
 export class IntegrationSyncService {
   private userId: string;
   private integrationId: string;
   private runId: string;
-  private supabase: any;
-  private logs: Record<string, any>[] = [];
+  private supabase: SupabaseClient;
+  private logs: Record<string, unknown>[] = [];
 
-  constructor(userId: string, integrationId: string, runId: string, supabase: any) {
+  constructor(userId: string, integrationId: string, runId: string, supabase: SupabaseClient) {
     this.userId = userId;
     this.integrationId = integrationId;
     this.runId = runId;
@@ -26,7 +51,7 @@ export class IntegrationSyncService {
   /**
    * Log a message during the sync process
    */
-  private log(level: string, phase: string, message: string, data?: any): void {
+  private log(level: string, phase: string, message: string, data?: unknown): void {
     const logEntry = {
       timestamp: new Date().toISOString(),
       level,
@@ -46,7 +71,7 @@ export class IntegrationSyncService {
       })
       .eq('id', this.runId)
       .then(() => {})
-      .catch((error: any) => {
+      .catch((error: unknown) => {
         console.error('Error updating run logs:', error);
       });
   }
@@ -63,7 +88,7 @@ export class IntegrationSyncService {
     },
     errorMessage?: string
   ): Promise<void> {
-    const updateData: Record<string, any> = { status };
+    const updateData: Record<string, unknown> = { status };
 
     if (status === 'processing') {
       updateData.started_at = new Date().toISOString();
@@ -107,7 +132,7 @@ export class IntegrationSyncService {
   /**
    * Execute the sync process for a Prestashop integration using the staged approach
    */
-  private async syncPrestashop(integration: any): Promise<SyncResult> {
+  private async syncPrestashop(integration: Integration): Promise<SyncResult> {
     let productsProcessed = 0;
     let productsUpdated = 0;
     let productsCreated = 0;
@@ -248,7 +273,7 @@ export class IntegrationSyncService {
   /**
    * Process a batch of products
    */
-  private async processProductBatch(batch: any[], batchNumber: number, totalBatches: number | string): Promise<void> {
+  private async processProductBatch(batch: Record<string, unknown>[], batchNumber: number, totalBatches: number | string): Promise<void> {
     this.log('info', 'BATCH_PROCESSING', `Processing batch ${batchNumber}/${totalBatches} (${batch.length} products)`);
 
     // Prepare the batch for insertion

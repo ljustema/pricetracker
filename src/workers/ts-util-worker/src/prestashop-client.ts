@@ -5,11 +5,11 @@ export interface PrestashopApiResponse {
   prestashop: {
     products?: {
       $?: { count: string };
-      product?: any | any[];
+      product?: Record<string, unknown> | Record<string, unknown>[];
     };
-    product?: any;
+    product?: Record<string, unknown>;
     currencies?: { // Added currencies property
-      currency?: any | any[]; // Structure for currency response
+      currency?: Record<string, unknown> | Record<string, unknown>[]; // Structure for currency response
     };
     [key: string]: unknown;
   };
@@ -850,7 +850,7 @@ private async getDefaultCurrency(): Promise<string> {
   /**
    * Safely extract string value from any object structure
    */
-  private getStringValue(obj: any): string {
+  private getStringValue(obj: unknown): string {
     if (obj === null || obj === undefined) {
       return '';
     }
@@ -892,7 +892,7 @@ private async getDefaultCurrency(): Promise<string> {
   /**
    * Safely extract a numeric value
    */
-  private getNumberValue(obj: any, defaultValue: number = 0): number {
+  private getNumberValue(obj: unknown, defaultValue: number = 0): number {
     const stringValue = this.getStringValue(obj);
     if (stringValue === '') return defaultValue;
 
@@ -910,7 +910,7 @@ private async getDefaultCurrency(): Promise<string> {
     const defaultCurrency = await this.getDefaultCurrency();
 
     // Handle different response structures
-    let productData: any[] = [];
+    let productData: Record<string, unknown>[] = [];
 
     if (response.prestashop && response.prestashop.products && response.prestashop.products.product) {
       // Standard response with products list
@@ -1620,7 +1620,7 @@ private async getDefaultCurrency(): Promise<string> {
   /**
    * Calculate the final price for a product including discounts and taxes
    */
-  private async calculateFinalPrice(product: any): Promise<number> {
+  private async calculateFinalPrice(product: Record<string, unknown>): Promise<number> {
     try {
       const id = this.getStringValue(product.id);
 
@@ -1642,19 +1642,22 @@ private async getDefaultCurrency(): Promise<string> {
       let bestReductionType = '';
 
       if (specificPricesResponse?.prestashop) {
-        const prestashop = specificPricesResponse.prestashop as any;
-        if (prestashop.specific_prices?.specific_price) {
-          const specificPriceIds: string[] = [];
+        const prestashop = specificPricesResponse.prestashop as Record<string, unknown>;
+        if (prestashop.specific_prices && typeof prestashop.specific_prices === 'object' && prestashop.specific_prices !== null) {
+          const specificPrices = prestashop.specific_prices as Record<string, unknown>;
+          if (specificPrices.specific_price) {
+            const specificPriceIds: string[] = [];
 
-          // Gather all specific price IDs
-          if (Array.isArray(prestashop.specific_prices.specific_price)) {
-            prestashop.specific_prices.specific_price.forEach((sp: any) => {
-              specificPriceIds.push(this.getStringValue(sp.id || sp));
-            });
-          } else {
-            const specificPrice = prestashop.specific_prices.specific_price as any;
-            specificPriceIds.push(this.getStringValue(specificPrice.id || specificPrice));
-          }
+            // Gather all specific price IDs
+            if (Array.isArray(specificPrices.specific_price)) {
+              specificPrices.specific_price.forEach((sp: unknown) => {
+                const spObj = sp as Record<string, unknown>;
+                specificPriceIds.push(this.getStringValue(spObj.id || sp));
+              });
+            } else {
+              const specificPrice = specificPrices.specific_price as Record<string, unknown>;
+              specificPriceIds.push(this.getStringValue(specificPrice.id || specificPrice));
+            }
 
           console.log(`Found ${specificPriceIds.length} specific prices for product ${id}`);
 
@@ -1665,7 +1668,7 @@ private async getDefaultCurrency(): Promise<string> {
             const specificPriceResponse = await this.makeRequest(`specific_prices/${specificPriceId}`, false);
 
             if (specificPriceResponse?.prestashop?.specific_price) {
-              const specificPrice = specificPriceResponse.prestashop.specific_price as any;
+              const specificPrice = specificPriceResponse.prestashop.specific_price as Record<string, unknown>;
 
               const reductionType = this.getStringValue(specificPrice.reduction_type);
               const reduction = this.getNumberValue(specificPrice.reduction);
@@ -1724,29 +1727,31 @@ private async getDefaultCurrency(): Promise<string> {
           const taxRulesResponse = await this.makeRequest(`tax_rules?filter[id_tax_rules_group]=${taxRuleGroupId}`, false);
 
           if (taxRulesResponse?.prestashop) {
-            const prestashop = taxRulesResponse.prestashop as any;
-            if (prestashop.tax_rules?.tax_rule) {
-              let firstTaxRuleId;
+            const prestashop = taxRulesResponse.prestashop as Record<string, unknown>;
+            if (prestashop.tax_rules && typeof prestashop.tax_rules === 'object' && prestashop.tax_rules !== null) {
+              const taxRules = prestashop.tax_rules as Record<string, unknown>;
+              if (taxRules.tax_rule) {
+                let firstTaxRuleId;
 
-              if (Array.isArray(prestashop.tax_rules.tax_rule)) {
-                const taxRule = prestashop.tax_rules.tax_rule[0] as any;
-                firstTaxRuleId = this.getStringValue(taxRule.id || taxRule);
-              } else {
-                const taxRule = prestashop.tax_rules.tax_rule as any;
-                firstTaxRuleId = this.getStringValue(taxRule.id || taxRule);
-              }
+                if (Array.isArray(taxRules.tax_rule)) {
+                  const taxRule = taxRules.tax_rule[0] as Record<string, unknown>;
+                  firstTaxRuleId = this.getStringValue(taxRule.id || taxRule);
+                } else {
+                  const taxRule = taxRules.tax_rule as Record<string, unknown>;
+                  firstTaxRuleId = this.getStringValue(taxRule.id || taxRule);
+                }
 
               if (firstTaxRuleId) {
                 const taxRuleResponse = await this.makeRequest(`tax_rules/${firstTaxRuleId}`, false);
 
                 if (taxRuleResponse?.prestashop?.tax_rule) {
-                  const taxRule = taxRuleResponse.prestashop.tax_rule as any;
+                  const taxRule = taxRuleResponse.prestashop.tax_rule as Record<string, unknown>;
                   if (taxRule.id_tax) {
                     const taxId = this.getStringValue(taxRule.id_tax);
 
                     const taxResponse = await this.makeRequest(`taxes/${taxId}`, false);
                     if (taxResponse?.prestashop?.tax) {
-                      const tax = taxResponse.prestashop.tax as any;
+                      const tax = taxResponse.prestashop.tax as Record<string, unknown>;
                       if (tax.rate) {
                         taxRate = this.getNumberValue(tax.rate) / 100;
                         console.log(`Found tax rate: ${taxRate * 100}%`);

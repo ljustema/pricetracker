@@ -57,7 +57,7 @@ interface ProductMatchingStatus {
 }
 
 // Custom tooltip for trends chart
-const TrendsTooltip = ({ active, payload, label }: any) => {
+const TrendsTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { product_name: string; overall_change_percentage: number; first_price: number; last_price: number; total_changes: number; last_changed_at: string } }>; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -87,7 +87,7 @@ const TrendsTooltip = ({ active, payload, label }: any) => {
 };
 
 // Custom tooltip for sensitivity chart
-const SensitivityTooltip = ({ active, payload, label }: any) => {
+const SensitivityTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { product_name: string; count: number; our_price?: number } }>; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (

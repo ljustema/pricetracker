@@ -264,7 +264,7 @@ export class ScraperAnalysisService {
           const sitemapXml = cheerio.load(sitemapContent, { xmlMode: true });
 
           // Look for <sitemap> elements with <loc> children
-          sitemapXml('sitemap loc').each((_: number, element: any) => {
+          sitemapXml('sitemap loc').each((_: number, element: unknown) => {
             const childSitemapUrl = sitemapXml(element).text().trim();
             if (childSitemapUrl && !sitemapUrls.includes(childSitemapUrl)) {
               console.log(`Found child sitemap: ${childSitemapUrl}`);
@@ -287,8 +287,7 @@ export class ScraperAnalysisService {
    * @param $ The Cheerio instance for the website's HTML
    * @returns An array of brand page URLs
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private static async findBrandPages(url: string, $: any): Promise<string[]> {
+  private static async findBrandPages(url: string, $: cheerio.CheerioAPI): Promise<string[]> {
     const brandPages: string[] = [];
     const baseUrl = getBaseUrl(url);
 
@@ -338,8 +337,7 @@ export class ScraperAnalysisService {
 
     // Try each pattern
     for (const pattern of brandPatterns) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      $(pattern).each((_: number, element: any) => {
+      $(pattern).each((_: number, element: unknown) => {
         const href = $(element).attr('href');
         if (href && !href.includes('javascript:') && !href.startsWith('#')) {
           try {
@@ -355,8 +353,7 @@ export class ScraperAnalysisService {
     }
 
     // Check for brand pages in the footer
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    $('footer a, .footer a').each((_: number, element: any) => {
+    $('footer a, .footer a').each((_: number, element: unknown) => {
       const href = $(element).attr('href');
       const text = $(element).text().toLowerCase();
 
@@ -396,8 +393,7 @@ export class ScraperAnalysisService {
 
             // Look for brand links in the category page
             for (const pattern of brandPatterns) {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              $category(pattern).each((_: number, element: any) => {
+              $category(pattern).each((_: number, element: unknown) => {
                 const href = $category(element).attr('href');
                 if (href && !href.includes('javascript:') && !href.startsWith('#')) {
                   try {
@@ -430,8 +426,7 @@ export class ScraperAnalysisService {
    * @param providedCategoryPageUrl Optional user-provided category page URL
    * @returns An array of category page URLs
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private static async findCategoryPages(url: string, $: any, providedCategoryPageUrl?: string): Promise<string[]> {
+  private static async findCategoryPages(url: string, $: cheerio.CheerioAPI, providedCategoryPageUrl?: string): Promise<string[]> {
     const categoryPages: string[] = [];
     const baseUrl = getBaseUrl(url);
 
@@ -472,8 +467,7 @@ export class ScraperAnalysisService {
 
     // Try each pattern
     for (const pattern of categoryPatterns) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      $(pattern).each((_: number, element: any) => {
+      $(pattern).each((_: number, element: unknown) => {
         const href = $(element).attr('href');
         if (href && !href.includes('javascript:') && !href.startsWith('#')) {
           try {
@@ -503,8 +497,7 @@ export class ScraperAnalysisService {
    * @param providedProductPageUrl Optional user-provided product page URL
    * @returns An array of product page URLs
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private static async findProductPages(url: string, $: any, providedProductPageUrl?: string): Promise<string[]> {
+  private static async findProductPages(url: string, $: cheerio.CheerioAPI, providedProductPageUrl?: string): Promise<string[]> {
     const productPages: string[] = [];
     const baseUrl = getBaseUrl(url);
 
@@ -559,8 +552,7 @@ export class ScraperAnalysisService {
           const sitemapXml = cheerio.load(sitemapContent, { xmlMode: true });
 
           // Look for <url> elements with <loc> children (standard sitemap format)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          sitemapXml('url loc').each((_: number, element: any) => {
+          sitemapXml('url loc').each((_: number, element: unknown) => {
             const productUrl = sitemapXml(element).text().trim();
 
             // Check if this looks like a product URL (contains product-related keywords)
@@ -623,8 +615,7 @@ export class ScraperAnalysisService {
 
       // Try each pattern
       for (const pattern of productPatterns) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        $(pattern).each((_: number, element: any) => {
+        $(pattern).each((_: number, element: unknown) => {
           const href = $(element).attr('href');
           if (href && !href.includes('javascript:') && !href.startsWith('#')) {
             try {
@@ -688,8 +679,7 @@ export class ScraperAnalysisService {
 
             // Look for product links in the category page
             for (const pattern of categoryProductPatterns) {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              $category(pattern).each((_: number, element: any) => {
+              $category(pattern).each((_: number, element: unknown) => {
                 const href = $category(element).attr('href');
                 if (href && !href.includes('javascript:') && !href.startsWith('#')) {
                   try {
@@ -746,8 +736,7 @@ export class ScraperAnalysisService {
 
     // Look for common API patterns in script tags
     const scriptContents: string[] = [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    $('script').each((_: number, element: any) => {
+    $('script').each((_: number, element: unknown) => {
       const content = $(element).html();
       if (content) {
         scriptContents.push(content);

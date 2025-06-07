@@ -45,7 +45,7 @@ export function debugLog(message: string): void {
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-let supabase: any = null;
+let supabase: ReturnType<typeof createClient> | null = null;
 
 if (supabaseUrl && supabaseServiceRoleKey) {
   supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
@@ -55,7 +55,7 @@ if (supabaseUrl && supabaseServiceRoleKey) {
 }
 
 // Function to directly log to the database
-export async function logToDatabase(runId: string, message: string, data: any = null): Promise<void> {
+export async function logToDatabase(runId: string, message: string, data: unknown = null): Promise<void> {
   if (!supabase) {
     debugLog(`Cannot log to database: Supabase client not initialized`);
     return;

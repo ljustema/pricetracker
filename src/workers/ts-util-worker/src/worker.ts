@@ -25,8 +25,8 @@ if (!supabaseUrl || !supabaseServiceRoleKey) {
 
 console.log('Using Supabase URL:', supabaseUrl);
 
-// Using `any` for now as Database types are not available, but defining RPC return type
-const supabase = createClient<any>(supabaseUrl, supabaseServiceRoleKey);
+// Using unknown for database types as specific types are not available
+const supabase = createClient<unknown>(supabaseUrl, supabaseServiceRoleKey);
 
 // Type for the data returned by the claim_next_integration_job RPC
 interface ClaimedIntegrationJobData {
@@ -38,12 +38,12 @@ interface ClaimedIntegrationJobData {
   started_at: string | null; // TIMESTAMPTZ
   completed_at: string | null; // TIMESTAMPTZ
   error_message: string | null;
-  log_details: any | null; // JSONB
+  log_details: Record<string, unknown> | null; // JSONB
   products_processed: number | null;
   products_updated: number | null;
   products_created: number | null;
-  test_products: any | null; // JSONB
-  configuration: any | null; // JSONB
+  test_products: Record<string, unknown>[] | null; // JSONB
+  configuration: Record<string, unknown> | null; // JSONB
 }
 
 const POLLING_INTERVAL_MS = 30000; // Poll every 30 seconds (reduced from 5 seconds)
@@ -58,7 +58,7 @@ interface SyncResult {
   productsUpdated: number;
   productsCreated: number;
   errorMessage?: string;
-  logDetails?: Record<string, any>[];
+  logDetails?: Record<string, unknown>[];
 }
 
 // Track last poll message time and job time
@@ -72,7 +72,7 @@ let currentJobId: string | null = null;
 
 // Function to fetch and process integration jobs
 async function fetchAndProcessIntegrationJob() {
-  let job: any = null; // Define job variable in the outer scope for the catch block
+  let job: ClaimedIntegrationJobData | null = null; // Define job variable in the outer scope for the catch block
 
   try {
     // RACE CONDITION PROTECTION: Skip if already processing a job
@@ -293,7 +293,7 @@ async function fetchAndProcessIntegrationJob() {
 }
 
 // Function to log structured messages
-function logStructured(level: string, phase: string, message: string, data?: any) {
+function logStructured(level: string, phase: string, message: string, data?: unknown) {
   const timestamp = new Date();
   const logEntry = {
     ts: timestamp.toISOString(),

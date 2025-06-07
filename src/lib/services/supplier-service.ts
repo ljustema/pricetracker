@@ -18,7 +18,7 @@ export interface Supplier {
   login_url?: string;
   price_file_url?: string;
   // Configuration for automation
-  scraping_config?: any;
+  scraping_config?: Record<string, unknown>;
   sync_frequency?: 'daily' | 'weekly' | 'monthly' | 'manual';
   last_sync_at?: string;
   last_sync_status?: string;

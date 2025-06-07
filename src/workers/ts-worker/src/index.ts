@@ -14,7 +14,7 @@ debugLog('TypeScript worker started with debug logging enabled');
 import type { Database } from './database.types';
 
 // Lazy loading functions for heavy dependencies
-let supabaseClient: any = null;
+let supabaseClient: ReturnType<typeof import('@supabase/supabase-js').createClient> | null = null;
 
 async function getSupabaseClient() {
   if (!supabaseClient) {
@@ -43,7 +43,7 @@ interface ClaimedJobData {
   started_at: string | null; // TIMESTAMPTZ
   completed_at: string | null; // TIMESTAMPTZ
   error_message: string | null;
-  error_details: any | null; // JSONB
+  error_details: Record<string, unknown> | null; // JSONB
   product_count: number | null;
   is_test_run: boolean | null;
   is_validation_run: boolean | null;
@@ -140,7 +140,7 @@ let isProcessingJob = false;
 let currentJobId: string | null = null;
 
 async function fetchAndProcessJob() {
-  let job: any = null; // Define job variable in the outer scope for the catch block
+  let job: ClaimedJobData | null = null; // Define job variable in the outer scope for the catch block
 
   try {
     // RACE CONDITION PROTECTION: Skip if already processing a job
@@ -244,8 +244,8 @@ async function fetchAndProcessJob() {
         if (brandError) {
             logStructured(job.id, 'warn', 'SETUP', `Failed to fetch active brands: ${brandError.message}. Proceeding without brand filter.`);
         } else if (brands) {
-            activeBrandNames = brands.map((b: any) => b.name);
-            activeBrandIds = brands.map((b: any) => b.id);
+            activeBrandNames = brands.map((b: { name: string }) => b.name);
+            activeBrandIds = brands.map((b: { id: string }) => b.id);
             logStructured(job.id, 'info', 'SETUP', `Fetched ${activeBrandNames.length} active brands.`);
         }
     }
@@ -261,13 +261,13 @@ async function fetchAndProcessJob() {
         if (productError) {
             logStructured(job.id, 'warn', 'SETUP', `Failed to fetch own products: ${productError.message}. Proceeding without own product filter.`);
         } else if (products) {
-            ownProductEans = products.map((p: any) => p.ean).filter((ean: any): ean is string => !!ean);
+            ownProductEans = products.map((p: { ean?: string }) => p.ean).filter((ean: string | undefined): ean is string => !!ean);
             ownProductSkuBrands = products
-                .filter((p: any) => p.sku && (p.brand || p.brand_id))
-                .map((p: any) => ({
-                    sku: p.sku as string,
-                    brand: p.brand as string,
-                    brand_id: p.brand_id as string
+                .filter((p: { sku?: string; brand?: string; brand_id?: string }) => p.sku && (p.brand || p.brand_id))
+                .map((p: { sku: string; brand?: string; brand_id?: string }) => ({
+                    sku: p.sku,
+                    brand: p.brand || '',
+                    brand_id: p.brand_id || ''
                 }));
             logStructured(job.id, 'info', 'SETUP', `Fetched ${ownProductEans.length} EANs and ${ownProductSkuBrands.length} SKU/Brand pairs.`);
         }
@@ -280,7 +280,7 @@ async function fetchAndProcessJob() {
     let productCount = 0;
     const productsBuffer: ScrapedProductData[] = [];
     let tmpScriptPath: string | null = null;
-    let compilationResult: any = null; // Store compilation result for cleanup
+    let compilationResult: { success: boolean; outputPath?: string; error?: string; tempDir?: string } | null = null; // Store compilation result for cleanup
     const startTime = Date.now();
 
     try {
@@ -455,8 +455,9 @@ async function fetchAndProcessJob() {
                                     } else {
                                         logStructured(job.id, 'info', 'PRODUCT_COUNT_UPDATE', `Updated product count to ${productCount}`);
                                     }
-                                } catch (err: any) {
-                                    logStructured(job.id, 'error', 'PRODUCT_COUNT_UPDATE', `Error updating product count: ${err.message}`);
+                                } catch (err: unknown) {
+                                    const errorMessage = err instanceof Error ? err.message : String(err);
+                                    logStructured(job.id, 'error', 'PRODUCT_COUNT_UPDATE', `Error updating product count: ${errorMessage}`);
                                 }
                             }
 
@@ -515,8 +516,9 @@ async function fetchAndProcessJob() {
                                 } else {
                                     logStructured(job.id, 'info', 'PHASE_UPDATE', `Updated current phase to ${phase}`);
                                 }
-                            } catch (err: any) {
-                                logStructured(job.id, 'error', 'PHASE_UPDATE', `Error updating phase: ${err.message}`);
+                            } catch (err: unknown) {
+                                const errorMessage = err instanceof Error ? err.message : String(err);
+                                logStructured(job.id, 'error', 'PHASE_UPDATE', `Error updating phase: ${errorMessage}`);
                             }
                         }
                     }
@@ -542,8 +544,9 @@ async function fetchAndProcessJob() {
                                 } else {
                                     logStructured(job.id, 'info', 'BATCH_UPDATE', `Updated batch progress to ${currentBatch}/${totalBatches}`);
                                 }
-                            } catch (err: any) {
-                                logStructured(job.id, 'error', 'BATCH_UPDATE', `Error updating batch progress: ${err.message}`);
+                            } catch (err: unknown) {
+                                const errorMessage = err instanceof Error ? err.message : String(err);
+                                logStructured(job.id, 'error', 'BATCH_UPDATE', `Error updating batch progress: ${errorMessage}`);
                             }
                         }
                     }
@@ -729,8 +732,9 @@ async function fetchAndProcessJob() {
                     } else {
                         logStructured(job.id, 'info', 'PRODUCT_COUNT_UPDATE', `Updated final product count to ${productCount}`);
                     }
-                } catch (err: any) {
-                    logStructured(job.id, 'error', 'PRODUCT_COUNT_UPDATE', `Error updating final product count: ${err.message}`);
+                } catch (err: unknown) {
+                    const errorMessage = err instanceof Error ? err.message : String(err);
+                    logStructured(job.id, 'error', 'PRODUCT_COUNT_UPDATE', `Error updating final product count: ${errorMessage}`);
                 }
 
                 if (code === 0) {
@@ -805,11 +809,12 @@ async function fetchAndProcessJob() {
             });
         });
 
-    } catch (err: any) {
+    } catch (err: unknown) {
         finalStatus = 'failed';
-        errorMessage = `Worker error during job processing: ${err.message}`;
-        errorDetails = err.stack || null;
-        logStructured(job.id, 'error', 'JOB_PROCESSING', errorMessage, { stack: err.stack });
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        errorMessage = `Worker error during job processing: ${errorMsg}`;
+        errorDetails = err instanceof Error ? err.stack || null : null;
+        logStructured(job.id, 'error', 'JOB_PROCESSING', errorMessage, { stack: err instanceof Error ? err.stack : null });
     } finally {
         // Cleanup temporary files
         if (tmpScriptPath) {
@@ -837,7 +842,7 @@ async function fetchAndProcessJob() {
                         logStructured(job.id, 'warn', 'CLEANUP', `Error removing temporary script: ${unlinkError instanceof Error ? unlinkError.message : String(unlinkError)}`);
                     }
                 }
-            } catch (cleanupError: any) {
+            } catch (cleanupError: unknown) {
                 const errorMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
                 logStructured(job.id, 'warn', 'CLEANUP', `Error cleaning up temporary files: ${errorMessage}`);
                 debugLog(`Error cleaning up temporary files for job ${job.id}: ${errorMessage}`);
@@ -851,7 +856,7 @@ async function fetchAndProcessJob() {
 
     try {
         // Create update object
-        const updateData: any = {
+        const updateData: Record<string, unknown> = {
             status: finalStatus,
             completed_at: new Date().toISOString(),
             product_count: productCount,
@@ -878,8 +883,9 @@ async function fetchAndProcessJob() {
             .eq('id', job.id);
 
         logStructured(job.id, 'info', 'COMPLETION', `Job final status updated to: ${finalStatus}.`);
-    } catch (updateError: any) {
-         logStructured(job.id, 'error', 'JOB_STATUS_UPDATE', `Critical error updating final job status: ${updateError.message}`);
+    } catch (updateError: unknown) {
+         const errorMessage = updateError instanceof Error ? updateError.message : String(updateError);
+         logStructured(job.id, 'error', 'JOB_STATUS_UPDATE', `Critical error updating final job status: ${errorMessage}`);
 
          // Try to log the error details separately if the main update failed
          if (errorDetails && job.id) {
@@ -1005,7 +1011,7 @@ try {
 
 // Message batching system to reduce database load
 interface LogBatch {
-    messages: any[];
+    messages: Record<string, unknown>[];
     lastFlushTime: number;
     timer: NodeJS.Timeout | null;
 }
@@ -1017,7 +1023,7 @@ const MAX_PROGRESS_MESSAGES = 100; // Maximum progress messages to keep (prevent
 const IMPORTANT_PHASES = ['ERROR', 'ERROR_DETAILS', 'COMPLETION', 'JOB_CLAIMED', 'PHASE_UPDATE']; // These phases get flushed immediately
 
 // Function to flush a batch of log messages to the database
-async function flushLogBatch(jobId: string, supabaseClient?: any) {
+async function flushLogBatch(jobId: string, supabaseClient?: ReturnType<typeof import('@supabase/supabase-js').createClient>) {
     if (!LOG_BATCHES[jobId] || LOG_BATCHES[jobId].messages.length === 0) return;
 
     const batch = LOG_BATCHES[jobId];
@@ -1096,7 +1102,7 @@ async function flushLogBatch(jobId: string, supabaseClient?: any) {
     }
 }
 
-function logStructured(jobId: string | null, level: string, phase: string, message: string, data?: any) { // Allow null jobId for worker-level logs
+function logStructured(jobId: string | null, level: string, phase: string, message: string, data?: unknown) { // Allow null jobId for worker-level logs
   const timestamp = new Date();
   const logEntry = {
     ts: timestamp.toISOString(),
@@ -1179,7 +1185,7 @@ $$;
 
 
 // --- Function to save scraped products ---
-async function saveScrapedProducts(runId: string, userId: string, competitorId: string | undefined, products: ScrapedProductData[], supabaseClient?: any) {
+async function saveScrapedProducts(runId: string, userId: string, competitorId: string | undefined, products: ScrapedProductData[], supabaseClient?: ReturnType<typeof import('@supabase/supabase-js').createClient>) {
     if (!products || products.length === 0) return;
 
     // Check if competitorId is provided

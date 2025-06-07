@@ -6,12 +6,37 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import fs from 'fs';
 import path from 'path';
 
+interface ScraperRunData {
+  id: string;
+  scraper_id: string;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  product_count: number | null;
+  current_batch: number | null;
+  total_batches: number | null;
+  error_message: string | null;
+  error_details: string | null;
+  current_phase: number | null;
+  claimed_by_worker_at: string | null;
+  progress_messages: unknown;
+}
+
+interface ProgressMessage {
+  phase?: string;
+  lvl?: string;
+  msg?: string;
+  data?: {
+    error_details?: string;
+  };
+}
+
 /**
  * Get recent progress messages from the database
  * This optimized version only gets messages from the progress_messages array in the scraper_runs table
  * which is more efficient than querying separate logs or reading log files
  */
-async function getRecentProgressMessages(runId: string, limit: number = 10, runData: any = null): Promise<string[]> {
+async function getRecentProgressMessages(runId: string, limit: number = 10, runData: ScraperRunData | null = null): Promise<string[]> {
   try {
     // If we already have the run data with progress_messages, use that
     if (runData && runData.progress_messages) {
@@ -300,8 +325,8 @@ export async function GET(
         if (Array.isArray(messagesArray)) {
           // Look for error details in progress_messages
           // First look for ERROR_DETAILS phase
-          const errorDetailsEntry = messagesArray.find((msg: any) =>
-            (typeof msg === 'object' && msg.phase === 'ERROR_DETAILS') ||
+          const errorDetailsEntry = messagesArray.find((msg: unknown) =>
+            (typeof msg === 'object' && msg !== null && (msg as ProgressMessage).phase === 'ERROR_DETAILS') ||
             (typeof msg === 'string' && msg.includes('"phase": "ERROR_DETAILS"'))
           );
 
@@ -321,14 +346,14 @@ export async function GET(
           }
           // If no specific ERROR_DETAILS entry, look for any error entries
           else {
-            const errorEntries = messagesArray.filter((msg: any) =>
-              (typeof msg === 'object' && msg.lvl === 'ERROR') ||
+            const errorEntries = messagesArray.filter((msg: unknown) =>
+              (typeof msg === 'object' && msg !== null && (msg as ProgressMessage).lvl === 'ERROR') ||
               (typeof msg === 'string' && msg.includes('"lvl": "ERROR"'))
             );
 
             if (errorEntries.length > 0) {
               // Combine error messages
-              const errorMessages = errorEntries.map((entry: any) => {
+              const errorMessages = errorEntries.map((entry: unknown) => {
                 try {
                   const parsedEntry = typeof entry === 'string' ? JSON.parse(entry) : entry;
                   return parsedEntry.msg || JSON.stringify(parsedEntry);

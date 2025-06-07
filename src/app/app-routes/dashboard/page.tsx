@@ -173,7 +173,7 @@ export default async function DashboardPage() {
   // Create a map of competitor_id to stats for quick lookup
   const statsMap = new Map<string, { product_count: number, brand_count: number }>();
   if (competitorStatsData) {
-    competitorStatsData.forEach((stat: any) => {
+    competitorStatsData.forEach((stat: { competitor_id: string; product_count: number; brand_count: number }) => {
       statsMap.set(stat.competitor_id, {
         product_count: stat.product_count || 0,
         brand_count: stat.brand_count || 0

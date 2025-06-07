@@ -5,6 +5,22 @@ import crypto from 'crypto';
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { BrandService } from "@/lib/services/brand-service";
 
+interface ProductUpdateData {
+  name: string;
+  updated_at: string;
+  sku?: string;
+  ean?: string;
+  brand?: string;
+  brand_id?: string | null;
+  category?: string;
+  description?: string;
+  image_url?: string;
+  url?: string;
+  currency_code?: string;
+  our_retail_price?: number;
+  our_wholesale_price?: number;
+}
+
 export async function POST(req: NextRequest) {
   try {
     // Check authentication
@@ -217,7 +233,7 @@ export async function POST(req: NextRequest) {
 
       if (productId) {
         // Update existing product
-        const updateData: any = {
+        const updateData: ProductUpdateData = {
           name: row.name,
           updated_at: now,
         };
