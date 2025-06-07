@@ -5,14 +5,47 @@ export interface PrestashopApiResponse {
   prestashop: {
     products?: {
       $?: { count: string };
-      product?: Record<string, unknown> | Record<string, unknown>[];
+      product?: PrestashopRawProduct | PrestashopRawProduct[];
     };
-    product?: Record<string, unknown>;
+    product?: PrestashopRawProduct;
     currencies?: { // Added currencies property
       currency?: Record<string, unknown> | Record<string, unknown>[]; // Structure for currency response
     };
+    specific_prices?: {
+      specific_price?: Record<string, unknown> | Record<string, unknown>[];
+    };
+    specific_price?: Record<string, unknown>;
     [key: string]: unknown;
   };
+}
+
+// Interface for raw product data from API
+export interface PrestashopRawProduct {
+  id?: unknown;
+  name?: unknown;
+  price?: unknown;
+  wholesale_price?: unknown;
+  reference?: unknown;
+  supplier_reference?: unknown;
+  ean13?: unknown;
+  manufacturer_name?: unknown;
+  image_url?: unknown;
+  active?: unknown;
+  id_default_image?: unknown;
+  link_rewrite?: string | { language?: unknown[] | unknown; [key: string]: unknown };
+  id_category_default?: unknown;
+  associations?: {
+    manufacturer?: {
+      manufacturer?: {
+        name?: unknown;
+      };
+    };
+    images?: {
+      image?: Array<{ id?: unknown; [key: string]: unknown }> | { id?: unknown; [key: string]: unknown };
+    };
+  };
+  $?: { id?: string };
+  [key: string]: unknown;
 }
 
 // Interface for the output product data
@@ -28,6 +61,7 @@ export interface PrestashopProduct {
   active?: boolean;
   currency_code: string; // Added currency code field
   product_url: string; // URL to the product on the Prestashop site
+  [key: string]: unknown; // Index signature for compatibility
 }
 
 export class PrestashopClient {
@@ -900,26 +934,48 @@ private async getDefaultCurrency(): Promise<string> {
     return isNaN(parsedValue) ? defaultValue : parsedValue;
   }
 
+  /**
+   * Safely extract link_rewrite value from product
+   */
+  private getLinkRewriteValue(linkRewrite: unknown): string {
+    if (typeof linkRewrite === 'string') {
+      return linkRewrite.trim();
+    }
+
+    if (typeof linkRewrite === 'object' && linkRewrite !== null) {
+      const linkObj = linkRewrite as { language?: unknown; [key: string]: unknown };
+      if (linkObj.language) {
+        if (Array.isArray(linkObj.language) && linkObj.language.length > 0) {
+          return this.getStringValue(linkObj.language[0]);
+        } else {
+          return this.getStringValue(linkObj.language);
+        }
+      }
+    }
+
+    return '';
+  }
+
   // Image URLs are now constructed directly in the parseProducts method
 
   /**
    * Parse the products from the API response
    */
-  private async parseProducts(response: PrestashopApiResponse): Promise<PrestashopProduct[]> {
+  private async parseProducts(response: PrestashopApiResponse | { prestashop: { products: { product: PrestashopProduct[] } } }): Promise<PrestashopProduct[]> {
     // Fetch the default currency code once for this batch
     const defaultCurrency = await this.getDefaultCurrency();
 
     // Handle different response structures
-    let productData: Record<string, unknown>[] = [];
+    let productData: PrestashopRawProduct[] = [];
 
     if (response.prestashop && response.prestashop.products && response.prestashop.products.product) {
       // Standard response with products list
       productData = Array.isArray(response.prestashop.products.product)
-        ? response.prestashop.products.product
-        : [response.prestashop.products.product];
-    } else if (response.prestashop && response.prestashop.product) {
+        ? response.prestashop.products.product as PrestashopRawProduct[]
+        : [response.prestashop.products.product as PrestashopRawProduct];
+    } else if (response.prestashop && 'product' in response.prestashop && response.prestashop.product) {
       // Single product response
-      productData = [response.prestashop.product];
+      productData = [response.prestashop.product as PrestashopRawProduct];
     } else {
       console.error('Invalid product response structure');
       return [];
@@ -978,18 +1034,7 @@ private async getDefaultCurrency(): Promise<string> {
             console.log(`Product ${id}: Found default image ID: ${imageId}`);
 
             // Get the link_rewrite value for the product (SEO-friendly URL name)
-            let linkRewrite = '';
-            if (product.link_rewrite) {
-              if (typeof product.link_rewrite === 'string') {
-                linkRewrite = product.link_rewrite.trim();
-              } else if (product.link_rewrite.language && product.link_rewrite.language.length > 0) {
-                // Try to get the first language value
-                linkRewrite = this.getStringValue(product.link_rewrite.language[0]);
-              } else if (product.link_rewrite.language) {
-                // If it's a single language object
-                linkRewrite = this.getStringValue(product.link_rewrite.language);
-              }
-            }
+            const linkRewrite = this.getLinkRewriteValue(product.link_rewrite);
 
             // For PrestaShop 1.7.6.x, construct the image URL directly
             const baseUrl = this.apiUrl.replace(/\/api\/?$/, '');
@@ -1014,24 +1059,13 @@ private async getDefaultCurrency(): Promise<string> {
             imageId = this.getStringValue(firstImage?.id);
           }
           // Handle single image
-          else if (product.associations.images.image.id) {
+          else if (!Array.isArray(product.associations.images.image) && product.associations.images.image.id) {
             imageId = this.getStringValue(product.associations.images.image.id);
           }
 
           if (imageId) {
             // Get the link_rewrite value for the product (SEO-friendly URL name)
-            let linkRewrite = '';
-            if (product.link_rewrite) {
-              if (typeof product.link_rewrite === 'string') {
-                linkRewrite = product.link_rewrite.trim();
-              } else if (product.link_rewrite.language && product.link_rewrite.language.length > 0) {
-                // Try to get the first language value
-                linkRewrite = this.getStringValue(product.link_rewrite.language[0]);
-              } else if (product.link_rewrite.language) {
-                // If it's a single language object
-                linkRewrite = this.getStringValue(product.link_rewrite.language);
-              }
-            }
+            const linkRewrite = this.getLinkRewriteValue(product.link_rewrite);
 
             // For PrestaShop 1.7.6.x, construct the image URL directly
             const baseUrl = this.apiUrl.replace(/\/api\/?$/, '');
@@ -1055,18 +1089,7 @@ private async getDefaultCurrency(): Promise<string> {
           const baseUrlWithoutTrailingSlash = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
 
           // Get the link_rewrite value for the product (SEO-friendly URL name)
-          let linkRewrite = '';
-          if (product.link_rewrite) {
-            if (typeof product.link_rewrite === 'string') {
-              linkRewrite = product.link_rewrite.trim();
-            } else if (product.link_rewrite.language && product.link_rewrite.language.length > 0) {
-              // Try to get the first language value
-              linkRewrite = this.getStringValue(product.link_rewrite.language[0]);
-            } else if (product.link_rewrite.language) {
-              // If it's a single language object
-              linkRewrite = this.getStringValue(product.link_rewrite.language);
-            }
-          }
+          const linkRewrite = this.getLinkRewriteValue(product.link_rewrite);
 
           // If no link_rewrite is provided, use a generic one
           const safeRewrite = linkRewrite || 'product';
@@ -1109,18 +1132,7 @@ private async getDefaultCurrency(): Promise<string> {
         let productUrl = '';
 
         // Get the link_rewrite value for the product (SEO-friendly URL name)
-        let linkRewrite = '';
-        if (product.link_rewrite) {
-          if (typeof product.link_rewrite === 'string') {
-            linkRewrite = product.link_rewrite.trim();
-          } else if (product.link_rewrite.language && product.link_rewrite.language.length > 0) {
-            // Try to get the first language value
-            linkRewrite = this.getStringValue(product.link_rewrite.language[0]);
-          } else if (product.link_rewrite.language) {
-            // If it's a single language object
-            linkRewrite = this.getStringValue(product.link_rewrite.language);
-          }
-        }
+        const linkRewrite = this.getLinkRewriteValue(product.link_rewrite);
 
         // Get the category ID if available
         let categoryId = '';
@@ -1705,6 +1717,7 @@ private async getDefaultCurrency(): Promise<string> {
           }
         }
       }
+      }
 
       // Apply the best discount
       let discountedPrice = basePrice;
@@ -1719,54 +1732,6 @@ private async getDefaultCurrency(): Promise<string> {
 
       // Get tax rate
       let taxRate = 0.25; // Standard 25% VAT
-      const taxRuleGroupId = this.getStringValue(product.id_tax_rules_group);
-
-      if (taxRuleGroupId) {
-        try {
-          // For simplicity, we use the first tax rule
-          const taxRulesResponse = await this.makeRequest(`tax_rules?filter[id_tax_rules_group]=${taxRuleGroupId}`, false);
-
-          if (taxRulesResponse?.prestashop) {
-            const prestashop = taxRulesResponse.prestashop as Record<string, unknown>;
-            if (prestashop.tax_rules && typeof prestashop.tax_rules === 'object' && prestashop.tax_rules !== null) {
-              const taxRules = prestashop.tax_rules as Record<string, unknown>;
-              if (taxRules.tax_rule) {
-                let firstTaxRuleId;
-
-                if (Array.isArray(taxRules.tax_rule)) {
-                  const taxRule = taxRules.tax_rule[0] as Record<string, unknown>;
-                  firstTaxRuleId = this.getStringValue(taxRule.id || taxRule);
-                } else {
-                  const taxRule = taxRules.tax_rule as Record<string, unknown>;
-                  firstTaxRuleId = this.getStringValue(taxRule.id || taxRule);
-                }
-
-              if (firstTaxRuleId) {
-                const taxRuleResponse = await this.makeRequest(`tax_rules/${firstTaxRuleId}`, false);
-
-                if (taxRuleResponse?.prestashop?.tax_rule) {
-                  const taxRule = taxRuleResponse.prestashop.tax_rule as Record<string, unknown>;
-                  if (taxRule.id_tax) {
-                    const taxId = this.getStringValue(taxRule.id_tax);
-
-                    const taxResponse = await this.makeRequest(`taxes/${taxId}`, false);
-                    if (taxResponse?.prestashop?.tax) {
-                      const tax = taxResponse.prestashop.tax as Record<string, unknown>;
-                      if (tax.rate) {
-                        taxRate = this.getNumberValue(tax.rate) / 100;
-                        console.log(`Found tax rate: ${taxRate * 100}%`);
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        } catch (error) {
-          console.error(`Error fetching tax rate: ${error}`);
-          // Continue with standard VAT
-        }
-      }
 
       // Calculate final price with VAT
       const finalPrice = discountedPrice * (1 + taxRate);

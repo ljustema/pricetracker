@@ -235,42 +235,40 @@ export default function ScraperList({
                       : (scraper.is_active ? "Deactivate" : "Activate")}
                   </button>
 
-                      {/* Run Now button for full scraper runs */}
-                      {runningId !== scraper.id && (
-                        <button
-                          type="button"
-                          onClick={() => handleRunScraper(scraper.id!)}
-                          className="inline-flex items-center rounded-md border border-transparent bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-                        >
-                          <PlayIcon className="h-4 w-4 mr-1" />
-                          Run Now
-                        </button>
-                      )}
-
-                      {/* Show progress when a full run is in progress */}
-                      {runningId === scraper.id && fullRunId && (
-                        <div className="flex-1 min-w-0 max-w-md">
-                          <div className="p-2 bg-gray-50 border border-gray-200 rounded-md">
-                            <h4 className="text-xs font-medium text-gray-700 mb-1">Full Run Progress</h4>
-                            <ScraperRunProgress
-                              scraperId={scraper.id!}
-                              runId={fullRunId}
-                              onComplete={handleFullRunComplete}
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => onViewLogs(scraper.id!)}
-                        className="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-                      >
-                        <ClockIcon className="h-4 w-4 mr-1" />
-                        Logs
-                      </button>
-                    </>
+                  {/* Run Now button for full scraper runs */}
+                  {runningId !== scraper.id && (
+                    <button
+                      type="button"
+                      onClick={() => handleRunScraper(scraper.id!)}
+                      className="inline-flex items-center rounded-md border border-transparent bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                    >
+                      <PlayIcon className="h-4 w-4 mr-1" />
+                      Run Now
+                    </button>
                   )}
+
+                  {/* Show progress when a full run is in progress */}
+                  {runningId === scraper.id && fullRunId && (
+                    <div className="flex-1 min-w-0 max-w-md">
+                      <div className="p-2 bg-gray-50 border border-gray-200 rounded-md">
+                        <h4 className="text-xs font-medium text-gray-700 mb-1">Full Run Progress</h4>
+                        <ScraperRunProgress
+                          scraperId={scraper.id!}
+                          runId={fullRunId}
+                          onComplete={handleFullRunComplete}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => onViewLogs(scraper.id!)}
+                    className="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                  >
+                    <ClockIcon className="h-4 w-4 mr-1" />
+                    Logs
+                  </button>
 
                   <button
                     type="button"
@@ -290,7 +288,8 @@ export default function ScraperList({
                 </div>
               </div>
             </li>
-          ))}
+            ); // Added explicit return closing
+          })}
         </ul>
       )}
     </div>
