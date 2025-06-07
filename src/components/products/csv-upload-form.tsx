@@ -47,7 +47,7 @@ export default function CSVUploadForm({
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [delimiter, setDelimiter] = useState<',' | ';'>(',');
-  const [fieldMapping, setFieldMapping] = useState<Record<string, string>>({});
+  const [_fieldMapping, _setFieldMapping] = useState<Record<string, string>>({});
   interface UploadResult {
     success: boolean;
     productsAdded: number;

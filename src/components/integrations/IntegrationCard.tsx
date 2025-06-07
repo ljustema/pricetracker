@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Image from 'next/image';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -28,7 +29,7 @@ export function IntegrationCard({
   onViewHistory,
   onTestRun,
   isRunning = false,
-  runId
+  runId: _runId
 }: IntegrationCardProps) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [_isTestRunning, _setIsTestRunning] = useState(false);
@@ -140,10 +141,12 @@ export function IntegrationCard({
               const platformIcon = getPlatformIcon();
               if (platformIcon.type === 'image') {
                 return (
-                  <img
+                  <Image
                     src={platformIcon.src}
                     alt={integration.platform}
                     className="w-6 h-6"
+                    width={24}
+                    height={24}
                     onError={(e) => {
                       // Fallback to Store icon if image fails to load
                       const parent = (e.target as HTMLImageElement).parentElement;

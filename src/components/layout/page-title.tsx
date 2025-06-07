@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 
 /**
@@ -47,7 +47,7 @@ export default function PageTitle() {
         setPageTitle('Dashboard');
       }
     }
-  }, [pathname, session]);
+  }, [pathname, session, fetchProductName]);
 
   // Check if a string is a UUID
   const isUUID = (str: string) => {
@@ -56,7 +56,7 @@ export default function PageTitle() {
   };
 
   // Fetch product name for product detail pages
-  const fetchProductName = async (productId: string) => {
+  const fetchProductName = useCallback(async (productId: string) => {
     if (!session?.user) {
       setPageTitle('Product Details');
       return;
@@ -79,7 +79,7 @@ export default function PageTitle() {
       console.error('Error fetching product name for page title:', error);
       setPageTitle('Product Details');
     }
-  };
+  }, [session]);
 
   // Format the title to be more readable
   const formatTitle = (title: string) => {
