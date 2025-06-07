@@ -1,6 +1,6 @@
 "use client"; // Make this a client component to use state and effects
 
-import { useState, useEffect } from "react"; // Import hooks
+import { useState, useEffect, useCallback } from "react"; // Import hooks
 // import { Metadata } from "next"; // Removed as it's unused now
 import { useSession } from "next-auth/react"; // Use client-side session hook
 import { redirect, useRouter } from "next/navigation";
@@ -82,7 +82,7 @@ export default function ScrapersPage() {
   };
 
   // Function to fetch scraper data
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
       // Fetch combined scraper and competitor data from the new API route
@@ -104,7 +104,7 @@ export default function ScrapersPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   // Check for refresh parameter in URL
   useEffect(() => {
@@ -120,7 +120,7 @@ export default function ScrapersPage() {
       const newUrl = window.location.pathname;
       window.history.replaceState({}, '', newUrl);
     }
-  }, [router]);
+  }, [router, fetchData]);
 
   useEffect(() => {
     if (status === "authenticated" && session?.user?.id) {
@@ -132,7 +132,7 @@ export default function ScrapersPage() {
     } else if (status === "unauthenticated") {
       redirect("/auth-routes/login");
     }
-  }, [session, status]);
+  }, [session, status, fetchData]);
 
   // Handle loading state
   if (status === "loading" || isLoading) {
@@ -365,22 +365,6 @@ export default function ScrapersPage() {
                                 isActive={scraper.is_active}
                                 onActivated={() => {
                                   // Refresh the list after activation
-                                  const fetchData = async () => {
-                                    setIsLoading(true);
-                                    try {
-                                      const response = await fetch('/api/scrapers/list');
-                                      if (!response.ok) {
-                                        throw new Error(`Failed to fetch scrapers: ${response.statusText}`);
-                                      }
-                                      const data = await response.json();
-                                      const sortedData = [...data].sort((a, b) => a.name.localeCompare(b.name));
-                                      setScraperData(sortedData);
-                                    } catch (error) {
-                                      console.error("Error fetching scraper data:", error);
-                                    } finally {
-                                      setIsLoading(false);
-                                    }
-                                  };
                                   fetchData();
                                 }}
                               />

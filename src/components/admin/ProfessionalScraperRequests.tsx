@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Loader2, Search, ExternalLink, User, Calendar, DollarSign } from "lucide-react";
 import { toast } from "sonner";
 
@@ -47,13 +47,13 @@ interface ProfessionalScraperRequestsProps {
   adminUser: AdminUser;
 }
 
-export default function ProfessionalScraperRequests({ adminUser }: ProfessionalScraperRequestsProps) {
+export default function ProfessionalScraperRequests({ adminUser: _adminUser }: ProfessionalScraperRequestsProps) {
   const [requests, setRequests] = useState<ProfessionalScraperRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [_totalPages, setTotalPages] = useState(1);
   const [selectedRequest, setSelectedRequest] = useState<ProfessionalScraperRequest | null>(null);
   const [isUpdateDialogOpen, setIsUpdateDialogOpen] = useState(false);
   const [updateData, setUpdateData] = useState({
@@ -64,7 +64,7 @@ export default function ProfessionalScraperRequests({ adminUser }: ProfessionalS
   });
   const [isUpdating, setIsUpdating] = useState(false);
 
-  const fetchRequests = async (page = 1) => {
+  const fetchRequests = useCallback(async (page = 1) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -89,11 +89,11 @@ export default function ProfessionalScraperRequests({ adminUser }: ProfessionalS
     } finally {
       setLoading(false);
     }
-  };
+  }, [searchTerm, statusFilter]);
 
   useEffect(() => {
     fetchRequests();
-  }, [statusFilter, searchTerm]);
+  }, [statusFilter, searchTerm, fetchRequests]);
 
   const handleUpdateRequest = async () => {
     if (!selectedRequest) return;

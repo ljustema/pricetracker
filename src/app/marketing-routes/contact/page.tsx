@@ -2,7 +2,7 @@ import { Metadata } from "next";
 import Link from "next/link";
 import { ContactForm } from "@/components/marketing/ContactForm";
 import { NewsletterSignup } from "@/components/marketing/NewsletterSignup";
-import { Mail, Phone, MapPin, Clock } from "lucide-react";
+import { Mail, MapPin, Clock } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "Contact Us | PriceTracker",

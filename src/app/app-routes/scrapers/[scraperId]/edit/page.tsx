@@ -75,7 +75,7 @@ export default function EditScraperPage() {
     );
   }
 
-  const handleSubmit = async (data: Partial<ScraperConfig>) => {
+  const _handleSubmit = async (data: Partial<ScraperConfig>) => {
     setIsLoading(true);
     setError(null);
 

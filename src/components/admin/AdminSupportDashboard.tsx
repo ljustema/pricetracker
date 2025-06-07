@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 import {
   MessageSquare,
   Search,
@@ -66,7 +66,7 @@ interface AdminSupportDashboardProps {
 }
 
 export function AdminSupportDashboard({
-  adminUser,
+  adminUser: _adminUser,
   onConversationSelect,
   selectedConversation
 }: AdminSupportDashboardProps) {
@@ -79,7 +79,7 @@ export function AdminSupportDashboard({
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
 
-  const fetchConversations = async () => {
+  const fetchConversations = useCallback(async () => {
     try {
       setLoading(true);
       const params = new URLSearchParams({
@@ -105,11 +105,11 @@ export function AdminSupportDashboard({
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentPage, searchQuery, statusFilter, priorityFilter, categoryFilter]);
 
   useEffect(() => {
     fetchConversations();
-  }, [currentPage, searchQuery, statusFilter, priorityFilter, categoryFilter]);
+  }, [currentPage, searchQuery, statusFilter, priorityFilter, categoryFilter, fetchConversations]);
 
   const getStatusColor = (status: string) => {
     switch (status) {

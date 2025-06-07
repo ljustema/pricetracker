@@ -31,7 +31,7 @@ export function IntegrationCard({
   runId
 }: IntegrationCardProps) {
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isTestRunning, setIsTestRunning] = useState(false);
+  const [_isTestRunning, _setIsTestRunning] = useState(false);
   const { toast } = useToast();
   const router = useRouter();
 

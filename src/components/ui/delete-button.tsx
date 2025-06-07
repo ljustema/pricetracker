@@ -59,7 +59,7 @@ export default function DeleteButton({
           // The onRefresh callback will be called above, so we don't need to do anything here
         }
       }
-    } catch (error) {
+    } catch (_error) {
       alert(`Failed to delete ${name}. Please try again.`);
     } finally {
       setIsDeleting(false);

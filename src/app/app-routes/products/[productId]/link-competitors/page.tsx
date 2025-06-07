@@ -32,7 +32,7 @@ interface LinkCompetitorsPageProps {
   };
 }
 
-export default function LinkCompetitorsPage({ params }: LinkCompetitorsPageProps) {
+export default function LinkCompetitorsPage({ params: _params }: LinkCompetitorsPageProps) {
   const router = useRouter();
   const { data: session } = useSession();
   const [isLoading, setIsLoading] = useState(false);

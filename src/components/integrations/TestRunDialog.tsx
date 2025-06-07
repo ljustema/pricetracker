@@ -160,7 +160,7 @@ export function TestRunDialog({ open, onOpenChange, integration, onStartFullSync
       // Start the full sync
       onStartFullSync(integration);
       onOpenChange(false);
-    } catch (error) {
+    } catch (_error) {
       toast({
         title: 'Error',
         description: 'Failed to update integration status',
