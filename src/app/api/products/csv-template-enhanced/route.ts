@@ -24,8 +24,8 @@ export async function GET(req: NextRequest) {
       // Template for own products
       headers = [
         "name",
-        "our_price",
-        "wholesale_price",
+        "our_retail_price",
+        "our_wholesale_price",
         "currency_code",
         "sku",
         "brand",
@@ -67,10 +67,10 @@ export async function GET(req: NextRequest) {
 
       filename = "own_products_template.csv";
     } else if (productType === 'competitor') {
-      // Template for competitor products (updated to use currency_code)
+      // Template for competitor products (updated to use competitor_price)
       headers = [
         "name",
-        "price",
+        "competitor_price",
         "currency_code",
         "sku",
         "brand",
@@ -107,8 +107,8 @@ export async function GET(req: NextRequest) {
       // Supplier products template
       headers = [
         "name",
-        "price",
-        "wholesale_price",
+        "supplier_price",
+        "supplier_recommended_price",
         "currency_code",
         "sku",
         "brand",
@@ -123,7 +123,7 @@ export async function GET(req: NextRequest) {
         [
           "Supplier Product 1",
           "149.99",
-          "120.00",
+          "249.99",
           "SEK",
           "SUPP-SKU-001",
           "Supplier Brand",
@@ -135,8 +135,8 @@ export async function GET(req: NextRequest) {
         ],
         [
           "Supplier Product 2",
-          "249.99",
-          "200.00",
+          "199.99",
+          "349.99",
           "SEK",
           "SUPP-SKU-002",
           "Supplier Brand",

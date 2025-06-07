@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-05-30 15:46:13
+-- Generated: 2025-06-07 13:09:22
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -504,26 +504,6 @@ CREATE TABLE public.brands (
 );
 
 --
--- Name: companies; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.companies (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    name text,
-    address text,
-    org_number text,
-    primary_currency text,
-    secondary_currencies text[],
-    currency_format text,
-    matching_rules jsonb,
-    price_thresholds jsonb,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT companies_primary_currency_check CHECK ((char_length(primary_currency) = 3))
-);
-
---
 -- Name: competitors; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -648,30 +628,81 @@ CREATE TABLE public.newsletter_subscriptions (
 );
 
 --
--- Name: price_changes; Type: TABLE; Schema: public; Owner: -
+-- Name: price_changes_competitors; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.price_changes (
+CREATE TABLE public.price_changes_competitors (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     user_id uuid NOT NULL,
     product_id uuid NOT NULL,
     competitor_id uuid,
-    old_price numeric(10,2) NOT NULL,
-    new_price numeric(10,2) NOT NULL,
+    old_competitor_price numeric(10,2),
+    new_competitor_price numeric(10,2),
     price_change_percentage numeric(10,2) NOT NULL,
     changed_at timestamp with time zone DEFAULT now(),
     integration_id uuid,
     currency_code text,
     url text,
+    old_our_retail_price numeric(10,2),
+    new_our_retail_price numeric(10,2),
+    CONSTRAINT check_competitor_price_consistency CHECK (((old_competitor_price IS NULL) = (new_competitor_price IS NULL))),
+    CONSTRAINT check_competitor_price_has_competitor_id CHECK ((((old_competitor_price IS NULL) AND (new_competitor_price IS NULL)) OR ((competitor_id IS NOT NULL) AND (integration_id IS NULL)))),
+    CONSTRAINT check_exactly_one_price_type CHECK ((((old_competitor_price IS NOT NULL) AND (old_our_retail_price IS NULL)) OR ((old_competitor_price IS NULL) AND (old_our_retail_price IS NOT NULL)))),
+    CONSTRAINT check_our_retail_price_consistency CHECK (((old_our_retail_price IS NULL) = (new_our_retail_price IS NULL))),
+    CONSTRAINT check_our_retail_price_has_integration_id CHECK ((((old_our_retail_price IS NULL) AND (new_our_retail_price IS NULL)) OR ((integration_id IS NOT NULL) AND (competitor_id IS NULL)))),
     CONSTRAINT price_changes_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code)))),
     CONSTRAINT price_changes_source_check CHECK (((competitor_id IS NOT NULL) OR (integration_id IS NOT NULL)))
 );
 
 --
--- Name: COLUMN price_changes.currency_code; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN price_changes_competitors.currency_code; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.price_changes.currency_code IS 'ISO 4217 currency code (e.g., SEK, USD)';
+COMMENT ON COLUMN public.price_changes_competitors.currency_code IS 'ISO 4217 currency code (e.g., SEK, USD)';
+
+--
+-- Name: price_changes_suppliers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.price_changes_suppliers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    supplier_id uuid,
+    old_our_wholesale_price numeric(10,2),
+    new_our_wholesale_price numeric(10,2),
+    price_change_percentage numeric(10,2),
+    currency_code text DEFAULT 'SEK'::text,
+    url text,
+    minimum_order_quantity integer DEFAULT 1,
+    lead_time_days integer,
+    changed_at timestamp with time zone DEFAULT now(),
+    change_source text DEFAULT 'manual'::text,
+    old_supplier_price numeric(10,2),
+    new_supplier_price numeric(10,2),
+    old_supplier_recommended_price numeric(10,2),
+    new_supplier_recommended_price numeric(10,2),
+    integration_id uuid,
+    CONSTRAINT check_exactly_one_source CHECK ((((supplier_id IS NOT NULL) AND (integration_id IS NULL)) OR ((supplier_id IS NULL) AND (integration_id IS NOT NULL)))),
+    CONSTRAINT check_our_wholesale_price_consistency CHECK (((old_our_wholesale_price IS NULL) = (new_our_wholesale_price IS NULL))),
+    CONSTRAINT check_our_wholesale_price_has_integration_id CHECK ((((old_our_wholesale_price IS NULL) AND (new_our_wholesale_price IS NULL)) OR ((integration_id IS NOT NULL) AND (supplier_id IS NULL)))),
+    CONSTRAINT check_supplier_price_consistency CHECK (((old_supplier_price IS NULL) = (new_supplier_price IS NULL))),
+    CONSTRAINT check_supplier_price_has_supplier_id CHECK ((((old_supplier_price IS NULL) AND (new_supplier_price IS NULL)) OR ((supplier_id IS NOT NULL) AND (integration_id IS NULL)))),
+    CONSTRAINT price_changes_suppliers_change_source_check CHECK ((change_source = ANY (ARRAY['manual'::text, 'csv'::text, 'scraper'::text, 'integration'::text])))
+);
+
+--
+-- Name: product_custom_field_values; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.product_custom_field_values (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    product_id uuid NOT NULL,
+    custom_field_id uuid NOT NULL,
+    value text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
 
 --
 -- Name: products; Type: TABLE; Schema: public; Owner: -
@@ -687,8 +718,8 @@ CREATE TABLE public.products (
     category text,
     description text,
     image_url text,
-    our_price numeric(10,2),
-    wholesale_price numeric(10,2),
+    our_retail_price numeric(10,2),
+    our_wholesale_price numeric(10,2),
     is_active boolean DEFAULT true,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
@@ -709,6 +740,20 @@ COMMENT ON COLUMN public.products.currency_code IS 'ISO 4217 currency code (e.g.
 --
 
 COMMENT ON COLUMN public.products.url IS 'URL to the product on the source platform';
+
+--
+-- Name: products_dismissed_duplicates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.products_dismissed_duplicates (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id_1 uuid NOT NULL,
+    product_id_2 uuid NOT NULL,
+    dismissal_key text NOT NULL,
+    dismissed_at timestamp without time zone DEFAULT now(),
+    CONSTRAINT product_id_order CHECK ((product_id_1 < product_id_2))
+);
 
 --
 -- Name: professional_scraper_requests; Type: TABLE; Schema: public; Owner: -
@@ -851,7 +896,9 @@ CREATE TABLE public.scrapers (
     last_products_per_second numeric(10,2),
     typescript_script text,
     scrape_only_own_products boolean DEFAULT false NOT NULL,
-    filter_by_active_brands boolean DEFAULT false NOT NULL
+    filter_by_active_brands boolean DEFAULT false NOT NULL,
+    supplier_id uuid,
+    CONSTRAINT scrapers_target_check CHECK ((((competitor_id IS NOT NULL) AND (supplier_id IS NULL)) OR ((competitor_id IS NULL) AND (supplier_id IS NOT NULL))))
 );
 
 --
@@ -877,6 +924,35 @@ COMMENT ON COLUMN public.scrapers.last_products_per_second IS 'Products per seco
 --
 
 COMMENT ON COLUMN public.scrapers.scrape_only_own_products IS 'Flag to only scrape products matching the user''s own product catalog (based on EAN/SKU/Brand matching)';
+
+--
+-- Name: suppliers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.suppliers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text NOT NULL,
+    website text,
+    contact_email text,
+    contact_phone text,
+    logo_url text,
+    notes text,
+    login_username text,
+    login_password text,
+    api_key text,
+    api_url text,
+    login_url text,
+    price_file_url text,
+    scraping_config jsonb,
+    sync_frequency text DEFAULT 'weekly'::text,
+    last_sync_at timestamp with time zone,
+    last_sync_status text,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT suppliers_sync_frequency_check CHECK ((sync_frequency = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text, 'manual'::text])))
+);
 
 --
 -- Name: support_conversations; Type: TABLE; Schema: public; Owner: -
@@ -927,8 +1003,7 @@ CREATE TABLE public.temp_competitors_scraped_data (
     competitor_id uuid NOT NULL,
     product_id uuid,
     name text NOT NULL,
-    price numeric(10,2) NOT NULL,
-    currency text DEFAULT 'USD'::text,
+    competitor_price numeric(10,2) NOT NULL,
     url text,
     image_url text,
     sku text,
@@ -953,18 +1028,74 @@ CREATE TABLE public.temp_integrations_scraped_data (
     sku text,
     ean text,
     brand text,
-    price numeric(10,2),
-    wholesale_price numeric(10,2),
+    our_retail_price numeric(10,2),
+    our_wholesale_price numeric(10,2),
     image_url text,
     raw_data jsonb,
     status text DEFAULT 'pending'::text NOT NULL,
     error_message text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     processed_at timestamp with time zone,
-    product_id uuid,
     currency_code text,
     url text,
     CONSTRAINT temp_integrations_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
+);
+
+--
+-- Name: temp_suppliers_scraped_data; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.temp_suppliers_scraped_data (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    supplier_id uuid NOT NULL,
+    scraper_id uuid NOT NULL,
+    run_id text NOT NULL,
+    name text,
+    sku text,
+    brand text,
+    ean text,
+    supplier_price numeric(10,2),
+    currency_code text DEFAULT 'SEK'::text,
+    url text,
+    image_url text,
+    minimum_order_quantity integer DEFAULT 1,
+    lead_time_days integer,
+    stock_level integer,
+    product_description text,
+    category text,
+    scraped_at timestamp with time zone DEFAULT now(),
+    processed boolean DEFAULT false,
+    created_at timestamp with time zone DEFAULT now(),
+    supplier_recommended_price numeric(10,2)
+);
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.supplier_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.supplier_price IS 'Supplier cost price (what they charge us)';
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.supplier_recommended_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.supplier_recommended_price IS 'Supplier recommended retail price (what they suggest we charge customers)';
+
+--
+-- Name: user_custom_fields; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_custom_fields (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    field_name text NOT NULL,
+    field_type text NOT NULL,
+    is_required boolean DEFAULT false,
+    default_value text,
+    validation_rules jsonb,
+    created_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT user_custom_fields_field_type_check CHECK ((field_type = ANY (ARRAY['text'::text, 'number'::text, 'boolean'::text, 'url'::text, 'date'::text])))
 );
 
 --
@@ -994,6 +1125,27 @@ COMMENT ON COLUMN public.user_profiles.admin_role IS 'Defines the admin role for
 --
 
 COMMENT ON COLUMN public.user_profiles.is_suspended IS 'Indicates if the user account is currently suspended by an admin.';
+
+--
+-- Name: user_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_settings (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text,
+    address text,
+    org_number text,
+    primary_currency text,
+    secondary_currencies text[],
+    currency_format text,
+    matching_rules jsonb,
+    price_thresholds jsonb,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    auto_create_custom_fields boolean DEFAULT true,
+    CONSTRAINT companies_primary_currency_check CHECK ((char_length(primary_currency) = 3))
+);
 
 --
 -- Name: user_subscriptions; Type: TABLE; Schema: public; Owner: -
@@ -1363,10 +1515,10 @@ ALTER TABLE ONLY public.brands
     ADD CONSTRAINT brands_pkey PRIMARY KEY (id);
 
 --
--- Name: companies companies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: user_settings companies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.companies
+ALTER TABLE ONLY public.user_settings
     ADD CONSTRAINT companies_pkey PRIMARY KEY (id);
 
 --
@@ -1433,11 +1585,39 @@ ALTER TABLE ONLY public.newsletter_subscriptions
     ADD CONSTRAINT newsletter_subscriptions_pkey PRIMARY KEY (id);
 
 --
--- Name: price_changes price_changes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: price_changes_competitors price_changes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.price_changes
+ALTER TABLE ONLY public.price_changes_competitors
     ADD CONSTRAINT price_changes_pkey PRIMARY KEY (id);
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_pkey PRIMARY KEY (id);
+
+--
+-- Name: product_custom_field_values product_custom_field_values_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_pkey PRIMARY KEY (id);
+
+--
+-- Name: product_custom_field_values product_custom_field_values_product_id_custom_field_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_product_id_custom_field_id_key UNIQUE (product_id, custom_field_id);
+
+--
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_pkey PRIMARY KEY (id);
 
 --
 -- Name: products products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1482,6 +1662,13 @@ ALTER TABLE ONLY public.scrapers
     ADD CONSTRAINT scrapers_pkey PRIMARY KEY (id);
 
 --
+-- Name: suppliers suppliers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.suppliers
+    ADD CONSTRAINT suppliers_pkey PRIMARY KEY (id);
+
+--
 -- Name: support_conversations support_conversations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1510,6 +1697,13 @@ ALTER TABLE ONLY public.temp_integrations_scraped_data
     ADD CONSTRAINT temp_integrations_scraped_data_pkey PRIMARY KEY (id);
 
 --
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_pkey PRIMARY KEY (id);
+
+--
 -- Name: brand_aliases unique_brand_alias; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1524,11 +1718,32 @@ ALTER TABLE ONLY public.dismissed_duplicates
     ADD CONSTRAINT unique_dismissed_pair UNIQUE (user_id, brand_id_1, brand_id_2);
 
 --
+-- Name: products_dismissed_duplicates unique_dismissed_product_pair; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT unique_dismissed_product_pair UNIQUE (user_id, product_id_1, product_id_2);
+
+--
 -- Name: brands unique_user_brand; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.brands
     ADD CONSTRAINT unique_user_brand UNIQUE (user_id, name);
+
+--
+-- Name: user_custom_fields user_custom_fields_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_custom_fields
+    ADD CONSTRAINT user_custom_fields_pkey PRIMARY KEY (id);
+
+--
+-- Name: user_custom_fields user_custom_fields_user_id_field_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_custom_fields
+    ADD CONSTRAINT user_custom_fields_user_id_field_name_key UNIQUE (user_id, field_name);
 
 --
 -- Name: user_profiles user_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1780,42 +1995,84 @@ ALTER TABLE ONLY public.integration_runs
 --
 
 ALTER TABLE ONLY public.integration_runs
-    ADD CONSTRAINT integration_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+    ADD CONSTRAINT integration_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id);
 
 --
 -- Name: integrations integrations_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.integrations
-    ADD CONSTRAINT integrations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+    ADD CONSTRAINT integrations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id);
 
 --
--- Name: price_changes price_changes_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: price_changes_competitors price_changes_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.price_changes
+ALTER TABLE ONLY public.price_changes_competitors
     ADD CONSTRAINT price_changes_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
 
 --
--- Name: price_changes price_changes_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: price_changes_competitors price_changes_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.price_changes
-    ADD CONSTRAINT price_changes_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id);
+ALTER TABLE ONLY public.price_changes_competitors
+    ADD CONSTRAINT price_changes_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id) ON DELETE CASCADE;
 
 --
--- Name: price_changes price_changes_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: price_changes_competitors price_changes_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.price_changes
-    ADD CONSTRAINT price_changes_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
+ALTER TABLE ONLY public.price_changes_competitors
+    ADD CONSTRAINT price_changes_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE;
 
 --
--- Name: price_changes price_changes_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: price_changes_suppliers price_changes_suppliers_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.price_changes
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id);
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE;
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_supplier_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id);
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: price_changes_competitors price_changes_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_competitors
     ADD CONSTRAINT price_changes_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: product_custom_field_values product_custom_field_values_custom_field_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_custom_field_id_fkey FOREIGN KEY (custom_field_id) REFERENCES public.user_custom_fields(id);
+
+--
+-- Name: product_custom_field_values product_custom_field_values_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
 
 --
 -- Name: products products_brand_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -1823,6 +2080,27 @@ ALTER TABLE ONLY public.price_changes
 
 ALTER TABLE ONLY public.products
     ADD CONSTRAINT products_brand_id_fkey FOREIGN KEY (brand_id) REFERENCES public.brands(id);
+
+--
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_product_id_1_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_product_id_1_fkey FOREIGN KEY (product_id_1) REFERENCES public.products(id);
+
+--
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_product_id_2_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_product_id_2_fkey FOREIGN KEY (product_id_2) REFERENCES public.products(id);
+
+--
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 --
 -- Name: products products_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -1881,11 +2159,25 @@ ALTER TABLE ONLY public.scrapers
     ADD CONSTRAINT scrapers_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
 
 --
+-- Name: scrapers scrapers_supplier_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scrapers
+    ADD CONSTRAINT scrapers_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id);
+
+--
 -- Name: scrapers scrapers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.scrapers
     ADD CONSTRAINT scrapers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: suppliers suppliers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.suppliers
+    ADD CONSTRAINT suppliers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 --
 -- Name: support_conversations support_conversations_admin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -1951,18 +2243,32 @@ ALTER TABLE ONLY public.temp_integrations_scraped_data
     ADD CONSTRAINT temp_integrations_scraped_data_integration_run_id_fkey FOREIGN KEY (integration_run_id) REFERENCES public.integration_runs(id) ON DELETE CASCADE;
 
 --
--- Name: temp_integrations_scraped_data temp_integrations_scraped_data_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.temp_integrations_scraped_data
-    ADD CONSTRAINT temp_integrations_scraped_data_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
 
 --
--- Name: user_profiles user_profiles_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_supplier_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.user_profiles
-    ADD CONSTRAINT user_profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id);
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id);
+
+--
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: user_custom_fields user_custom_fields_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_custom_fields
+    ADD CONSTRAINT user_custom_fields_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 --
 -- Name: user_subscriptions user_subscriptions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -2114,12 +2420,6 @@ ALTER TABLE public.brand_aliases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.brands ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: companies; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: competitors; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -2168,16 +2468,34 @@ ALTER TABLE public.marketing_contacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.newsletter_subscriptions ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: price_changes; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: price_changes_competitors; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
-ALTER TABLE public.price_changes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.price_changes_competitors ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: price_changes_suppliers; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.price_changes_suppliers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: product_custom_field_values; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.product_custom_field_values ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: products; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: products_dismissed_duplicates; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.products_dismissed_duplicates ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: professional_scraper_requests; Type: ROW SECURITY; Schema: public; Owner: -
@@ -2210,6 +2528,12 @@ ALTER TABLE public.scraper_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scrapers ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: suppliers; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.suppliers ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: support_conversations; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -2234,10 +2558,28 @@ ALTER TABLE public.temp_competitors_scraped_data ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.temp_integrations_scraped_data ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: temp_suppliers_scraped_data; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.temp_suppliers_scraped_data ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_custom_fields; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_custom_fields ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: user_profiles; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_settings; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_settings ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: user_subscriptions; Type: ROW SECURITY; Schema: public; Owner: -

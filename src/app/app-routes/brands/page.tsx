@@ -179,12 +179,12 @@ export default function BrandsPage() {
 
     // Apply our products filter
     if (ourProductsFilter) {
-      // Filter brands that have products with our_price (our products)
+      // Filter brands that have products with our retail price (our products)
       filtered = filtered.filter(brand => {
         return (brand.our_products_count || 0) > 0;
       });
     } else if (notOurProductsFilter) {
-      // Filter brands that don't have products with our_price (not our products)
+      // Filter brands that don't have products with our retail price (not our products)
       filtered = filtered.filter(brand => {
         return (brand.our_products_count || 0) === 0;
       });

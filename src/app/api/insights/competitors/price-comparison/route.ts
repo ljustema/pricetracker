@@ -48,10 +48,10 @@ export async function GET(_request: NextRequest) {
         try {
           // Get the latest price change for each product for this competitor
           const { data: latestPriceChanges, error: priceChangesError } = await supabase
-            .from('price_changes')
+            .from('price_changes_competitors')
             .select(`
               product_id,
-              new_price
+              new_competitor_price
             `)
             .eq('user_id', userId)
             .eq('competitor_id', competitor.id)
@@ -71,7 +71,7 @@ export async function GET(_request: NextRequest) {
           const productMap = new Map();
           latestPriceChanges.forEach(pc => {
             if (!productMap.has(pc.product_id)) {
-              productMap.set(pc.product_id, pc.new_price);
+              productMap.set(pc.product_id, pc.new_competitor_price);
             }
           });
 
@@ -95,10 +95,10 @@ export async function GET(_request: NextRequest) {
             const chunk = productIds.slice(i, i + CHUNK_SIZE);
             const { data: productsChunk, error: productsError } = await supabase
               .from('products')
-              .select('id, our_price')
+              .select('id, our_retail_price')
               .eq('user_id', userId)
               .in('id', chunk)
-              .not('our_price', 'is', null);
+              .not('our_retail_price', 'is', null);
 
             if (productsError) {
               console.error(`Error fetching products for competitor ${competitor.id}:`, productsError);
@@ -116,7 +116,7 @@ export async function GET(_request: NextRequest) {
 
           allProducts.forEach(product => {
             const competitorPrice = productMap.get(product.id);
-            const ourPrice = product.our_price;
+            const ourPrice = product.our_retail_price;
 
             if (competitorPrice && ourPrice && ourPrice > 0) {
               const priceDiff = ((competitorPrice - ourPrice) / ourPrice) * 100;

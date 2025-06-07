@@ -38,7 +38,7 @@ export async function GET(_request: NextRequest) {
 
     // Get products with at least one price change (matched products)
     const { data: _matchedProductsData, error: matchedProductsError } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select('product_id', { count: 'exact', head: true })
       .eq('user_id', userId)
       .not('competitor_id', 'is', null);
@@ -51,9 +51,9 @@ export async function GET(_request: NextRequest) {
       );
     }
 
-    // Get count of distinct product IDs in price_changes
+    // Get count of distinct product IDs in price_changes_competitors
     const { count: matchedProducts } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select('product_id', { count: 'exact', head: true })
       .eq('user_id', userId)
       .not('competitor_id', 'is', null);
@@ -82,7 +82,7 @@ export async function GET(_request: NextRequest) {
 
     // Get all price changes to determine which products have matches
     const { data: priceChanges, error: priceChangesError } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select('product_id')
       .eq('user_id', userId)
       .not('competitor_id', 'is', null);

@@ -60,7 +60,7 @@ export async function GET(_request: NextRequest) {
       competitors.map(async (competitor) => {
         // Count distinct products for this competitor
         const { count: productCount, error: countError } = await supabase
-          .from('price_changes')
+          .from('price_changes_competitors')
           .select('product_id', { count: 'exact', head: true })
           .eq('user_id', userId)
           .eq('competitor_id', competitor.id);

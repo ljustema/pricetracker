@@ -23,14 +23,14 @@ export async function GET(_request: NextRequest) {
 
     // Get latest 5 price changes
     const { data: latestPriceChanges, error: priceChangesError } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select(`
         id,
         product_id,
         competitor_id,
         integration_id,
-        old_price,
-        new_price,
+        old_competitor_price,
+        new_competitor_price,
         price_change_percentage,
         changed_at,
         products(name),
@@ -58,7 +58,7 @@ export async function GET(_request: NextRequest) {
         ean,
         brand,
         brand_id,
-        our_price,
+        our_retail_price,
         created_at,
         brands(name)
       `)

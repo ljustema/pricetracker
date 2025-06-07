@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-05-30 15:46:13
+-- Generated: 2025-06-07 13:09:22
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -9,14 +9,16 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 15.8
--- Dumped by pg_dump version 16.8
+-- Dumped from database version 17.4
+-- Dumped by pg_dump version 17.0
 
 SET statement_timeout = 0;
 
 SET lock_timeout = 0;
 
 SET idle_in_transaction_session_timeout = 0;
+
+SET transaction_timeout = 0;
 
 SET client_encoding = 'UTF8';
 
@@ -374,17 +376,17 @@ END;
 
 $_$;
 
-RETURN QUERY
-      SELECT
-          rolname::text,
-          CASE WHEN rolvaliduntil < now()
-              THEN null
-              ELSE rolpassword::text
-          END
-      FROM pg_authid
-      WHERE rolname=$1 and rolcanlogin;
+return query
+    select 
+        rolname::text, 
+        case when rolvaliduntil < now() 
+            then null 
+            else rolpassword::text 
+        end 
+    from pg_authid 
+    where rolname=$1 and rolcanlogin;
 
-END;
+end;
 
 $_$;
 
@@ -568,6 +570,67 @@ END;
 
 $$;
 
+timeout_record record;
+
+BEGIN
+    -- Find integration runs that are processing but haven't updated progress in 1 hour
+    FOR timeout_record IN
+        SELECT 
+            ir.id, 
+            ir.integration_id, 
+            ir.started_at,
+            ir.last_progress_update,
+            ir.products_processed,
+            i.name as integration_name
+        FROM public.integration_runs ir
+        JOIN public.integrations i ON ir.integration_id = i.id
+        WHERE ir.status = 'processing'
+          AND (
+            -- Case 1: last_progress_update exists and is older than 1 hour
+            (ir.last_progress_update IS NOT NULL AND ir.last_progress_update < now() - interval '1 hour')
+            OR
+            -- Case 2: last_progress_update is NULL but started_at is older than 1 hour (fallback)
+            (ir.last_progress_update IS NULL AND ir.started_at IS NOT NULL AND ir.started_at < now() - interval '1 hour')
+          )
+    LOOP
+        -- Update the stalled run to failed status
+        UPDATE public.integration_runs
+        SET 
+            status = 'failed',
+            completed_at = now(),
+            error_message = 'Integration run stalled - no progress update for over 1 hour (likely due to worker restart)'
+        WHERE id = timeout_record.id;
+
+-- Update the integration status to error
+        UPDATE public.integrations
+        SET 
+            status = 'error',
+            last_sync_status = 'failed',
+            last_sync_at = now(),
+            updated_at = now()
+        WHERE id = timeout_record.integration_id;
+
+timeout_count := timeout_count + 1;
+
+-- Log the timeout for debugging
+        INSERT INTO public.debug_logs (message, created_at)
+        VALUES (
+            'Integration run timed out - run_id: ' || timeout_record.id || 
+            ', integration: ' || timeout_record.integration_name || 
+            ', started_at: ' || timeout_record.started_at || 
+            ', last_progress: ' || COALESCE(timeout_record.last_progress_update::text, 'NULL') ||
+            ', products_processed: ' || timeout_record.products_processed,
+            now()
+        );
+
+END LOOP;
+
+RETURN timeout_count;
+
+END;
+
+$$;
+
 -- Keep only the most recent record for each product/competitor combination
   -- for records that are between 3 and 30 days old
   DELETE FROM temp_competitors_scraped_data sp1
@@ -664,6 +727,55 @@ END;
 
 $$;
 
+ordered_id_2 UUID;
+
+dismissal_key TEXT;
+
+BEGIN
+    -- Ensure consistent ordering (smaller UUID first)
+    IF p_product_id_1 < p_product_id_2 THEN
+        ordered_id_1 := p_product_id_1;
+
+ordered_id_2 := p_product_id_2;
+
+ELSE
+        ordered_id_1 := p_product_id_2;
+
+ordered_id_2 := p_product_id_1;
+
+END IF;
+
+-- Create dismissal key
+    dismissal_key := ordered_id_1::text || '_' || ordered_id_2::text;
+
+-- Insert dismissal record (ignore if already exists)
+    INSERT INTO products_dismissed_duplicates (
+        user_id, product_id_1, product_id_2, dismissal_key
+    ) VALUES (
+        p_user_id, ordered_id_1, ordered_id_2, dismissal_key
+    )
+    ON CONFLICT (user_id, product_id_1, product_id_2) DO NOTHING;
+
+RETURN jsonb_build_object(
+        'success', true,
+        'message', 'Product duplicate dismissed successfully',
+        'product_id_1', ordered_id_1,
+        'product_id_2', ordered_id_2,
+        'dismissal_key', dismissal_key
+    );
+
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+        'success', false,
+        'message', 'Error dismissing product duplicate: ' || SQLERRM,
+        'product_id_1', p_product_id_1,
+        'product_id_2', p_product_id_2
+    );
+
+END;
+
+$$;
+
 END IF;
 
 RETURN NEW;
@@ -737,6 +849,479 @@ END;
 
 $$;
 
+similarity_threshold INTEGER;
+
+BEGIN
+    -- Get user matching settings
+    settings := get_user_matching_settings(p_user_id);
+
+similarity_threshold := COALESCE((settings->>'min_similarity_score')::INTEGER, 80);
+
+-- 1. Products with same EAN (if EAN priority enabled)
+    IF (settings->>'ean_priority')::BOOLEAN = true THEN
+        RETURN QUERY
+        SELECT 
+            'ean_' || p.ean AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Same EAN: ' || p.ean AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.ean IS NOT NULL AND 
+            p.ean != '' AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.ean = p.ean AND p2.user_id = p.user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_2 AND p3.ean = p.ean))
+                  OR (pdd.product_id_2 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_1 AND p3.ean = p.ean)))
+            );
+
+END IF;
+
+-- 2. Products with same brand+SKU (if SKU+brand fallback enabled)
+    IF (settings->>'sku_brand_fallback')::BOOLEAN = true THEN
+        RETURN QUERY
+        SELECT 
+            'brand_sku_' || p.brand_id::text || '_' || p.sku AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Same brand+SKU: ' || COALESCE(p.brand, '') || ' + ' || p.sku AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.brand_id IS NOT NULL AND 
+            p.sku IS NOT NULL AND 
+            p.sku != '' AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.brand_id = p.brand_id AND p2.sku = p.sku 
+                AND p2.user_id = p.user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_2 AND p3.brand_id = p.brand_id AND p3.sku = p.sku))
+                  OR (pdd.product_id_2 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_1 AND p3.brand_id = p.brand_id AND p3.sku = p.sku)))
+            );
+
+-- 3. Products with same brand+normalized SKU (fuzzy SKU matching)
+        RETURN QUERY
+        SELECT 
+            'fuzzy_sku_' || p.brand_id::text || '_' || normalize_sku(p.sku) AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Fuzzy brand+SKU: ' || COALESCE(p.brand, '') || ' + ' || p.sku || ' (normalized: ' || normalize_sku(p.sku) || ')' AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.brand_id IS NOT NULL AND 
+            p.sku IS NOT NULL AND 
+            p.sku != '' AND
+            normalize_sku(p.sku) IS NOT NULL AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.brand_id = p.brand_id 
+                AND normalize_sku(p2.sku) = normalize_sku(p.sku)
+                AND p2.sku != p.sku  -- Different original SKU but same normalized
+                AND p2.user_id = p.user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id) OR (pdd.product_id_2 = p.id))
+            );
+
+END IF;
+
+-- 4. Products with similar names (if fuzzy name matching enabled)
+    IF (settings->>'fuzzy_name_matching')::BOOLEAN = true THEN
+        RETURN QUERY
+        SELECT 
+            'fuzzy_name_' || p.id::text AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Similar name: ' || COALESCE(p.name, '') || ' (similarity: ' || 
+            ROUND((100 - (levenshtein(LOWER(p.name), LOWER(p2.name)) * 100.0 / GREATEST(LENGTH(p.name), LENGTH(p2.name))))::numeric, 1) || '%)' AS match_reason
+        FROM 
+            products p
+        JOIN products p2 ON p2.user_id = p.user_id AND p2.id != p.id
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.name IS NOT NULL AND p.name != '' AND
+            p2.name IS NOT NULL AND p2.name != '' AND
+            -- High similarity threshold for name matching
+            (100 - (levenshtein(LOWER(p.name), LOWER(p2.name)) * 100.0 / GREATEST(LENGTH(p.name), LENGTH(p2.name)))) >= similarity_threshold
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND pdd.product_id_2 = p2.id)
+                  OR (pdd.product_id_1 = p2.id AND pdd.product_id_2 = p.id))
+            );
+
+END IF;
+
+RETURN;
+
+END;
+
+$$;
+
+similarity_threshold INTEGER;
+
+result_count INTEGER := 0;
+
+BEGIN
+    -- Get user matching settings
+    settings := get_user_matching_settings(p_user_id);
+
+similarity_threshold := COALESCE((settings->>'min_similarity_score')::INTEGER, 80);
+
+-- 1. Products with same EAN (if EAN priority enabled)
+    IF (settings->>'ean_priority')::BOOLEAN = true THEN
+        FOR group_id, product_id, name, sku, ean, brand, brand_id, match_reason IN
+        SELECT 
+            'ean_' || p.ean AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Same EAN: ' || p.ean AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.ean IS NOT NULL AND 
+            p.ean != '' AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.ean = p.ean AND p2.user_id = p_user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_2 AND p3.ean = p.ean))
+                  OR (pdd.product_id_2 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_1 AND p3.ean = p.ean)))
+            )
+        ORDER BY p.ean, p.id
+        LOOP
+            RETURN NEXT;
+
+result_count := result_count + 1;
+
+IF p_limit IS NOT NULL AND result_count >= p_limit THEN
+                RETURN;
+
+END IF;
+
+END LOOP;
+
+END IF;
+
+-- 2. Products with same brand+SKU (if SKU+brand fallback enabled)
+    IF (settings->>'sku_brand_fallback')::BOOLEAN = true AND (p_limit IS NULL OR result_count < p_limit) THEN
+        FOR group_id, product_id, name, sku, ean, brand, brand_id, match_reason IN
+        SELECT 
+            'brand_sku_' || p.brand_id::text || '_' || p.sku AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Same brand+SKU: ' || COALESCE(p.brand, '') || ' + ' || p.sku AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.brand_id IS NOT NULL AND 
+            p.sku IS NOT NULL AND 
+            p.sku != '' AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.brand_id = p.brand_id AND p2.sku = p.sku 
+                AND p2.user_id = p.user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_2 AND p3.brand_id = p.brand_id AND p3.sku = p.sku))
+                  OR (pdd.product_id_2 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_1 AND p3.brand_id = p.brand_id AND p3.sku = p.sku)))
+            )
+        ORDER BY p.brand_id, p.sku, p.id
+        LOOP
+            RETURN NEXT;
+
+result_count := result_count + 1;
+
+IF p_limit IS NOT NULL AND result_count >= p_limit THEN
+                RETURN;
+
+END IF;
+
+END LOOP;
+
+-- 3. Products with same brand+normalized SKU (fuzzy SKU matching)
+        FOR group_id, product_id, name, sku, ean, brand, brand_id, match_reason IN
+        SELECT 
+            'fuzzy_sku_' || p.brand_id::text || '_' || normalize_sku(p.sku) AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Fuzzy brand+SKU: ' || COALESCE(p.brand, '') || ' + ' || p.sku || ' (normalized: ' || normalize_sku(p.sku) || ')' AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.brand_id IS NOT NULL AND 
+            p.sku IS NOT NULL AND 
+            p.sku != '' AND
+            normalize_sku(p.sku) IS NOT NULL AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.brand_id = p.brand_id 
+                AND normalize_sku(p2.sku) = normalize_sku(p.sku)
+                AND p2.sku != p.sku  -- Different original SKU but same normalized
+                AND p2.user_id = p_user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id) OR (pdd.product_id_2 = p.id))
+            )
+        ORDER BY p.brand_id, normalize_sku(p.sku), p.id
+        LOOP
+            RETURN NEXT;
+
+result_count := result_count + 1;
+
+IF p_limit IS NOT NULL AND result_count >= p_limit THEN
+                RETURN;
+
+END IF;
+
+END LOOP;
+
+END IF;
+
+-- 4. Products with similar names (if fuzzy name matching enabled)
+    IF (settings->>'fuzzy_name_matching')::BOOLEAN = true AND (p_limit IS NULL OR result_count < p_limit) THEN
+        FOR group_id, product_id, name, sku, ean, brand, brand_id, match_reason IN
+        SELECT 
+            'fuzzy_name_' || p.id::text AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Similar name: ' || COALESCE(p.name, '') || ' (similarity: ' || 
+            ROUND((100 - (levenshtein(LOWER(p.name), LOWER(p2.name)) * 100.0 / GREATEST(LENGTH(p.name), LENGTH(p2.name))))::numeric, 1) || '%)' AS match_reason
+        FROM 
+            products p
+        JOIN products p2 ON p2.user_id = p.user_id AND p2.id != p.id
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.name IS NOT NULL AND p.name != '' AND
+            p2.name IS NOT NULL AND p2.name != '' AND
+            -- High similarity threshold for name matching
+            (100 - (levenshtein(LOWER(p.name), LOWER(p2.name)) * 100.0 / GREATEST(LENGTH(p.name), LENGTH(p2.name)))) >= similarity_threshold
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND pdd.product_id_2 = p2.id)
+                  OR (pdd.product_id_1 = p2.id AND pdd.product_id_2 = p.id))
+            )
+        ORDER BY p.id, p2.id
+        LOOP
+            RETURN NEXT;
+
+result_count := result_count + 1;
+
+IF p_limit IS NOT NULL AND result_count >= p_limit THEN
+                RETURN;
+
+END IF;
+
+END LOOP;
+
+END IF;
+
+RETURN;
+
+END;
+
+$$;
+
+product_id UUID;
+
+normalized_sku TEXT;
+
+similarity_threshold INTEGER;
+
+BEGIN
+    -- Get user matching settings
+    settings := get_user_matching_settings(p_user_id);
+
+similarity_threshold := COALESCE((settings->>'min_similarity_score')::INTEGER, 80);
+
+-- 1. EAN Priority (if enabled and EAN provided)
+    IF (settings->>'ean_priority')::BOOLEAN = true AND p_ean IS NOT NULL AND p_ean != '' THEN
+        SELECT id INTO product_id
+        FROM products
+        WHERE user_id = p_user_id AND ean = p_ean
+        LIMIT 1;
+
+IF product_id IS NOT NULL THEN
+            RETURN product_id;
+
+END IF;
+
+END IF;
+
+-- 2. SKU + Brand Fallback (if enabled)
+    IF (settings->>'sku_brand_fallback')::BOOLEAN = true AND p_sku IS NOT NULL AND p_sku != '' THEN
+        -- Try exact brand + exact SKU first
+        IF p_brand_id IS NOT NULL THEN
+            SELECT id INTO product_id
+            FROM products
+            WHERE user_id = p_user_id 
+              AND brand_id = p_brand_id 
+              AND sku = p_sku
+            LIMIT 1;
+
+IF product_id IS NOT NULL THEN
+                RETURN product_id;
+
+END IF;
+
+END IF;
+
+-- Try brand name + exact SKU
+        IF p_brand IS NOT NULL AND p_brand != '' THEN
+            SELECT id INTO product_id
+            FROM products
+            WHERE user_id = p_user_id 
+              AND brand = p_brand 
+              AND sku = p_sku
+            LIMIT 1;
+
+IF product_id IS NOT NULL THEN
+                RETURN product_id;
+
+END IF;
+
+END IF;
+
+-- Try fuzzy SKU matching (normalize SKUs)
+        normalized_sku := normalize_sku(p_sku);
+
+IF normalized_sku IS NOT NULL THEN
+            -- Try with brand_id + normalized SKU
+            IF p_brand_id IS NOT NULL THEN
+                SELECT id INTO product_id
+                FROM products
+                WHERE user_id = p_user_id 
+                  AND brand_id = p_brand_id 
+                  AND normalize_sku(sku) = normalized_sku
+                LIMIT 1;
+
+IF product_id IS NOT NULL THEN
+                    RETURN product_id;
+
+END IF;
+
+END IF;
+
+-- Try with brand name + normalized SKU
+            IF p_brand IS NOT NULL AND p_brand != '' THEN
+                SELECT id INTO product_id
+                FROM products
+                WHERE user_id = p_user_id 
+                  AND brand = p_brand 
+                  AND normalize_sku(sku) = normalized_sku
+                LIMIT 1;
+
+IF product_id IS NOT NULL THEN
+                    RETURN product_id;
+
+END IF;
+
+END IF;
+
+END IF;
+
+END IF;
+
+-- 3. Fuzzy Name Matching (if enabled and name provided)
+    IF (settings->>'fuzzy_name_matching')::BOOLEAN = true AND p_name IS NOT NULL AND p_name != '' THEN
+        -- Find products with similar names using Levenshtein distance
+        SELECT id INTO product_id
+        FROM products
+        WHERE user_id = p_user_id
+          AND name IS NOT NULL
+          AND (
+              -- High similarity threshold for name matching
+              (LENGTH(name) > 0 AND LENGTH(p_name) > 0 AND 
+               (100 - (levenshtein(LOWER(name), LOWER(p_name)) * 100.0 / GREATEST(LENGTH(name), LENGTH(p_name)))) >= similarity_threshold)
+              OR
+              -- Substring matching for shorter names
+              (LENGTH(p_name) >= 10 AND LOWER(name) LIKE '%' || LOWER(p_name) || '%')
+              OR
+              (LENGTH(name) >= 10 AND LOWER(p_name) LIKE '%' || LOWER(name) || '%')
+          )
+        ORDER BY 
+            -- Prefer exact matches, then by similarity
+            CASE WHEN LOWER(name) = LOWER(p_name) THEN 0 ELSE 1 END,
+            levenshtein(LOWER(name), LOWER(p_name))
+        LIMIT 1;
+
+IF product_id IS NOT NULL THEN
+            RETURN product_id;
+
+END IF;
+
+END IF;
+
+-- No match found
+    RETURN NULL;
+
 END;
 
 $$;
@@ -778,57 +1363,46 @@ END;
 
 $$;
 
-BEGIN
-    SELECT jsonb_build_object(
-        'processed', COUNT(*) FILTER (WHERE status = 'processed'),
-        'created', COUNT(*) FILTER (WHERE status = 'processed' AND product_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM price_changes pc WHERE pc.product_id = temp_integrations_scraped_data.product_id AND pc.changed_at < temp_integrations_scraped_data.processed_at
-        )),
-        'updated', COUNT(*) FILTER (WHERE status = 'processed' AND product_id IS NOT NULL AND EXISTS (
-            SELECT 1 FROM price_changes pc WHERE pc.product_id = temp_integrations_scraped_data.product_id AND pc.changed_at < temp_integrations_scraped_data.processed_at
-        )),
-        'errors', COUNT(*) FILTER (WHERE status = 'error'),
-        'pending', COUNT(*) FILTER (WHERE status = 'pending')
-    )
-    INTO stats
-    FROM temp_integrations_scraped_data
-    WHERE integration_run_id = run_id;
-
-RETURN COALESCE(stats, '{"processed": 0, "created": 0, "updated": 0, "errors": 0, "pending": 0}'::jsonb);
-
 END;
 
 $$;
 
-END;$$;
+processed_count INTEGER;
+
+error_count INTEGER;
+
+pending_count INTEGER;
+
+price_changes_count INTEGER;
 
 BEGIN
-  -- Check if the user already has a company
-  SELECT id INTO v_company_id
-  FROM public.companies
-  WHERE user_id = p_user_id
-  LIMIT 1;
+    -- Get counts from temp table
+    SELECT 
+        COUNT(*) FILTER (WHERE status = 'processed'),
+        COUNT(*) FILTER (WHERE status = 'error'),
+        COUNT(*) FILTER (WHERE status = 'pending')
+    INTO processed_count, error_count, pending_count
+    FROM temp_integrations_scraped_data
+    WHERE integration_run_id = run_id;
 
--- If not, create a new company
-  IF v_company_id IS NULL THEN
-    INSERT INTO public.companies (
-      user_id,
-      primary_currency,
-      currency_format,
-      matching_rules,
-      price_thresholds
-    ) VALUES (
-      p_user_id,
-      'SEK',
-      '#,##0.00',
-      '{"ean_priority": true, "sku_brand_fallback": true}'::jsonb,
-      '{"significant_increase": 10.0, "significant_decrease": 5.0}'::jsonb
-    )
-    RETURNING id INTO v_company_id;
+-- Get count of price changes created for this integration run
+    SELECT COUNT(*)
+    INTO price_changes_count
+    FROM price_changes_competitors pc
+    JOIN integration_runs ir ON pc.integration_id = ir.integration_id
+    WHERE ir.id = run_id
+    AND pc.changed_at >= ir.started_at;
 
-END IF;
+-- Build stats object
+    SELECT jsonb_build_object(
+        'processed', COALESCE(processed_count, 0),
+        'created', COALESCE(price_changes_count, 0),
+        'updated', 0, -- We'll count all as created for simplicity
+        'errors', COALESCE(error_count, 0),
+        'pending', COALESCE(pending_count, 0)
+    ) INTO stats;
 
-RETURN v_company_id;
+RETURN stats;
 
 END;
 
@@ -855,266 +1429,232 @@ END;
 
 $$;
 
+BEGIN
+  -- Check if the user already has settings
+  SELECT id INTO v_settings_id
+  FROM public.user_settings
+  WHERE user_id = p_user_id
+  LIMIT 1;
+
+-- If not, create new user settings
+  IF v_settings_id IS NULL THEN
+    INSERT INTO public.user_settings (
+      user_id,
+      primary_currency,
+      currency_format,
+      matching_rules,
+      price_thresholds
+    ) VALUES (
+      p_user_id,
+      'SEK',
+      '#,##0.00',
+      '{"ean_priority": true, "sku_brand_fallback": true}'::jsonb,
+      '{"significant_increase": 10.0, "significant_decrease": 5.0}'::jsonb
+    )
+    RETURNING id INTO v_settings_id;
+
+END IF;
+
+RETURN v_settings_id;
+
 END;
 
 $$;
-
-_count_query text;
-
-_offset integer;
 
 _limit integer;
 
 _sort_direction text;
 
-_allowed_sort_columns text[] := ARRAY['name', 'sku', 'ean', 'brand', 'category', 'our_price', 'cost_price', 'created_at', 'updated_at'];
-
-_safe_sort_by text;
+_total_count integer;
 
 _result json;
 
-_total_count bigint;
+_safe_sort_by text;
+
+_products_data json;
 
 BEGIN
-    -- Calculate offset and limit
+    -- First ensure the user exists
+    PERFORM ensure_user_exists_simple(p_user_id);
+
+-- Calculate offset and limit
     _offset := (p_page - 1) * p_page_size;
 
 _limit := p_page_size;
 
--- Validate sort_by parameter to prevent null field name error
-    IF p_sort_by IS NULL OR p_sort_by = '' THEN
-        _safe_sort_by := 'created_at';
-
-ELSIF p_sort_by = ANY(_allowed_sort_columns) THEN
-        _safe_sort_by := p_sort_by;
-
-ELSE
-        _safe_sort_by := 'created_at'; -- Default sort column
-    END IF;
-
 -- Validate and sanitize sort direction
-    IF p_sort_order IS NULL OR p_sort_order = '' THEN
-        _sort_direction := 'DESC';
+    _sort_direction := CASE WHEN UPPER(p_sort_order) = 'ASC' THEN 'ASC' ELSE 'DESC' END;
 
-ELSIF lower(p_sort_order) = 'asc' THEN
-        _sort_direction := 'ASC';
+-- Validate and sanitize sort column
+    _safe_sort_by := CASE 
+        WHEN p_sort_by IN ('name', 'created_at', 'updated_at', 'our_retail_price', 'our_wholesale_price', 'sku', 'ean') THEN p_sort_by
+        ELSE 'created_at'
+    END;
 
-ELSE
-        _sort_direction := 'DESC';
+-- Get total count using a CTE approach
+    WITH filtered_products AS (
+        SELECT p.id
+        FROM products p 
+        LEFT JOIN brands b ON p.brand_id = b.id
+        WHERE p.user_id = p_user_id
+        AND (p_brand IS NULL OR p_brand = '' OR p.brand_id = p_brand::uuid)
+        AND (p_category IS NULL OR p_category = '' OR p.category = p_category)
+        AND (p_search IS NULL OR p_search = '' OR (
+            p.name ILIKE '%' || p_search || '%' OR 
+            p.sku ILIKE '%' || p_search || '%' OR 
+            p.ean ILIKE '%' || p_search || '%'
+        ))
+        AND (p_is_active IS NULL OR p.is_active = p_is_active)
+        AND (p_has_price IS NULL OR p_has_price = false OR p.our_retail_price IS NOT NULL)
+        AND (p_competitor_ids IS NULL OR array_length(p_competitor_ids, 1) IS NULL OR p.id IN (
+            SELECT DISTINCT product_id 
+            FROM price_changes_competitors 
+            WHERE user_id = p_user_id 
+            AND competitor_id = ANY(p_competitor_ids)
+        ))
+    )
+    SELECT COUNT(*) INTO _total_count FROM filtered_products;
 
-END IF;
+-- Get the actual data with competitor prices
+    WITH filtered_products AS (
+        SELECT p.*, b.name as brand_name
+        FROM products p 
+        LEFT JOIN brands b ON p.brand_id = b.id
+        WHERE p.user_id = p_user_id
+        AND (p_brand IS NULL OR p_brand = '' OR p.brand_id = p_brand::uuid)
+        AND (p_category IS NULL OR p_category = '' OR p.category = p_category)
+        AND (p_search IS NULL OR p_search = '' OR (
+            p.name ILIKE '%' || p_search || '%' OR 
+            p.sku ILIKE '%' || p_search || '%' OR 
+            p.ean ILIKE '%' || p_search || '%'
+        ))
+        AND (p_is_active IS NULL OR p.is_active = p_is_active)
+        AND (p_has_price IS NULL OR p_has_price = false OR p.our_retail_price IS NOT NULL)
+        AND (p_competitor_ids IS NULL OR array_length(p_competitor_ids, 1) IS NULL OR p.id IN (
+            SELECT DISTINCT product_id 
+            FROM price_changes_competitors 
+            WHERE user_id = p_user_id 
+            AND competitor_id = ANY(p_competitor_ids)
+        ))
+        ORDER BY 
+            CASE WHEN _safe_sort_by = 'name' AND _sort_direction = 'ASC' THEN p.name END ASC,
+            CASE WHEN _safe_sort_by = 'name' AND _sort_direction = 'DESC' THEN p.name END DESC,
+            CASE WHEN _safe_sort_by = 'created_at' AND _sort_direction = 'ASC' THEN p.created_at END ASC,
+            CASE WHEN _safe_sort_by = 'created_at' AND _sort_direction = 'DESC' THEN p.created_at END DESC,
+            CASE WHEN _safe_sort_by = 'updated_at' AND _sort_direction = 'ASC' THEN p.updated_at END ASC,
+            CASE WHEN _safe_sort_by = 'updated_at' AND _sort_direction = 'DESC' THEN p.updated_at END DESC,
+            CASE WHEN _safe_sort_by = 'our_retail_price' AND _sort_direction = 'ASC' THEN p.our_retail_price END ASC,
+            CASE WHEN _safe_sort_by = 'our_retail_price' AND _sort_direction = 'DESC' THEN p.our_retail_price END DESC,
+            CASE WHEN _safe_sort_by = 'our_wholesale_price' AND _sort_direction = 'ASC' THEN p.our_wholesale_price END ASC,
+            CASE WHEN _safe_sort_by = 'our_wholesale_price' AND _sort_direction = 'DESC' THEN p.our_wholesale_price END DESC,
+            CASE WHEN _safe_sort_by = 'sku' AND _sort_direction = 'ASC' THEN p.sku END ASC,
+            CASE WHEN _safe_sort_by = 'sku' AND _sort_direction = 'DESC' THEN p.sku END DESC,
+            CASE WHEN _safe_sort_by = 'ean' AND _sort_direction = 'ASC' THEN p.ean END ASC,
+            CASE WHEN _safe_sort_by = 'ean' AND _sort_direction = 'DESC' THEN p.ean END DESC,
+            p.id ASC
+        LIMIT _limit OFFSET _offset
+    ),
+    -- Get latest competitor prices
+    latest_competitor_prices AS (
+        SELECT DISTINCT ON (product_id, competitor_id)
+            product_id,
+            competitor_id,
+            new_competitor_price,
+            c.name as competitor_name
+        FROM price_changes_competitors pcc
+        JOIN competitors c ON pcc.competitor_id = c.id
+        WHERE pcc.user_id = p_user_id
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.product_id IN (SELECT id FROM filtered_products)
+        ORDER BY product_id, competitor_id, changed_at DESC
+    ),
+    -- Get latest integration prices
+    latest_integration_prices AS (
+        SELECT DISTINCT ON (product_id, integration_id)
+            product_id,
+            integration_id,
+            new_competitor_price,
+            i.name as integration_name
+        FROM price_changes_competitors pcc
+        JOIN integrations i ON pcc.integration_id = i.id
+        WHERE pcc.user_id = p_user_id
+        AND pcc.integration_id IS NOT NULL
+        AND pcc.product_id IN (SELECT id FROM filtered_products)
+        ORDER BY product_id, integration_id, changed_at DESC
+    )
+    SELECT COALESCE(
+        json_agg(
+            json_build_object(
+                'id', fp.id,
+                'user_id', fp.user_id,
+                'name', fp.name,
+                'sku', fp.sku,
+                'ean', fp.ean,
+                'brand', fp.brand,
+                'brand_id', fp.brand_id,
+                'brand_name', fp.brand_name,
+                'category', fp.category,
+                'description', fp.description,
+                'image_url', fp.image_url,
+                'our_retail_price', fp.our_retail_price,
+                'our_wholesale_price', fp.our_wholesale_price,
+                'is_active', fp.is_active,
+                'created_at', fp.created_at,
+                'updated_at', fp.updated_at,
+                'currency_code', fp.currency_code,
+                'url', fp.url,
+                'competitor_prices', COALESCE(
+                    (
+                        SELECT json_object_agg(lcp.competitor_id::text, lcp.new_competitor_price)
+                        FROM latest_competitor_prices lcp
+                        WHERE lcp.product_id = fp.id
+                    ),
+                    '{}'
+                ),
+                'source_prices', COALESCE(
+                    (
+                        WITH combined_sources AS (
+                            SELECT 
+                                lcp.competitor_id as source_id,
+                                lcp.new_competitor_price as price,
+                                'competitor' as source_type,
+                                lcp.competitor_name as source_name
+                            FROM latest_competitor_prices lcp
+                            WHERE lcp.product_id = fp.id
+                            
+                            UNION ALL
+                            
+                            SELECT 
+                                lip.integration_id as source_id,
+                                lip.new_competitor_price as price,
+                                'integration' as source_type,
+                                lip.integration_name as source_name
+                            FROM latest_integration_prices lip
+                            WHERE lip.product_id = fp.id
+                        )
+                        SELECT json_object_agg(
+                            source_id::text,
+                            json_build_object(
+                                'price', price,
+                                'source_type', source_type,
+                                'source_name', source_name
+                            )
+                        )
+                        FROM combined_sources
+                    ),
+                    '{}'
+                )
+            )
+        ), 
+        '[]'
+    ) INTO _products_data 
+    FROM filtered_products fp;
 
--- Base query construction for counting
-    _count_query := format('
-        WITH CompetitorPricesForFilter AS (
-            SELECT
-                pc.product_id,
-                MIN(pc.new_price) as min_competitor_price
-            FROM price_changes pc
-            WHERE pc.user_id = %L 
-            AND pc.competitor_id IS NOT NULL
-            GROUP BY pc.product_id
-        )
-        SELECT count(DISTINCT p.id)
-        FROM products p
-        LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-        LEFT JOIN CompetitorPricesForFilter cpf ON p.id = cpf.product_id
-        WHERE p.user_id = %L', p_user_id, p_user_id);
-
--- Apply filters dynamically to count query
-    IF p_brand IS NOT NULL AND p_brand <> '' THEN
-        _count_query := _count_query || format(' AND p.brand_id = %L', p_brand);
-
-END IF;
-
-IF p_category IS NOT NULL AND p_category <> '' THEN
-        _count_query := _count_query || format(' AND p.category = %L', p_category);
-
-END IF;
-
-IF p_search IS NOT NULL AND p_search <> '' THEN
-        _count_query := _count_query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
-
-END IF;
-
-IF p_is_active IS NOT NULL THEN
-        _count_query := _count_query || format(' AND p.is_active = %L', p_is_active);
-
-END IF;
-
-IF p_has_price = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL';
-
-END IF;
-
--- Add price comparison filters to count query
-    IF p_price_lower_than_competitors = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price < cpf.min_competitor_price';
-
-END IF;
-
-IF p_price_higher_than_competitors = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price > cpf.min_competitor_price';
-
-END IF;
-
--- Add competitor filter to count query (modified for array)
-    IF p_competitor_ids IS NOT NULL AND array_length(p_competitor_ids, 1) > 0 THEN
-        _count_query := _count_query || format('
-            AND p.id IN (
-                SELECT DISTINCT pc.product_id
-                FROM price_changes pc
-                WHERE pc.user_id = %L
-                AND pc.competitor_id = ANY(%L)
-            )', p_user_id, p_competitor_ids);
-
-END IF;
-
--- Execute count query first
-    EXECUTE _count_query INTO _total_count;
-
--- Base query construction for data fetching
-    _query := format('
-        WITH CompetitorPricesForFilter AS (
-            SELECT
-                pc.product_id,
-                MIN(pc.new_price) as min_competitor_price
-            FROM price_changes pc
-            WHERE pc.user_id = %L 
-            AND pc.competitor_id IS NOT NULL
-            GROUP BY pc.product_id
-        ),
-        FilteredProductsBase AS ( -- Renamed to avoid conflict later
-            SELECT p.id
-            FROM products p
-            LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-            LEFT JOIN CompetitorPricesForFilter cpf ON p.id = cpf.product_id
-            WHERE p.user_id = %L', p_user_id, p_user_id);
-
--- Apply filters dynamically to data query (similar to count query)
-    IF p_brand IS NOT NULL AND p_brand <> '' THEN
-        _query := _query || format(' AND p.brand_id = %L', p_brand);
-
-END IF;
-
-IF p_category IS NOT NULL AND p_category <> '' THEN
-        _query := _query || format(' AND p.category = %L', p_category);
-
-END IF;
-
-IF p_search IS NOT NULL AND p_search <> '' THEN
-        _query := _query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
-
-END IF;
-
-IF p_is_active IS NOT NULL THEN
-        _query := _query || format(' AND p.is_active = %L', p_is_active);
-
-END IF;
-
-IF p_has_price = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL';
-
-END IF;
-
--- Add price comparison filters to data query
-    IF p_price_lower_than_competitors = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price < cpf.min_competitor_price';
-
-END IF;
-
-IF p_price_higher_than_competitors = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price > cpf.min_competitor_price';
-
-END IF;
-
--- Add competitor filter to data query (modified for array)
-    IF p_competitor_ids IS NOT NULL AND array_length(p_competitor_ids, 1) > 0 THEN
-        _query := _query || format('
-            AND p.id IN (
-                SELECT DISTINCT pc.product_id
-                FROM price_changes pc
-                WHERE pc.user_id = %L
-                AND pc.competitor_id = ANY(%L)
-            )', p_user_id, p_competitor_ids);
-
-END IF;
-
--- Add grouping, sorting and pagination to the subquery selecting product IDs
-    -- Add id as a secondary sort to ensure consistent ordering
-    _query := _query || format('
-            GROUP BY p.id -- Ensure unique product IDs before sorting/limiting
-            ORDER BY p.%I %s, p.id ASC
-            LIMIT %L OFFSET %L
-        ),
-        LatestCompetitorPrices AS (
-            SELECT
-                pc.product_id,
-                pc.competitor_id as source_id,
-                pc.new_price,
-                ''competitor'' as source_type,
-                c.name as source_name,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            JOIN competitors c ON pc.competitor_id = c.id
-            WHERE pc.user_id = %L AND pc.competitor_id IS NOT NULL
-        ),
-        LatestIntegrationPrices AS (
-            SELECT
-                pc.product_id,
-                pc.integration_id as source_id,
-                pc.new_price,
-                ''integration'' as source_type,
-                i.name as source_name,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            JOIN integrations i ON pc.integration_id = i.id
-            WHERE pc.user_id = %L AND pc.integration_id IS NOT NULL
-        ),
-        AllLatestPrices AS (
-            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestCompetitorPrices WHERE rn = 1
-            UNION ALL
-            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestIntegrationPrices WHERE rn = 1
-        ),
-        AggregatedSourcePrices AS (
-            SELECT
-                product_id,
-                jsonb_object_agg(
-                    source_id::text,
-                    jsonb_build_object(''price'', new_price, ''source_type'', source_type, ''source_name'', COALESCE(source_name, ''Unknown''))
-                ) as source_prices
-            FROM AllLatestPrices
-            GROUP BY product_id
-        ),
-        AggregatedCompetitorPrices AS (
-             SELECT
-                product_id,
-                jsonb_object_agg(source_id::text, new_price) as competitor_prices
-            FROM AllLatestPrices
-            GROUP BY product_id
-        )
-        -- Final SELECT joining products with aggregated prices
-        SELECT
-            p.*,
-            COALESCE(asp.source_prices, ''{}''::jsonb) as source_prices,
-            COALESCE(acp.competitor_prices, ''{}''::jsonb) as competitor_prices
-        FROM products p
-        JOIN FilteredProductsBase fp ON p.id = fp.id -- Join with the filtered product IDs
-        LEFT JOIN AggregatedSourcePrices asp ON p.id = asp.product_id
-        LEFT JOIN AggregatedCompetitorPrices acp ON p.id = acp.product_id
-        ORDER BY p.%I %s, p.id ASC', -- Apply final sorting based on the main product table fields with id as secondary sort
-        _safe_sort_by, _sort_direction, _limit, _offset, -- Parameters for LIMIT/OFFSET
-        p_user_id, -- For LatestCompetitorPrices CTE
-        p_user_id, -- For LatestIntegrationPrices CTE
-        _safe_sort_by, _sort_direction -- Parameters for final ORDER BY
-    );
-
--- Execute the main query and construct the JSON result
-    EXECUTE format('SELECT json_build_object(%L, COALESCE(json_agg(q), %L::json), %L, %L) FROM (%s) q',
-                   'data', '[]', 'totalCount', _total_count, _query)
-    INTO _result;
+-- Construct the final result
+    SELECT json_build_object(
+        'data', _products_data,
+        'totalCount', _total_count
+    ) INTO _result;
 
 RETURN _result;
 
@@ -1122,318 +1662,13 @@ END;
 
 $$;
 
-_count_query text;
-
-_offset integer;
-
-_limit integer;
-
-_sort_direction text;
-
-_allowed_sort_columns text[] := ARRAY['name', 'sku', 'ean', 'brand', 'category', 'our_price', 'cost_price', 'created_at', 'updated_at'];
-
-_safe_sort_by text;
-
-_result json;
-
-_total_count bigint;
-
-BEGIN
-    -- Calculate offset and limit
-    _offset := (p_page - 1) * p_page_size;
-
-_limit := p_page_size;
-
--- Validate sort_by parameter to prevent null field name error
-    IF p_sort_by IS NULL OR p_sort_by = '' THEN
-        _safe_sort_by := 'created_at';
-
-ELSIF p_sort_by = ANY(_allowed_sort_columns) THEN
-        _safe_sort_by := p_sort_by;
-
-ELSE
-        _safe_sort_by := 'created_at'; -- Default sort column
-    END IF;
-
--- Validate and sanitize sort direction
-    IF p_sort_order IS NULL OR p_sort_order = '' THEN
-        _sort_direction := 'DESC';
-
-ELSIF lower(p_sort_order) = 'asc' THEN
-        _sort_direction := 'ASC';
-
-ELSE
-        _sort_direction := 'DESC';
-
-END IF;
-
--- Base query construction for counting
-    _count_query := format('
-        WITH CompetitorPricesForFilter AS (
-            SELECT
-                pc.product_id,
-                MIN(pc.new_price) as min_competitor_price
-            FROM price_changes pc
-            WHERE pc.user_id = %L 
-            AND pc.competitor_id IS NOT NULL
-            GROUP BY pc.product_id
-        )
-        SELECT count(DISTINCT p.id)
-        FROM products p
-        LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-        LEFT JOIN CompetitorPricesForFilter cpf ON p.id = cpf.product_id
-        WHERE p.user_id = %L', p_user_id, p_user_id);
-
--- Apply filters dynamically to count query
-    IF p_brand IS NOT NULL AND p_brand <> '' THEN
-        _count_query := _count_query || format(' AND p.brand_id = %L', p_brand);
-
-END IF;
-
-IF p_category IS NOT NULL AND p_category <> '' THEN
-        _count_query := _count_query || format(' AND p.category = %L', p_category);
-
-END IF;
-
-IF p_search IS NOT NULL AND p_search <> '' THEN
-        _count_query := _count_query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
-
-END IF;
-
-IF p_is_active IS NOT NULL THEN
-        _count_query := _count_query || format(' AND p.is_active = %L', p_is_active);
-
-END IF;
-
-IF p_has_price = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL';
-
-END IF;
-
--- Add price comparison filters to count query
-    IF p_price_lower_than_competitors = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price < cpf.min_competitor_price';
-
-END IF;
-
-IF p_price_higher_than_competitors = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price > cpf.min_competitor_price';
-
-END IF;
-
--- Add competitor filter to count query
-    IF p_competitor_id IS NOT NULL THEN
-        _count_query := _count_query || format('
-            AND p.id IN (
-                SELECT DISTINCT pc.product_id
-                FROM price_changes pc
-                WHERE pc.user_id = %L
-                AND pc.competitor_id = %L
-            )', p_user_id, p_competitor_id);
-
-END IF;
-
--- Execute count query first
-    EXECUTE _count_query INTO _total_count;
-
--- Base query construction for data fetching
-    _query := format('
-        WITH CompetitorPricesForFilter AS (
-            SELECT
-                pc.product_id,
-                MIN(pc.new_price) as min_competitor_price
-            FROM price_changes pc
-            WHERE pc.user_id = %L 
-            AND pc.competitor_id IS NOT NULL
-            GROUP BY pc.product_id
-        ),
-        FilteredProductsBase AS ( -- Renamed to avoid conflict later
-            SELECT p.id
-            FROM products p
-            LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-            LEFT JOIN CompetitorPricesForFilter cpf ON p.id = cpf.product_id
-            WHERE p.user_id = %L', p_user_id, p_user_id);
-
--- Apply filters dynamically to data query (similar to count query)
-    IF p_brand IS NOT NULL AND p_brand <> '' THEN
-        _query := _query || format(' AND p.brand_id = %L', p_brand);
-
-END IF;
-
-IF p_category IS NOT NULL AND p_category <> '' THEN
-        _query := _query || format(' AND p.category = %L', p_category);
-
-END IF;
-
-IF p_search IS NOT NULL AND p_search <> '' THEN
-        _query := _query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
-
-END IF;
-
-IF p_is_active IS NOT NULL THEN
-        _query := _query || format(' AND p.is_active = %L', p_is_active);
-
-END IF;
-
-IF p_has_price = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL';
-
-END IF;
-
--- Add price comparison filters to data query
-    IF p_price_lower_than_competitors = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price < cpf.min_competitor_price';
-
-END IF;
-
-IF p_price_higher_than_competitors = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price > cpf.min_competitor_price';
-
-END IF;
-
--- Add competitor filter to data query
-    IF p_competitor_id IS NOT NULL THEN
-        _query := _query || format('
-            AND p.id IN (
-                SELECT DISTINCT pc.product_id
-                FROM price_changes pc
-                WHERE pc.user_id = %L
-                AND pc.competitor_id = %L
-            )', p_user_id, p_competitor_id);
-
-END IF;
-
--- Add grouping, sorting and pagination to the subquery selecting product IDs
-    -- Add id as a secondary sort to ensure consistent ordering
-    _query := _query || format('
-            GROUP BY p.id -- Ensure unique product IDs before sorting/limiting
-            ORDER BY p.%I %s, p.id ASC
-            LIMIT %L OFFSET %L
-        ),
-        LatestCompetitorPrices AS (
-            SELECT
-                pc.product_id,
-                pc.competitor_id as source_id,
-                pc.new_price,
-                ''competitor'' as source_type,
-                c.name as source_name,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            JOIN competitors c ON pc.competitor_id = c.id
-            WHERE pc.user_id = %L AND pc.competitor_id IS NOT NULL
-        ),
-        LatestIntegrationPrices AS (
-            SELECT
-                pc.product_id,
-                pc.integration_id as source_id,
-                pc.new_price,
-                ''integration'' as source_type,
-                i.name as source_name,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            JOIN integrations i ON pc.integration_id = i.id
-            WHERE pc.user_id = %L AND pc.integration_id IS NOT NULL
-        ),
-        AllLatestPrices AS (
-            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestCompetitorPrices WHERE rn = 1
-            UNION ALL
-            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestIntegrationPrices WHERE rn = 1
-        ),
-        AggregatedSourcePrices AS (
-            SELECT
-                product_id,
-                jsonb_object_agg(
-                    source_id::text,
-                    jsonb_build_object(''price'', new_price, ''source_type'', source_type, ''source_name'', COALESCE(source_name, ''Unknown''))
-                ) as source_prices
-            FROM AllLatestPrices
-            GROUP BY product_id
-        ),
-        AggregatedCompetitorPrices AS (
-             SELECT
-                product_id,
-                jsonb_object_agg(source_id::text, new_price) as competitor_prices
-            FROM AllLatestPrices
-            GROUP BY product_id
-        )
-        -- Final SELECT joining products with aggregated prices
-        SELECT
-            p.*,
-            COALESCE(asp.source_prices, ''{}''::jsonb) as source_prices,
-            COALESCE(acp.competitor_prices, ''{}''::jsonb) as competitor_prices
-        FROM products p
-        JOIN FilteredProductsBase fp ON p.id = fp.id -- Join with the filtered product IDs
-        LEFT JOIN AggregatedSourcePrices asp ON p.id = asp.product_id
-        LEFT JOIN AggregatedCompetitorPrices acp ON p.id = acp.product_id
-        ORDER BY p.%I %s, p.id ASC', -- Apply final sorting based on the main product table fields with id as secondary sort
-        _safe_sort_by, _sort_direction, _limit, _offset, -- Parameters for LIMIT/OFFSET
-        p_user_id, -- For LatestCompetitorPrices CTE
-        p_user_id, -- For LatestIntegrationPrices CTE
-        _safe_sort_by, _sort_direction -- Parameters for final ORDER BY
-    );
-
--- Execute the main query and construct the JSON result
-    EXECUTE format('SELECT json_build_object(%L, COALESCE(json_agg(q), %L::json), %L, %L) FROM (%s) q',
-                   'data', '[]', 'totalCount', _total_count, _query)
-    INTO _result;
-
-RETURN _result;
-
 END;
 
 $$;
 
-BEGIN
-  -- First ensure the user exists
-  PERFORM ensure_user_exists_simple(p_user_id);
-
--- Then call the original function with all parameters
-  SELECT get_products_filtered(
-    p_user_id,
-    p_page,
-    p_page_size,
-    p_sort_by,
-    p_sort_order,
-    p_brand,
-    p_category,
-    p_search,
-    p_is_active,
-    p_competitor_ids,
-    p_has_price,
-    p_price_lower_than_competitors,
-    p_price_higher_than_competitors
-  ) INTO v_result;
-
-RETURN v_result;
-
-END;
-
 $$;
 
-BEGIN
-  -- First ensure the user exists
-  PERFORM ensure_user_exists_simple(p_user_id);
-
--- Then call the original function with all parameters
-  SELECT get_products_filtered(
-    p_user_id,
-    p_page,
-    p_page_size,
-    p_sort_by,
-    p_sort_order,
-    p_brand,
-    p_category,
-    p_search,
-    p_is_active,
-    p_competitor_id,
-    p_has_price,
-    p_price_lower_than_competitors,
-    p_price_higher_than_competitors
-  ) INTO v_result;
-
-RETURN v_result;
+$$;
 
 END;
 
@@ -1443,13 +1678,13 @@ END;
 
 $$;
 
-$$;
+BEGIN
+    SELECT matching_rules INTO settings
+    FROM user_settings
+    WHERE user_id = p_user_id;
 
-$$;
-
-END;
-
-$$;
+-- Return default settings if none found
+    RETURN COALESCE(settings, '{"ean_priority": true, "sku_brand_fallback": true, "fuzzy_name_matching": false, "min_similarity_score": 80}'::jsonb);
 
 END;
 
@@ -1516,15 +1751,15 @@ END;
 
 $$;
 
+END;
+
+$$;
+
 duplicate_record RECORD;
 
 result JSONB;
 
 price_changes_count INT := 0;
-
-temp_competitors_count INT := 0;
-
-temp_integrations_count INT := 0;
 
 remaining_refs BOOLEAN;
 
@@ -1558,52 +1793,50 @@ IF duplicate_record IS NULL THEN
 
 END IF;
 
--- Update the primary product with any missing information from the duplicate
+-- Use intelligent data merging (prefer more complete data)
     UPDATE products
     SET
-        name = COALESCE(primary_record.name, duplicate_record.name),
+        name = CASE 
+            WHEN duplicate_record.name IS NOT NULL AND LENGTH(TRIM(duplicate_record.name)) > LENGTH(COALESCE(TRIM(primary_record.name), '')) 
+            THEN duplicate_record.name 
+            ELSE COALESCE(primary_record.name, duplicate_record.name) 
+        END,
         sku = COALESCE(primary_record.sku, duplicate_record.sku),
         ean = COALESCE(primary_record.ean, duplicate_record.ean),
         brand_id = COALESCE(primary_record.brand_id, duplicate_record.brand_id),
         brand = COALESCE(primary_record.brand, duplicate_record.brand),
         category = COALESCE(primary_record.category, duplicate_record.category),
-        description = COALESCE(primary_record.description, duplicate_record.description),
-        image_url = COALESCE(primary_record.image_url, duplicate_record.image_url),
-        our_price = COALESCE(primary_record.our_price, duplicate_record.our_price),
-        wholesale_price = COALESCE(primary_record.wholesale_price, duplicate_record.wholesale_price),
+        description = CASE 
+            WHEN duplicate_record.description IS NOT NULL AND LENGTH(TRIM(duplicate_record.description)) > LENGTH(COALESCE(TRIM(primary_record.description), '')) 
+            THEN duplicate_record.description 
+            ELSE COALESCE(primary_record.description, duplicate_record.description) 
+        END,
+        image_url = CASE 
+            WHEN duplicate_record.image_url IS NOT NULL AND LENGTH(TRIM(duplicate_record.image_url)) > 0 
+            THEN duplicate_record.image_url 
+            ELSE primary_record.image_url 
+        END,
+        our_retail_price = COALESCE(primary_record.our_retail_price, duplicate_record.our_retail_price),
+        our_wholesale_price = COALESCE(primary_record.our_wholesale_price, duplicate_record.our_wholesale_price),
         currency_code = COALESCE(primary_record.currency_code, duplicate_record.currency_code),
-        url = COALESCE(primary_record.url, duplicate_record.url),
+        url = CASE 
+            WHEN duplicate_record.url IS NOT NULL AND LENGTH(TRIM(duplicate_record.url)) > 0 
+            THEN duplicate_record.url 
+            ELSE primary_record.url 
+        END,
         updated_at = NOW()
     WHERE id = primary_id;
 
--- Update references in price_changes table and count affected rows
-    UPDATE price_changes
+-- Update references in price_changes_competitors table and count affected rows
+    UPDATE price_changes_competitors
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
 
 GET DIAGNOSTICS price_changes_count = ROW_COUNT;
 
--- Update references in temp_competitors_scraped_data table and count affected rows
-    UPDATE temp_competitors_scraped_data
-    SET product_id = primary_id
-    WHERE product_id = duplicate_id;
-
-GET DIAGNOSTICS temp_competitors_count = ROW_COUNT;
-
--- Update references in temp_integrations_scraped_data table and count affected rows
-    UPDATE temp_integrations_scraped_data
-    SET product_id = primary_id
-    WHERE product_id = duplicate_id;
-
-GET DIAGNOSTICS temp_integrations_count = ROW_COUNT;
-
 -- Check if there are any remaining references to the duplicate product
     SELECT EXISTS (
-        SELECT 1 FROM temp_integrations_scraped_data WHERE product_id = duplicate_id
-        UNION ALL
-        SELECT 1 FROM temp_competitors_scraped_data WHERE product_id = duplicate_id
-        UNION ALL
-        SELECT 1 FROM price_changes WHERE product_id = duplicate_id
+        SELECT 1 FROM price_changes_competitors WHERE product_id = duplicate_id
         LIMIT 1
     ) INTO remaining_refs;
 
@@ -1611,13 +1844,11 @@ IF remaining_refs THEN
         -- There are still references to the duplicate product
         RETURN jsonb_build_object(
             'success', false,
-            'message', 'Cannot delete product: still referenced in other tables',
+            'message', 'Cannot delete product: still referenced in price_changes_competitors table',
             'primary_id', primary_id,
             'duplicate_id', duplicate_id,
             'stats', jsonb_build_object(
-                'price_changes_updated', price_changes_count,
-                'temp_competitors_updated', temp_competitors_count,
-                'temp_integrations_updated', temp_integrations_count
+                'price_changes_updated', price_changes_count
             )
         );
 
@@ -1634,9 +1865,7 @@ END IF;
             'primary_id', primary_id,
             'duplicate_id', duplicate_id,
             'stats', jsonb_build_object(
-                'price_changes_updated', price_changes_count,
-                'temp_competitors_updated', temp_competitors_count,
-                'temp_integrations_updated', temp_integrations_count
+                'price_changes_updated', price_changes_count
             )
         );
 
@@ -1649,9 +1878,7 @@ EXCEPTION WHEN OTHERS THEN
             'primary_id', primary_id,
             'duplicate_id', duplicate_id,
             'stats', jsonb_build_object(
-                'price_changes_updated', price_changes_count,
-                'temp_competitors_updated', temp_competitors_count,
-                'temp_integrations_updated', temp_integrations_count
+                'price_changes_updated', price_changes_count
             )
         );
 
@@ -1675,11 +1902,171 @@ END;
 
 $$;
 
+END IF;
+
+-- Remove common separators and normalize to uppercase
+  RETURN REGEXP_REPLACE(UPPER(TRIM(sku)), '[^A-Z0-9]', '', 'g');
+
+END;
+
+$$;
+
+field_value TEXT;
+
+field_type TEXT;
+
+custom_field_id UUID;
+
+fields_processed INTEGER := 0;
+
+fields_created INTEGER := 0;
+
+standard_fields TEXT[] := ARRAY[
+        'id', 'user_id', 'name', 'sku', 'ean', 'brand', 'brand_id', 'category',
+        'description', 'image_url', 'url', 'price', 'our_retail_price', 'our_wholesale_price',
+        'currency_code', 'currency', 'is_active', 'created_at', 'updated_at',
+        'scraped_at', 'competitor_id', 'integration_id', 'scraper_id', 'status',
+        'error_message', 'processed_at', 'product_id', 'prestashop_product_id',
+        'raw_data', 'integration_run_id'
+    ];
+
 BEGIN
-    -- Force processing of any pending products by updating them in place
-    UPDATE temp_integrations_scraped_data
-    SET status = status  -- This is a no-op update that will trigger the BEFORE UPDATE trigger
+    -- Return early if no raw_data
+    IF p_raw_data IS NULL THEN
+        RETURN jsonb_build_object('fields_processed', 0, 'fields_created', 0);
+
+END IF;
+
+-- Process each field in raw_data
+    FOR field_key, field_value IN SELECT * FROM jsonb_each_text(p_raw_data)
+    LOOP
+        -- Skip if field is a standard field or empty
+        IF field_key = ANY(standard_fields) OR field_value IS NULL OR field_value = '' THEN
+            CONTINUE;
+
+END IF;
+
+-- Validate field name format
+        IF NOT (field_key ~ '^[a-zA-Z][a-zA-Z0-9_]*$') THEN
+            CONTINUE;
+
+END IF;
+
+-- Detect field type
+        field_type := 'text'; -- Default
+        IF field_value ~ '^[0-9]+\.?[0-9]*$' THEN
+            field_type := 'number';
+
+ELSIF field_value IN ('true', 'false') THEN
+            field_type := 'boolean';
+
+ELSIF field_value ~ '^https?://' THEN
+            field_type := 'url';
+
+ELSIF field_value ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN
+            field_type := 'date';
+
+END IF;
+
+-- Check if custom field already exists
+        SELECT id INTO custom_field_id
+        FROM user_custom_fields
+        WHERE user_id = p_user_id AND field_name = field_key;
+
+-- Create custom field if it doesn't exist
+        IF custom_field_id IS NULL THEN
+            INSERT INTO user_custom_fields (
+                user_id, field_name, field_type, is_required, default_value, validation_rules
+            ) VALUES (
+                p_user_id, field_key, field_type, false, NULL, NULL
+            ) RETURNING id INTO custom_field_id;
+
+fields_created := fields_created + 1;
+
+END IF;
+
+-- Delete existing value for this field and product (to avoid duplicates)
+        DELETE FROM product_custom_field_values
+        WHERE product_id = p_product_id AND custom_field_id = custom_field_id;
+
+-- Insert new custom field value
+        INSERT INTO product_custom_field_values (
+            product_id, custom_field_id, value
+        ) VALUES (
+            p_product_id, custom_field_id, field_value
+        );
+
+fields_processed := fields_processed + 1;
+
+END LOOP;
+
+RETURN jsonb_build_object(
+        'fields_processed', fields_processed,
+        'fields_created', fields_created
+    );
+
+EXCEPTION WHEN OTHERS THEN
+    -- Log error but don't fail the main process
+    RAISE WARNING 'Error processing custom fields for product %: %', p_product_id, SQLERRM;
+
+RETURN jsonb_build_object(
+        'fields_processed', 0,
+        'fields_created', 0,
+        'error', SQLERRM
+    );
+
+END;
+
+$_$;
+
+batch_size INTEGER := 100;
+
+processed_count INTEGER := 0;
+
+total_pending INTEGER;
+
+batch_ids UUID[];
+
+BEGIN
+    -- Get total pending count
+    SELECT COUNT(*) INTO total_pending
+    FROM temp_integrations_scraped_data
     WHERE integration_run_id = run_id AND status = 'pending';
+
+-- Process in batches to avoid timeouts
+    WHILE total_pending > 0 LOOP
+        -- Get a batch of IDs to process
+        SELECT ARRAY(
+            SELECT id
+            FROM temp_integrations_scraped_data
+            WHERE integration_run_id = run_id AND status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT batch_size
+        ) INTO batch_ids;
+
+-- Exit if no more records to process
+        IF array_length(batch_ids, 1) IS NULL THEN
+            EXIT;
+
+END IF;
+
+-- Process this batch by triggering the UPDATE trigger
+        UPDATE temp_integrations_scraped_data
+        SET status = status  -- This is a no-op update that will trigger the BEFORE UPDATE trigger
+        WHERE id = ANY(batch_ids);
+
+-- Update counters
+        processed_count := processed_count + array_length(batch_ids, 1);
+
+-- Check remaining count
+        SELECT COUNT(*) INTO total_pending
+        FROM temp_integrations_scraped_data
+        WHERE integration_run_id = run_id AND status = 'pending';
+
+-- Add a small delay to prevent overwhelming the database
+        PERFORM pg_sleep(0.1);
+
+END LOOP;
 
 -- Get the statistics
     SELECT get_integration_run_stats(run_id) INTO stats;
@@ -1693,35 +2080,19 @@ END;
 
 $$;
 
-old_price DECIMAL(10, 2);
-
-new_price DECIMAL(10, 2);
+current_competitor_price NUMERIC(10,2);
 
 v_brand_id UUID;
 
 BEGIN
-    -- Only process products with 'pending' status
-    IF NEW.status != 'pending' THEN
-        RETURN NEW;
+    -- If product_id is already provided, use it
+    IF NEW.product_id IS NOT NULL THEN
+        matched_product_id := NEW.product_id;
 
-END IF;
-
-BEGIN
-        -- Use the price directly from the integration without adding tax
-        -- Prices from integrations (like Prestashop) already include tax
-        IF NEW.price IS NOT NULL THEN
-            new_price := NEW.price; -- Use price directly, no tax adjustment needed
-        ELSE
-            new_price := NULL;
-
-END IF;
-
--- Find or create brand
-        SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
-
--- Try to find existing product by EAN first
+ELSE
+        -- Try to find existing product by EAN first
         IF NEW.ean IS NOT NULL AND NEW.ean != '' THEN
-            SELECT id INTO existing_product_id
+            SELECT id INTO matched_product_id
             FROM products
             WHERE user_id = NEW.user_id
               AND ean = NEW.ean
@@ -1729,92 +2100,330 @@ END IF;
 
 END IF;
 
--- If not found by EAN, try to match by brand + SKU
-        IF existing_product_id IS NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL THEN
-            SELECT id INTO existing_product_id
+-- If no match by EAN, try by SKU and brand
+        IF matched_product_id IS NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+            SELECT id INTO matched_product_id
             FROM products
             WHERE user_id = NEW.user_id
-              AND brand_id = v_brand_id
               AND sku = NEW.sku
+              AND brand = NEW.brand
             LIMIT 1;
 
 END IF;
 
-IF existing_product_id IS NOT NULL THEN
-            -- Product exists - UPDATE ALL FIELDS (we own our products)
-            -- Get current our_price for price change tracking
-            SELECT our_price INTO old_price
-            FROM products
-            WHERE id = existing_product_id;
+-- If we found a match, update it with missing information only
+        IF matched_product_id IS NOT NULL THEN
+            -- Find or create brand if we have brand name
+            IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+                SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
 
--- Update ALL product fields with integration data
-            UPDATE products
-            SET
-                name = COALESCE(NEW.name, name),
-                sku = COALESCE(NEW.sku, sku),
-                ean = COALESCE(NEW.ean, ean),
-                brand = COALESCE(NEW.brand, brand),
-                brand_id = COALESCE(v_brand_id, brand_id),
-                our_price = new_price,
-                wholesale_price = COALESCE(NEW.wholesale_price, wholesale_price),
-                image_url = COALESCE(NEW.image_url, image_url),
-                url = COALESCE(NEW.url, url),
-                currency_code = COALESCE(NEW.currency_code, currency_code),
+END IF;
+
+-- Update existing product ONLY with missing information (don't overwrite existing data)
+            -- For competitors: only fill in NULL or empty fields
+            UPDATE products SET
+                name = CASE WHEN (name IS NULL OR name = '') AND NEW.name IS NOT NULL AND NEW.name != '' THEN NEW.name ELSE name END,
+                sku = CASE WHEN (sku IS NULL OR sku = '') AND NEW.sku IS NOT NULL AND NEW.sku != '' THEN NEW.sku ELSE sku END,
+                ean = CASE WHEN (ean IS NULL OR ean = '') AND NEW.ean IS NOT NULL AND NEW.ean != '' THEN NEW.ean ELSE ean END,
+                brand = CASE WHEN (brand IS NULL OR brand = '') AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN NEW.brand ELSE brand END,
+                brand_id = CASE WHEN brand_id IS NULL AND v_brand_id IS NOT NULL THEN v_brand_id ELSE brand_id END,
+                image_url = CASE WHEN (image_url IS NULL OR image_url = '') AND NEW.image_url IS NOT NULL AND NEW.image_url != '' THEN NEW.image_url ELSE image_url END,
+                url = CASE WHEN (url IS NULL OR url = '') AND NEW.url IS NOT NULL AND NEW.url != '' THEN NEW.url ELSE url END,
+                currency_code = CASE WHEN (currency_code IS NULL OR currency_code = '') AND NEW.currency_code IS NOT NULL AND NEW.currency_code != '' THEN NEW.currency_code ELSE currency_code END,
                 updated_at = NOW()
-            WHERE id = existing_product_id;
-
--- Set the product_id in the staged record
-            NEW.product_id := existing_product_id;
+            WHERE id = matched_product_id;
 
 ELSE
-            -- Product doesn't exist - CREATE new product
+            -- If still no match, create new product
+            -- Find or create brand if we have brand name
+            IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+                SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
+
+END IF;
+
+-- Create new product
+            INSERT INTO products (
+                user_id,
+                name,
+                sku,
+                ean,
+                brand,
+                brand_id,
+                image_url,
+                currency_code,
+                url
+            ) VALUES (
+                NEW.user_id,
+                NEW.name,
+                NEW.sku,
+                NEW.ean,
+                NEW.brand,
+                v_brand_id,
+                NEW.image_url,
+                NEW.currency_code,
+                NEW.url
+            ) RETURNING id INTO matched_product_id;
+
+END IF;
+
+-- Update the temp record with the matched/created product_id
+        UPDATE temp_competitors_scraped_data
+        SET product_id = matched_product_id
+        WHERE id = NEW.id;
+
+END IF;
+
+-- Get current competitor price for this product and competitor
+    SELECT new_competitor_price INTO current_competitor_price
+    FROM price_changes_competitors
+    WHERE product_id = matched_product_id
+      AND competitor_id = NEW.competitor_id
+      AND user_id = NEW.user_id
+    ORDER BY changed_at DESC
+    LIMIT 1;
+
+-- Insert competitor price change record (ONLY competitor price fields)
+    INSERT INTO price_changes_competitors (
+        user_id,
+        product_id,
+        competitor_id,
+        old_competitor_price,
+        new_competitor_price,
+        price_change_percentage,
+        changed_at,
+        currency_code,
+        url
+    ) VALUES (
+        NEW.user_id,
+        matched_product_id,
+        NEW.competitor_id,
+        COALESCE(current_competitor_price, NEW.competitor_price), -- Use current price as old price, or new price if first time
+        NEW.competitor_price,
+        CASE 
+            WHEN current_competitor_price IS NULL OR current_competitor_price = 0 THEN 0
+            ELSE ROUND(((NEW.competitor_price - current_competitor_price) / current_competitor_price * 100)::numeric, 2)
+        END,
+        NOW(),
+        NEW.currency_code,
+        NEW.url
+    );
+
+-- Delete the processed temp record
+    DELETE FROM temp_competitors_scraped_data WHERE id = NEW.id;
+
+RETURN NULL; -- Don't insert into temp table since we're deleting it
+END;
+
+$$;
+
+v_brand_id UUID;
+
+old_retail_price DECIMAL(10, 2);
+
+old_wholesale_price DECIMAL(10, 2);
+
+new_retail_price DECIMAL(10, 2);
+
+new_wholesale_price DECIMAL(10, 2);
+
+merged_data JSONB;
+
+existing_product RECORD;
+
+custom_fields_result JSONB;
+
+BEGIN
+    -- Skip if already processed
+    IF NEW.status = 'processed' THEN
+        RETURN NEW;
+
+END IF;
+
+-- Calculate new prices (integration prices already include tax) and round to remove decimals
+    new_retail_price := ROUND(NEW.our_retail_price);
+
+new_wholesale_price := ROUND(NEW.our_wholesale_price);
+
+-- Find or create brand
+    IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+        SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
+
+END IF;
+
+-- Use enhanced fuzzy matching to find existing product
+    SELECT find_product_with_fuzzy_matching(
+        NEW.user_id,
+        NEW.ean,
+        NEW.brand,
+        NEW.sku,
+        NEW.name,
+        v_brand_id
+    ) INTO existing_product_id;
+
+IF existing_product_id IS NOT NULL THEN
+        -- Get existing product data
+        SELECT * INTO existing_product FROM products WHERE id = existing_product_id;
+
+-- Store old prices
+        old_retail_price := existing_product.our_retail_price;
+
+old_wholesale_price := existing_product.our_wholesale_price;
+
+-- Update existing product with new data
+        UPDATE products SET
+            name = COALESCE(NULLIF(NEW.name, ''), name),
+            sku = COALESCE(NULLIF(NEW.sku, ''), sku),
+            ean = COALESCE(NULLIF(NEW.ean, ''), ean),
+            brand = COALESCE(NULLIF(NEW.brand, ''), brand),
+            brand_id = COALESCE(v_brand_id, brand_id),
+            our_retail_price = new_retail_price,
+            our_wholesale_price = new_wholesale_price,
+            image_url = COALESCE(NULLIF(NEW.image_url, ''), image_url),
+            url = COALESCE(NULLIF(NEW.url, ''), url),
+            currency_code = COALESCE(NULLIF(NEW.currency_code, ''), currency_code),
+            updated_at = NOW()
+        WHERE id = existing_product_id;
+
+ELSE
+        -- Create new product if we have sufficient data
+        IF (NEW.ean IS NOT NULL AND NEW.ean != '') OR
+           (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL) THEN
+
             INSERT INTO products (
                 user_id, name, sku, ean, brand, brand_id,
-                our_price, wholesale_price, image_url, url, currency_code,
+                our_retail_price, our_wholesale_price, image_url, url, currency_code,
                 is_active, created_at, updated_at
             ) VALUES (
                 NEW.user_id, NEW.name, NEW.sku, NEW.ean, NEW.brand, v_brand_id,
-                new_price, NEW.wholesale_price, NEW.image_url, NEW.url, NEW.currency_code,
+                new_retail_price, new_wholesale_price, NEW.image_url, NEW.url, NEW.currency_code,
                 true, NOW(), NOW()
             ) RETURNING id INTO existing_product_id;
 
--- Set the product_id in the staged record
-            NEW.product_id := existing_product_id;
+-- For new products, old_price should be NULL (no previous price)
+            old_retail_price := NULL;
+
+old_wholesale_price := NULL;
 
 END IF;
 
--- Record price change if we have a price
-        IF new_price IS NOT NULL THEN
-            INSERT INTO price_changes (
-                user_id, product_id, integration_id, old_price, new_price,
+END IF;
+
+-- Process custom fields from raw_data if we have a product
+    IF existing_product_id IS NOT NULL AND NEW.raw_data IS NOT NULL THEN
+        SELECT process_custom_fields_from_raw_data(
+            NEW.user_id,
+            existing_product_id,
+            NEW.raw_data
+        ) INTO custom_fields_result;
+
+END IF;
+
+-- Record retail price change if we have a price and a product
+    -- For integration data, we track our retail price changes in price_changes_competitors
+    IF new_retail_price IS NOT NULL AND existing_product_id IS NOT NULL THEN
+        -- Handle retail price change logic - ONLY use our retail price columns for integration data
+        IF old_retail_price IS NULL THEN
+            -- First time for the product, record initial price
+            INSERT INTO price_changes_competitors (
+                user_id, product_id, integration_id, 
+                old_competitor_price, new_competitor_price,  -- Set to NULL for integration data
+                old_our_retail_price, new_our_retail_price,
                 price_change_percentage, currency_code, changed_at, url
             ) VALUES (
                 NEW.user_id, existing_product_id, NEW.integration_id,
-                old_price, new_price,
-                CASE
-                    WHEN old_price IS NOT NULL AND old_price > 0 THEN
-                        ROUND(((new_price - old_price) / old_price * 100)::numeric, 2)
-                    ELSE NULL
-                END,
+                NULL, NULL,  -- No competitor prices for integration data
+                new_retail_price, -- Use current price as old price the first time
+                new_retail_price,
+                0, -- 0% change the first time
                 NEW.currency_code, NOW(), NEW.url
             );
 
+ELSE
+            -- Check if retail price has changed
+            IF new_retail_price != old_retail_price THEN
+                INSERT INTO price_changes_competitors (
+                    user_id, product_id, integration_id,
+                    old_competitor_price, new_competitor_price,  -- Set to NULL for integration data
+                    old_our_retail_price, new_our_retail_price,
+                    price_change_percentage, currency_code, changed_at, url
+                ) VALUES (
+                    NEW.user_id, existing_product_id, NEW.integration_id,
+                    NULL, NULL,  -- No competitor prices for integration data
+                    old_retail_price, new_retail_price,
+                    CASE
+                        WHEN old_retail_price IS NOT NULL AND old_retail_price > 0 THEN
+                            ROUND(((new_retail_price - old_retail_price) / old_retail_price * 100)::numeric, 2)
+                        ELSE 0
+                    END,
+                    NEW.currency_code, NOW(), NEW.url
+                );
+
 END IF;
 
--- Mark as processed and set processed timestamp
-        NEW.status := 'processed';
+END IF;
+
+END IF;
+
+-- Record wholesale price change if we have a wholesale price and a product
+    -- For integration data, we track our wholesale price changes in price_changes_suppliers
+    IF new_wholesale_price IS NOT NULL AND existing_product_id IS NOT NULL THEN
+        -- Handle wholesale price change logic in suppliers table
+        IF old_wholesale_price IS NULL THEN
+            -- First time for the product, record initial wholesale price
+            INSERT INTO price_changes_suppliers (
+                user_id, product_id, integration_id, 
+                old_our_wholesale_price, new_our_wholesale_price,
+                old_supplier_price, new_supplier_price,  -- Set to NULL for integration data
+                price_change_percentage, currency_code, changed_at, url, change_source
+            ) VALUES (
+                NEW.user_id, existing_product_id, NEW.integration_id,
+                new_wholesale_price, -- Use current price as old price the first time
+                new_wholesale_price,
+                NULL, NULL, -- No supplier price data from integration
+                0, -- 0% change the first time
+                NEW.currency_code, NOW(), NEW.url, 'integration'
+            );
+
+ELSE
+            -- Check if wholesale price has changed
+            IF new_wholesale_price != old_wholesale_price THEN
+                INSERT INTO price_changes_suppliers (
+                    user_id, product_id, integration_id,
+                    old_our_wholesale_price, new_our_wholesale_price,
+                    old_supplier_price, new_supplier_price,  -- Set to NULL for integration data
+                    price_change_percentage, currency_code, changed_at, url, change_source
+                ) VALUES (
+                    NEW.user_id, existing_product_id, NEW.integration_id,
+                    old_wholesale_price, new_wholesale_price,
+                    NULL, NULL, -- No supplier price data from integration
+                    CASE
+                        WHEN old_wholesale_price IS NOT NULL AND old_wholesale_price > 0 THEN
+                            ROUND(((new_wholesale_price - old_wholesale_price) / old_wholesale_price * 100)::numeric, 2)
+                        ELSE 0
+                    END,
+                    NEW.currency_code, NOW(), NEW.url, 'integration'
+                );
+
+END IF;
+
+END IF;
+
+END IF;
+
+-- Mark as processed
+    NEW.status := 'processed';
 
 NEW.processed_at := NOW();
 
 -- Delete from temp table (cleanup after processing)
-        DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
+    DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
 
 -- Return NULL to prevent the UPDATE (since we deleted the record)
-        RETURN NULL;
+    RETURN NULL;
 
 EXCEPTION WHEN OTHERS THEN
-        -- Mark as error and store error message
-        NEW.status := 'error';
+    -- Mark as error and store error message
+    NEW.status := 'error';
 
 NEW.error_message := SQLERRM;
 
@@ -1824,168 +2433,206 @@ RETURN NEW;
 
 END;
 
-END;
-
 $$;
+
+v_brand_id UUID;
+
+last_supplier_price DECIMAL(10, 2);
+
+last_our_wholesale_price DECIMAL(10, 2);
+
+last_supplier_recommended_price DECIMAL(10, 2);
 
 price_change_pct DECIMAL(10, 2);
 
-matched_product_id UUID;
-
-v_brand_id UUID;  -- Renamed from brand_id to v_brand_id to avoid ambiguity
-  debug_info TEXT;
+existing_product RECORD;
 
 BEGIN
-  -- Match product if not already matched
-  IF NEW.product_id IS NULL THEN
-    -- Try to match by EAN first
-    IF NEW.ean IS NOT NULL AND NEW.ean != '' THEN
-      SELECT id INTO matched_product_id FROM products WHERE user_id = NEW.user_id AND ean = NEW.ean LIMIT 1;
+    -- Find or create brand if we have brand name
+    IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+        SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
 
 END IF;
 
--- If no match by EAN, try to match by brand and SKU
-    IF matched_product_id IS NULL AND NEW.brand IS NOT NULL AND NEW.sku IS NOT NULL AND NEW.brand != '' AND NEW.sku != '' THEN
-      -- Use find_or_create_brand function to get or create the brand
-      SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
-
--- If brand found, try to match by brand_id and SKU
-      IF v_brand_id IS NOT NULL THEN
-        SELECT id INTO matched_product_id FROM products WHERE user_id = NEW.user_id AND brand_id = v_brand_id AND sku = NEW.sku LIMIT 1;
-
-END IF;
-
--- If still no match, try by brand name and SKU
-      IF matched_product_id IS NULL THEN
-        SELECT id INTO matched_product_id FROM products WHERE user_id = NEW.user_id AND brand = NEW.brand AND sku = NEW.sku LIMIT 1;
-
-END IF;
-
-END IF;
+-- Use enhanced fuzzy matching to find existing product
+    SELECT find_product_with_fuzzy_matching(
+        NEW.user_id,
+        NEW.ean,
+        NEW.brand,
+        NEW.sku,
+        NEW.name,
+        v_brand_id
+    ) INTO matched_product_id;
 
 -- If no match found, create a new product if we have sufficient data
     IF matched_product_id IS NULL THEN
-      -- Check if we have sufficient data to create a product
-      IF (NEW.ean IS NOT NULL AND NEW.ean != '') OR
-         (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL) THEN
+        -- Check if we have sufficient data to create a product
+        IF (NEW.ean IS NOT NULL AND NEW.ean != '') OR
+           (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL) THEN
 
-        -- Create a new product
-        INSERT INTO products (
-          user_id,
-          name,
-          sku,
-          ean,
-          brand,
-          brand_id,
-          image_url,
-          url,
-          currency_code
-        ) VALUES (
-          NEW.user_id,
-          NEW.name,
-          NEW.sku,
-          NEW.ean,
-          NEW.brand,
-          v_brand_id,
-          NEW.image_url,
-          NEW.url,
-          COALESCE(NEW.currency_code, 'SEK')
-        )
-        RETURNING id INTO matched_product_id;
-
--- Update the scraped_product with the new product_id
-        NEW.product_id := matched_product_id;
-
-ELSE
-        -- Insufficient data to create a product
-        RETURN NEW;
+            -- Create a new product
+            INSERT INTO products (
+                user_id,
+                name,
+                sku,
+                ean,
+                brand,
+                brand_id,
+                image_url,
+                url,
+                currency_code
+            ) VALUES (
+                NEW.user_id,
+                NEW.name,
+                NEW.sku,
+                NEW.ean,
+                NEW.brand,
+                v_brand_id,
+                NEW.image_url,
+                NEW.url,
+                COALESCE(NEW.currency_code, 'SEK')
+            )
+            RETURNING id INTO matched_product_id;
 
 END IF;
 
 ELSE
-      -- Update the scraped_product with the matched product_id
-      NEW.product_id := matched_product_id;
+        -- Update existing product ONLY with missing information (don't overwrite existing data)
+        -- For suppliers/competitors: only fill in NULL or empty fields
+        UPDATE products SET
+            name = CASE WHEN (name IS NULL OR name = '') AND NEW.name IS NOT NULL AND NEW.name != '' THEN NEW.name ELSE name END,
+            sku = CASE WHEN (sku IS NULL OR sku = '') AND NEW.sku IS NOT NULL AND NEW.sku != '' THEN NEW.sku ELSE sku END,
+            ean = CASE WHEN (ean IS NULL OR ean = '') AND NEW.ean IS NOT NULL AND NEW.ean != '' THEN NEW.ean ELSE ean END,
+            brand = CASE WHEN (brand IS NULL OR brand = '') AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN NEW.brand ELSE brand END,
+            brand_id = CASE WHEN brand_id IS NULL AND v_brand_id IS NOT NULL THEN v_brand_id ELSE brand_id END,
+            image_url = CASE WHEN (image_url IS NULL OR image_url = '') AND NEW.image_url IS NOT NULL AND NEW.image_url != '' THEN NEW.image_url ELSE image_url END,
+            url = CASE WHEN (url IS NULL OR url = '') AND NEW.url IS NOT NULL AND NEW.url != '' THEN NEW.url ELSE url END,
+            currency_code = CASE WHEN (currency_code IS NULL OR currency_code = '') AND NEW.currency_code IS NOT NULL AND NEW.currency_code != '' THEN NEW.currency_code ELSE currency_code END,
+            updated_at = NOW()
+        WHERE id = matched_product_id;
 
 END IF;
 
-END IF;
-
--- Get the latest price for this product from this competitor
-  SELECT new_price INTO last_price
-  FROM price_changes
-  WHERE competitor_id = NEW.competitor_id
-    AND product_id = NEW.product_id
-  ORDER BY changed_at DESC
-  LIMIT 1;
+-- Only proceed with price tracking if we have a product
+    IF matched_product_id IS NOT NULL THEN
+        -- Get the last prices for this product from this supplier
+        SELECT 
+            new_supplier_price,
+            new_our_wholesale_price,
+            new_supplier_recommended_price
+        INTO 
+            last_supplier_price,
+            last_our_wholesale_price,
+            last_supplier_recommended_price
+        FROM price_changes_suppliers
+        WHERE product_id = matched_product_id 
+          AND supplier_id = NEW.supplier_id
+          AND user_id = NEW.user_id
+        ORDER BY changed_at DESC
+        LIMIT 1;
 
 -- Only add a price change if:
-  -- 1. This is the first time we see this product (last_price IS NULL), OR
-  -- 2. The price has actually changed
-  IF last_price IS NULL THEN
-    -- First time for the product, record initial price
-    INSERT INTO price_changes (
-      user_id,
-      product_id,
-      competitor_id,
-      old_price,
-      new_price,
-      price_change_percentage,
-      changed_at,
-      currency_code,
-      url
-    ) VALUES (
-      NEW.user_id,
-      NEW.product_id,
-      NEW.competitor_id,
-      NEW.price, -- Use current price as old price the first time
-      NEW.price,
-      0,  -- 0% change the first time
-      NOW(),
-      NEW.currency_code,
-      NEW.url
-    );
+        -- 1. This is the first time we see this product (last_supplier_price IS NULL), OR
+        -- 2. Any of the prices have actually changed
+        IF last_supplier_price IS NULL THEN
+            -- First time for the product, record initial prices
+            INSERT INTO price_changes_suppliers (
+                user_id,
+                product_id,
+                supplier_id,
+                old_supplier_price,
+                new_supplier_price,
+                old_our_wholesale_price,
+                new_our_wholesale_price,
+                old_supplier_recommended_price,
+                new_supplier_recommended_price,
+                price_change_percentage,
+                changed_at,
+                currency_code,
+                url,
+                minimum_order_quantity,
+                lead_time_days,
+                change_source
+            ) VALUES (
+                NEW.user_id,
+                matched_product_id,
+                NEW.supplier_id,
+                NEW.supplier_price, -- Use current price as old price the first time
+                NEW.supplier_price,
+                NULL, -- No previous wholesale price
+                NULL, -- No new wholesale price from supplier data
+                NEW.supplier_recommended_price, -- Use current as old the first time
+                NEW.supplier_recommended_price,
+                0,  -- 0% change the first time
+                NOW(),
+                NEW.currency_code,
+                NEW.url,
+                NEW.minimum_order_quantity,
+                NEW.lead_time_days,
+                'scraper'
+            );
 
 ELSE
-    -- Calculate price change percentage
-    IF last_price = 0 THEN
-      price_change_pct := 0; -- Avoid division by zero
-    ELSE
-      price_change_pct := ((NEW.price - last_price) / last_price) * 100;
+            -- Check if any price has changed
+            IF NEW.supplier_price != last_supplier_price OR 
+               COALESCE(NEW.supplier_recommended_price, 0) != COALESCE(last_supplier_recommended_price, 0) THEN
+                
+                -- Calculate price change percentage based on supplier price
+                IF last_supplier_price = 0 THEN
+                    price_change_pct := 0; -- Avoid division by zero
+                ELSE
+                    price_change_pct := ((NEW.supplier_price - last_supplier_price) / last_supplier_price) * 100;
 
 END IF;
 
--- Check if price has changed
-    IF NEW.price != last_price THEN
-      -- Only add price change entry if the price changed
-      INSERT INTO price_changes (
-        user_id,
-        product_id,
-        competitor_id,
-        old_price,
-        new_price,
-        price_change_percentage,
-        changed_at,
-        currency_code,
-        url
-      ) VALUES (
-        NEW.user_id,
-        NEW.product_id,
-        NEW.competitor_id,
-        last_price,
-        NEW.price,
-        price_change_pct,
-        NOW(),
-        NEW.currency_code,
-        NEW.url
-      );
+-- Only add price change entry if something changed
+                INSERT INTO price_changes_suppliers (
+                    user_id,
+                    product_id,
+                    supplier_id,
+                    old_supplier_price,
+                    new_supplier_price,
+                    old_our_wholesale_price,
+                    new_our_wholesale_price,
+                    old_supplier_recommended_price,
+                    new_supplier_recommended_price,
+                    price_change_percentage,
+                    changed_at,
+                    currency_code,
+                    url,
+                    minimum_order_quantity,
+                    lead_time_days,
+                    change_source
+                ) VALUES (
+                    NEW.user_id,
+                    matched_product_id,
+                    NEW.supplier_id,
+                    last_supplier_price,
+                    NEW.supplier_price,
+                    last_our_wholesale_price,
+                    last_our_wholesale_price, -- Keep same wholesale price
+                    last_supplier_recommended_price,
+                    NEW.supplier_recommended_price,
+                    price_change_pct,
+                    NOW(),
+                    NEW.currency_code,
+                    NEW.url,
+                    NEW.minimum_order_quantity,
+                    NEW.lead_time_days,
+                    'scraper'
+                );
 
 END IF;
 
 END IF;
 
--- Leave products in scraped_products for now
-  -- Daily cleanup will handle removing them
-  RETURN NEW;
+END IF;
+
+-- IMMEDIATE CLEANUP: Delete the processed record from temp table
+    DELETE FROM temp_suppliers_scraped_data WHERE id = NEW.id;
+
+-- Return NULL to prevent the INSERT (since we deleted the record)
+    RETURN NULL;
 
 END;
 
@@ -2049,6 +2696,10 @@ END;
 
 $$;
 
+END;
+
+$$;
+
 BEGIN
     -- If brand column is updated but brand_id is not, update brand_id
     IF NEW.brand IS NOT NULL AND NEW.brand != '' AND 
@@ -2101,6 +2752,70 @@ END IF;
 END;
 
 $$;
+
+ordered_id_2 UUID;
+
+deleted_count INTEGER;
+
+BEGIN
+    -- Ensure consistent ordering (smaller UUID first)
+    IF p_product_id_1 < p_product_id_2 THEN
+        ordered_id_1 := p_product_id_1;
+
+ordered_id_2 := p_product_id_2;
+
+ELSE
+        ordered_id_1 := p_product_id_2;
+
+ordered_id_2 := p_product_id_1;
+
+END IF;
+
+-- Delete dismissal record
+    DELETE FROM products_dismissed_duplicates
+    WHERE user_id = p_user_id 
+      AND product_id_1 = ordered_id_1 
+      AND product_id_2 = ordered_id_2;
+
+GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+IF deleted_count > 0 THEN
+        RETURN jsonb_build_object(
+            'success', true,
+            'message', 'Product duplicate undismissed successfully',
+            'product_id_1', ordered_id_1,
+            'product_id_2', ordered_id_2
+        );
+
+ELSE
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'No dismissed duplicate found for these products',
+            'product_id_1', ordered_id_1,
+            'product_id_2', ordered_id_2
+        );
+
+END IF;
+
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+        'success', false,
+        'message', 'Error undismissing product duplicate: ' || SQLERRM,
+        'product_id_1', p_product_id_1,
+        'product_id_2', p_product_id_2
+    );
+
+END;
+
+$$;
+
+RETURN NEW;
+
+END;
+
+$$;
+
+END IF;
 
 RETURN NEW;
 
@@ -2775,35 +3490,6 @@ END;
 
 $$;
 
-RETURN new;
-
-END;
-
-$$;
-
---
--- Name: decrypted_secrets; Type: VIEW; Schema: vault; Owner: -
---
-
-CREATE VIEW vault.decrypted_secrets AS
- SELECT secrets.id,
-    secrets.name,
-    secrets.description,
-    secrets.secret,
-        CASE
-            WHEN (secrets.secret IS NULL) THEN NULL::text
-            ELSE
-            CASE
-                WHEN (secrets.key_id IS NULL) THEN NULL::text
-                ELSE convert_from(pgsodium.crypto_aead_det_decrypt(decode(secrets.secret, 'base64'::text), convert_to(((((secrets.id)::text || secrets.description) || (secrets.created_at)::text) || (secrets.updated_at)::text), 'utf8'::name), secrets.key_id, secrets.nonce), 'utf8'::name)
-            END
-        END AS decrypted_secret,
-    secrets.key_id,
-    secrets.nonce,
-    secrets.created_at,
-    secrets.updated_at
-   FROM vault.secrets;
-
 --
 -- Name: audit_logs_instance_id_idx; Type: INDEX; Schema: auth; Owner: -
 --
@@ -3168,25 +3854,55 @@ CREATE INDEX idx_marketing_contacts_status ON public.marketing_contacts USING bt
 -- Name: idx_price_changes_competitor_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_competitor_id ON public.price_changes USING btree (competitor_id);
+CREATE INDEX idx_price_changes_competitor_id ON public.price_changes_competitors USING btree (competitor_id);
 
 --
 -- Name: idx_price_changes_integration_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_integration_id ON public.price_changes USING btree (integration_id);
+CREATE INDEX idx_price_changes_integration_id ON public.price_changes_competitors USING btree (integration_id);
 
 --
 -- Name: idx_price_changes_product_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_product_id ON public.price_changes USING btree (product_id);
+CREATE INDEX idx_price_changes_product_id ON public.price_changes_competitors USING btree (product_id);
+
+--
+-- Name: idx_price_changes_product_user_time; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_product_user_time ON public.price_changes_competitors USING btree (product_id, user_id, changed_at DESC);
+
+--
+-- Name: idx_price_changes_suppliers_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_changed_at ON public.price_changes_suppliers USING btree (changed_at);
+
+--
+-- Name: idx_price_changes_suppliers_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_product_id ON public.price_changes_suppliers USING btree (product_id);
+
+--
+-- Name: idx_price_changes_suppliers_supplier_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_supplier_id ON public.price_changes_suppliers USING btree (supplier_id);
+
+--
+-- Name: idx_price_changes_suppliers_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_user_id ON public.price_changes_suppliers USING btree (user_id);
 
 --
 -- Name: idx_price_changes_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id ON public.price_changes USING btree (user_id);
+CREATE INDEX idx_price_changes_user_id ON public.price_changes_competitors USING btree (user_id);
 
 --
 -- Name: INDEX idx_price_changes_user_id; Type: COMMENT; Schema: public; Owner: -
@@ -3198,7 +3914,7 @@ COMMENT ON INDEX public.idx_price_changes_user_id IS 'Optimizes user-based price
 -- Name: idx_price_changes_user_id_changed_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id_changed_at ON public.price_changes USING btree (user_id, changed_at DESC);
+CREATE INDEX idx_price_changes_user_id_changed_at ON public.price_changes_competitors USING btree (user_id, changed_at DESC);
 
 --
 -- Name: INDEX idx_price_changes_user_id_changed_at; Type: COMMENT; Schema: public; Owner: -
@@ -3210,7 +3926,7 @@ COMMENT ON INDEX public.idx_price_changes_user_id_changed_at IS 'Optimizes time-
 -- Name: idx_price_changes_user_id_competitor_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id_competitor_id ON public.price_changes USING btree (user_id, competitor_id) WHERE (competitor_id IS NOT NULL);
+CREATE INDEX idx_price_changes_user_id_competitor_id ON public.price_changes_competitors USING btree (user_id, competitor_id) WHERE (competitor_id IS NOT NULL);
 
 --
 -- Name: INDEX idx_price_changes_user_id_competitor_id; Type: COMMENT; Schema: public; Owner: -
@@ -3222,7 +3938,7 @@ COMMENT ON INDEX public.idx_price_changes_user_id_competitor_id IS 'Optimizes co
 -- Name: idx_price_changes_user_id_integration_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id_integration_id ON public.price_changes USING btree (user_id, integration_id) WHERE (integration_id IS NOT NULL);
+CREATE INDEX idx_price_changes_user_id_integration_id ON public.price_changes_competitors USING btree (user_id, integration_id) WHERE (integration_id IS NOT NULL);
 
 --
 -- Name: INDEX idx_price_changes_user_id_integration_id; Type: COMMENT; Schema: public; Owner: -
@@ -3234,7 +3950,7 @@ COMMENT ON INDEX public.idx_price_changes_user_id_integration_id IS 'Optimizes i
 -- Name: idx_price_changes_user_id_percentage_changed_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id_percentage_changed_at ON public.price_changes USING btree (user_id, price_change_percentage, changed_at DESC);
+CREATE INDEX idx_price_changes_user_id_percentage_changed_at ON public.price_changes_competitors USING btree (user_id, price_change_percentage, changed_at DESC);
 
 --
 -- Name: INDEX idx_price_changes_user_id_percentage_changed_at; Type: COMMENT; Schema: public; Owner: -
@@ -3246,13 +3962,25 @@ COMMENT ON INDEX public.idx_price_changes_user_id_percentage_changed_at IS 'Opti
 -- Name: idx_price_changes_user_id_product_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id_product_id ON public.price_changes USING btree (user_id, product_id);
+CREATE INDEX idx_price_changes_user_id_product_id ON public.price_changes_competitors USING btree (user_id, product_id);
 
 --
 -- Name: INDEX idx_price_changes_user_id_product_id; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON INDEX public.idx_price_changes_user_id_product_id IS 'Optimizes get_brand_analytics function joins';
+
+--
+-- Name: idx_product_custom_field_values_custom_field_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_custom_field_id ON public.product_custom_field_values USING btree (custom_field_id);
+
+--
+-- Name: idx_product_custom_field_values_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_product_id ON public.product_custom_field_values USING btree (product_id);
 
 --
 -- Name: idx_products_brand; Type: INDEX; Schema: public; Owner: -
@@ -3267,16 +3995,64 @@ CREATE INDEX idx_products_brand ON public.products USING btree (brand);
 CREATE INDEX idx_products_brand_id ON public.products USING btree (brand_id);
 
 --
+-- Name: idx_products_brand_id_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_brand_id_name ON public.products USING btree (user_id, brand_id, name);
+
+--
 -- Name: idx_products_brand_sku; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_products_brand_sku ON public.products USING btree (brand, sku);
 
 --
+-- Name: idx_products_dismissed_duplicates_products; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_dismissed_duplicates_products ON public.products_dismissed_duplicates USING btree (product_id_1, product_id_2);
+
+--
+-- Name: idx_products_dismissed_duplicates_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_dismissed_duplicates_user_id ON public.products_dismissed_duplicates USING btree (user_id);
+
+--
+-- Name: idx_products_dismissed_duplicates_user_products; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_dismissed_duplicates_user_products ON public.products_dismissed_duplicates USING btree (user_id, product_id_1, product_id_2);
+
+--
 -- Name: idx_products_ean; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_products_ean ON public.products USING btree (ean);
+
+--
+-- Name: idx_products_ean_nonempty; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_ean_nonempty ON public.products USING btree (user_id, ean) WHERE ((ean IS NOT NULL) AND (ean <> ''::text));
+
+--
+-- Name: idx_products_name_length; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_name_length ON public.products USING btree (user_id, length(name));
+
+--
+-- Name: idx_products_user_brand_sku; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_brand_sku ON public.products USING btree (user_id, brand_id, sku) WHERE ((brand_id IS NOT NULL) AND (sku IS NOT NULL) AND (sku <> ''::text));
+
+--
+-- Name: idx_products_user_ean; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_ean ON public.products USING btree (user_id, ean) WHERE ((ean IS NOT NULL) AND (ean <> ''::text));
 
 --
 -- Name: idx_products_user_id; Type: INDEX; Schema: public; Owner: -
@@ -3399,6 +4175,24 @@ CREATE INDEX idx_scrapers_execution_time ON public.scrapers USING btree (executi
 CREATE INDEX idx_scrapers_scraper_type ON public.scrapers USING btree (scraper_type);
 
 --
+-- Name: idx_suppliers_is_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_suppliers_is_active ON public.suppliers USING btree (is_active);
+
+--
+-- Name: idx_suppliers_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_suppliers_name ON public.suppliers USING btree (name);
+
+--
+-- Name: idx_suppliers_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_suppliers_user_id ON public.suppliers USING btree (user_id);
+
+--
 -- Name: idx_support_conversations_admin_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3483,16 +4277,46 @@ CREATE INDEX idx_temp_competitors_scraped_data_user_id ON public.temp_competitor
 CREATE INDEX idx_temp_integrations_scraped_data_integration_run_id ON public.temp_integrations_scraped_data USING btree (integration_run_id);
 
 --
--- Name: idx_temp_integrations_scraped_data_product_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_temp_integrations_scraped_data_product_id ON public.temp_integrations_scraped_data USING btree (product_id);
-
---
 -- Name: idx_temp_integrations_scraped_data_status; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_temp_integrations_scraped_data_status ON public.temp_integrations_scraped_data USING btree (status);
+
+--
+-- Name: idx_temp_suppliers_scraped_data_processed; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_processed ON public.temp_suppliers_scraped_data USING btree (processed);
+
+--
+-- Name: idx_temp_suppliers_scraped_data_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_run_id ON public.temp_suppliers_scraped_data USING btree (run_id);
+
+--
+-- Name: idx_temp_suppliers_scraped_data_scraper_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_scraper_id ON public.temp_suppliers_scraped_data USING btree (scraper_id);
+
+--
+-- Name: idx_temp_suppliers_scraped_data_supplier_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_supplier_id ON public.temp_suppliers_scraped_data USING btree (supplier_id);
+
+--
+-- Name: idx_temp_suppliers_scraped_data_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_user_id ON public.temp_suppliers_scraped_data USING btree (user_id);
+
+--
+-- Name: idx_user_custom_fields_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_custom_fields_user_id ON public.user_custom_fields USING btree (user_id);
 
 --
 -- Name: idx_user_profiles_admin_role; Type: INDEX; Schema: public; Owner: -

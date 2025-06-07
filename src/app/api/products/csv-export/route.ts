@@ -223,8 +223,8 @@ export async function POST(request: NextRequest) {
         escapeCsvValue(product.ean),
         escapeCsvValue(product.brand),
         escapeCsvValue(product.image_url),
-        product.our_price ? `"${String(product.our_price).replace('.', ',')}"` : '',
-        product.wholesale_price ? `"${String(product.wholesale_price).replace('.', ',')}"` : '',
+        product.our_retail_price ? `"${String(product.our_retail_price).replace('.', ',')}"` : '',
+        product.our_wholesale_price ? `"${String(product.our_wholesale_price).replace('.', ',')}"` : '',
         product.is_active,
         product.created_at,
         product.updated_at

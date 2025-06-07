@@ -53,19 +53,19 @@ export default async function DashboardPage() {
     .select("*", { count: "exact", head: true })
     .eq("user_id", userId);
 
-  // Get product count - only count products with our_price
+  // Get product count - only count products with our_retail_price
   const { count: productCount, error: productError } = await supabase
     .from("products")
     .select("*", { count: "exact", head: true })
     .eq("user_id", userId)
-    .not("our_price", "is", null);
+    .not("our_retail_price", "is", null);
 
   // Get recent price changes (last 7 days)
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
   const { count: priceChangesCount, error: priceChangesError } = await supabase
-    .from("price_changes")
+    .from("price_changes_competitors")
     .select("*", { count: "exact", head: true })
     .eq("user_id", userId)
     .gte("changed_at", sevenDaysAgo.toISOString());
@@ -74,8 +74,8 @@ export default async function DashboardPage() {
   type PriceChange = {
     id: string;
     product_id: string;
-    old_price: number;
-    new_price: number;
+    old_competitor_price?: number;
+    new_competitor_price?: number;
     changed_at: string;
     price_change_percentage: number;
     products: {
@@ -103,12 +103,12 @@ export default async function DashboardPage() {
 
   // Get top price drops
   const { data: topPriceDrops, error: topPriceDropsError } = await supabase
-    .from("price_changes")
+    .from("price_changes_competitors")
     .select(`
       id,
       product_id,
-      old_price,
-      new_price,
+      old_competitor_price,
+      new_competitor_price,
       changed_at,
       price_change_percentage,
       products (
@@ -391,8 +391,8 @@ export default async function DashboardPage() {
                         {priceChange.price_change_percentage.toFixed(2)}%
                       </p>
                       <p className="text-sm text-gray-500">
-                        {new Intl.NumberFormat('sv-SE', { style: 'currency', currency: priceChange.currency_code || 'SEK' }).format(priceChange.old_price)} →{' '}
-                        {new Intl.NumberFormat('sv-SE', { style: 'currency', currency: priceChange.currency_code || 'SEK' }).format(priceChange.new_price)}
+                        {new Intl.NumberFormat('sv-SE', { style: 'currency', currency: priceChange.currency_code || 'SEK' }).format(priceChange.old_competitor_price || 0)} →{' '}
+                        {new Intl.NumberFormat('sv-SE', { style: 'currency', currency: priceChange.currency_code || 'SEK' }).format(priceChange.new_competitor_price || 0)}
                       </p>
                     </div>
                   </div>

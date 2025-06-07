@@ -127,7 +127,7 @@ export async function POST(
     // Get the current price for this product/supplier combination
     const { data: currentPrice } = await supabase
       .from("price_changes_suppliers")
-      .select("new_price, new_wholesale_price")
+      .select("new_supplier_price, new_our_wholesale_price, new_supplier_recommended_price")
       .eq("user_id", userId)
       .eq("product_id", body.product_id)
       .eq("supplier_id", supplierId)
@@ -135,10 +135,10 @@ export async function POST(
       .limit(1)
       .single();
 
-    // Calculate price change percentage
+    // Calculate price change percentage for supplier price
     let priceChangePercentage = null;
-    if (currentPrice?.new_price && body.new_price) {
-      priceChangePercentage = ((body.new_price - currentPrice.new_price) / currentPrice.new_price) * 100;
+    if (currentPrice?.new_supplier_price && body.new_supplier_price) {
+      priceChangePercentage = ((body.new_supplier_price - currentPrice.new_supplier_price) / currentPrice.new_supplier_price) * 100;
     }
 
     // Insert the new price change
@@ -148,10 +148,12 @@ export async function POST(
         user_id: userId,
         product_id: body.product_id,
         supplier_id: supplierId,
-        old_price: currentPrice?.new_price || null,
-        new_price: body.new_price,
-        old_wholesale_price: currentPrice?.new_wholesale_price || null,
-        new_wholesale_price: body.new_wholesale_price || null,
+        old_supplier_price: currentPrice?.new_supplier_price || null,
+        new_supplier_price: body.new_supplier_price,
+        old_our_wholesale_price: currentPrice?.new_our_wholesale_price || null,
+        new_our_wholesale_price: body.new_our_wholesale_price || null,
+        old_supplier_recommended_price: currentPrice?.new_supplier_recommended_price || null,
+        new_supplier_recommended_price: body.new_supplier_recommended_price || null,
         price_change_percentage: priceChangePercentage,
         currency_code: body.currency_code || 'SEK',
         url: body.url,

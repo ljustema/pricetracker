@@ -12,8 +12,8 @@ interface Product {
   ean: string | null;
   brand: string | null;
   brand_id: string | null;
-  our_price?: number | null;
-  wholesale_price?: number | null;
+  our_retail_price?: number | null; // Renamed from our_price
+  our_wholesale_price?: number | null; // Renamed from wholesale_price
   currency_code?: string | null;
   url?: string | null;
   image_url?: string | null;
@@ -43,8 +43,8 @@ const fields: FieldInfo[] = [
   { key: 'brand', label: 'Brand', type: 'text' },
   { key: 'category', label: 'Category', type: 'text' },
   { key: 'description', label: 'Description', type: 'text' },
-  { key: 'our_price', label: 'Our Price', type: 'number' },
-  { key: 'wholesale_price', label: 'Wholesale Price', type: 'number' },
+  { key: 'our_retail_price', label: 'Our Retail Price', type: 'number' },
+  { key: 'our_wholesale_price', label: 'Our Wholesale Price', type: 'number' },
   { key: 'currency_code', label: 'Currency', type: 'text' },
   { key: 'url', label: 'Product URL', type: 'url' },
   { key: 'image_url', label: 'Image URL', type: 'url' },
@@ -87,7 +87,7 @@ export function ProductFieldComparison({ products, onFieldSelect, selectedFields
     }
 
     // For numeric fields, prefer non-zero values
-    if (field === 'our_price' || field === 'wholesale_price') {
+    if (field === 'our_retail_price' || field === 'our_wholesale_price') {
       const nonZero = values.filter(v => Number(v.value) > 0);
       return nonZero.length > 0 ? nonZero[0] : values[0];
     }

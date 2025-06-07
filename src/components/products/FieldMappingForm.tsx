@@ -24,8 +24,8 @@ interface FieldMappingFormProps {
 const STANDARD_FIELDS = {
   own: [
     { key: 'name', label: 'Product Name', type: 'text', required: true },
-    { key: 'our_price', label: 'Our Price', type: 'number', required: false },
-    { key: 'wholesale_price', label: 'Wholesale Price', type: 'number', required: false },
+    { key: 'our_retail_price', label: 'Our Retail Price', type: 'number', required: false },
+    { key: 'our_wholesale_price', label: 'Our Wholesale Price', type: 'number', required: false },
     { key: 'currency_code', label: 'Currency Code', type: 'text', required: false },
     { key: 'sku', label: 'SKU', type: 'text', required: false },
     { key: 'brand', label: 'Brand', type: 'text', required: false },

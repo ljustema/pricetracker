@@ -275,8 +275,8 @@ export class IntegrationSyncService {
         sku: sku,
         ean: ean,
         brand: brand,
-        price: product.price,
-        wholesale_price: product.wholesale_price || null,
+        our_retail_price: product.price,
+        our_wholesale_price: product.wholesale_price || null,
         image_url: imageUrl,
         url: productUrl, // Add the product URL to the staged product
         currency_code: currencyCode, // Add the currency code

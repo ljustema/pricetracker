@@ -30,8 +30,8 @@ export default function ProductEditPage() {
     description: "",
     image_url: "",
     url: "", // Add URL field
-    our_price: "",
-    wholesale_price: "",
+    our_retail_price: "", // Renamed from our_price
+    our_wholesale_price: "", // Renamed from wholesale_price
     is_active: true,
   });
 
@@ -95,8 +95,8 @@ export default function ProductEditPage() {
           description: product.description || "",
           image_url: product.image_url || "",
           url: product.url || "", // Include the URL from the product
-          our_price: product.our_price ? product.our_price.toString() : "",
-          wholesale_price: product.wholesale_price ? product.wholesale_price.toString() : "",
+          our_retail_price: product.our_retail_price ? product.our_retail_price.toString() : "",
+          our_wholesale_price: product.our_wholesale_price ? product.our_wholesale_price.toString() : "",
           is_active: product.is_active !== undefined ? product.is_active : true,
         });
       } catch (err) {
@@ -150,8 +150,8 @@ export default function ProductEditPage() {
       // Prepare the data for submission
       const productData = {
         ...formData,
-        our_price: formData.our_price ? parseFloat(formData.our_price) : null,
-        wholesale_price: formData.wholesale_price ? parseFloat(formData.wholesale_price) : null,
+        our_retail_price: formData.our_retail_price ? parseFloat(formData.our_retail_price) : null,
+        our_wholesale_price: formData.our_wholesale_price ? parseFloat(formData.our_wholesale_price) : null,
         // Make sure we're sending both brand and brand_id
         brand: formData.brand,
         brand_id: formData.brand_id,
@@ -355,20 +355,20 @@ export default function ProductEditPage() {
             </div>
 
             <div>
-              <label htmlFor="our_price" className="block text-sm font-medium">
-                Our Price
+              <label htmlFor="our_retail_price" className="block text-sm font-medium">
+                Our Retail Price
               </label>
               <div className="relative mt-1 rounded-md shadow-sm">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                   <span className="text-gray-500 sm:text-sm">$</span>
                 </div>
                 <input
-                  id="our_price"
-                  name="our_price"
+                  id="our_retail_price"
+                  name="our_retail_price"
                   type="number"
                   step="0.01"
                   min="0"
-                  value={formData.our_price}
+                  value={formData.our_retail_price}
                   onChange={handleChange}
                   className="block w-full rounded-md border border-gray-300 pl-7 pr-12 py-2 focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
                   placeholder="0.00"
@@ -377,20 +377,20 @@ export default function ProductEditPage() {
             </div>
 
             <div>
-              <label htmlFor="wholesale_price" className="block text-sm font-medium">
-                Wholesale Price
+              <label htmlFor="our_wholesale_price" className="block text-sm font-medium">
+                Our Wholesale Price
               </label>
               <div className="relative mt-1 rounded-md shadow-sm">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                   <span className="text-gray-500 sm:text-sm">$</span>
                 </div>
                 <input
-                  id="wholesale_price"
-                  name="wholesale_price"
+                  id="our_wholesale_price"
+                  name="our_wholesale_price"
                   type="number"
                   step="0.01"
                   min="0"
-                  value={formData.wholesale_price}
+                  value={formData.our_wholesale_price}
                   onChange={handleChange}
                   className="block w-full rounded-md border border-gray-300 pl-7 pr-12 py-2 focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
                   placeholder="0.00"

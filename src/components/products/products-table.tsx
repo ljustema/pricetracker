@@ -162,9 +162,9 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                 <div className="text-xs text-gray-500">{product.sku || "-"}</div>
               </td>
               <td className="whitespace-nowrap px-6 py-4">
-                {product.our_price ? (
+                {product.our_retail_price ? (
                   <div className="text-sm font-medium text-gray-900">
-                    {formatPrice(product.our_price)}
+                    {formatPrice(product.our_retail_price)}
                   </div>
                 ) : (
                   <div className="text-sm text-gray-500">-</div>
@@ -233,9 +233,9 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                     {price !== undefined ? (
                       <div className="flex items-center">
                         <div className={`text-sm font-medium ${
-                          product.our_price && price < product.our_price
+                          product.our_retail_price && price < product.our_retail_price
                             ? "text-red-600"
-                            : product.our_price && price > product.our_price
+                            : product.our_retail_price && price > product.our_retail_price
                               ? "text-green-600"
                               : "text-gray-900"
                         }`}>

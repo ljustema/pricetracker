@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
 
     // Get price changes within the time period
     const { data: priceChanges, error: priceChangesError } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select(`
         product_id,
         changed_at

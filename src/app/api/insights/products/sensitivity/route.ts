@@ -33,10 +33,10 @@ export async function GET(request: NextRequest) {
 
     // Since group() is not supported, we'll use a fallback approach
     const { data: priceChanges, error } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select(`
         product_id,
-        products(name, our_price)
+        products(name, our_retail_price)
       `)
       .eq('user_id', userId)
       .gte('changed_at', startDate.toISOString())
@@ -56,13 +56,13 @@ export async function GET(request: NextRequest) {
     priceChanges.forEach(priceChange => {
       const productId = priceChange.product_id;
       const productName = priceChange.products?.name || 'Unknown Product';
-      const ourPrice = priceChange.products?.our_price || null;
+      const ourPrice = priceChange.products?.our_retail_price || null;
 
       if (!productCounts.has(productId)) {
         productCounts.set(productId, {
           product_id: productId,
           product_name: productName,
-          our_price: ourPrice,
+          our_retail_price: ourPrice,
           count: 0
         });
       }

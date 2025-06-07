@@ -46,8 +46,8 @@ interface UserData {
   };
   recentActivity: Array<{
     id: string;
-    old_price: number;
-    new_price: number;
+    old_competitor_price: number;
+    new_competitor_price: number;
     changed_at: string;
     products: {
       name: string;
@@ -277,9 +277,9 @@ export function UserDetailsView({ userData, adminUser, userId }: UserDetailsView
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center space-x-2">
-                            <span className="text-gray-500">{formatPrice(activity.old_price)}</span>
+                            <span className="text-gray-500">{formatPrice(activity.old_competitor_price)}</span>
                             <span>→</span>
-                            <span className="font-medium">{formatPrice(activity.new_price)}</span>
+                            <span className="font-medium">{formatPrice(activity.new_competitor_price)}</span>
                           </div>
                         </TableCell>
                         <TableCell className="text-sm text-gray-500">

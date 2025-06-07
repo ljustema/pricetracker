@@ -10,8 +10,8 @@ export interface Product {
   category?: string;
   description?: string;
   image_url?: string;
-  our_price?: number;
-  wholesale_price?: number;
+  our_retail_price?: number; // Renamed from our_price
+  our_wholesale_price?: number; // Renamed from wholesale_price
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -58,8 +58,10 @@ export interface PriceChange {
   source_id?: string; // Either competitor_id or integration_id
   source_name?: string; // Name of the competitor or integration
   source_type?: 'competitor' | 'integration';
-  old_price: number;
-  new_price: number;
+  old_competitor_price?: number; // For competitor price changes
+  new_competitor_price?: number; // For competitor price changes
+  old_our_retail_price?: number; // For our retail price changes (integrations)
+  new_our_retail_price?: number; // For our retail price changes (integrations)
   price_change_percentage: number;
   changed_at: string;
   url?: string; // URL to the product on the competitor's website
@@ -83,8 +85,8 @@ export interface CreateProductData {
   category?: string;
   description?: string;
   image_url?: string;
-  our_price?: number;
-  wholesale_price?: number;
+  our_retail_price?: number;
+  our_wholesale_price?: number;
   is_active?: boolean;
 }
 
@@ -271,13 +273,15 @@ export async function getProductPriceHistory(
  */
 export async function uploadProductsCSV(
   competitorId: string,
-  file: File
+  file: File,
+  delimiter: ',' | ';' = ','
 ): Promise<{ success: boolean; productsAdded: number; pricesUpdated: number }> {
   const formData = new FormData();
   formData.append('competitorId', competitorId);
   formData.append('file', file);
+  formData.append('delimiter', delimiter);
 
-  const response = await fetch('/api/products/csv-upload', {
+  const response = await fetch('/api/products/csv-upload-competitors', {
     method: 'POST',
     body: formData,
   });
@@ -317,11 +321,13 @@ export async function uploadOwnProductsCSV(
  */
 export async function uploadOwnProductsCSVViaIntegration(
   integrationId: string,
-  file: File
+  file: File,
+  delimiter: ',' | ';' = ','
 ): Promise<{ success: boolean; productsAdded: number; pricesUpdated: number }> {
   const formData = new FormData();
   formData.append('integrationId', integrationId);
   formData.append('file', file);
+  formData.append('delimiter', delimiter);
 
   const response = await fetch('/api/products/csv-upload-via-integration', {
     method: 'POST',

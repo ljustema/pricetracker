@@ -67,8 +67,8 @@ export async function POST(request: NextRequest) {
         description: body.description || null,
         image_url: body.image_url || null,
         url: body.url || null, // Add URL field
-        our_price: body.our_price || null,
-        wholesale_price: body.wholesale_price || null,
+        our_retail_price: body.our_retail_price || body.our_price || null, // Support both old and new field names
+        our_wholesale_price: body.our_wholesale_price || body.wholesale_price || null, // Support both old and new field names
         is_active: body.is_active !== undefined ? body.is_active : true,
       })
       .select();

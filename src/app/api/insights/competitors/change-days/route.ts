@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
 
     // Build the query
     let query = supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select(`
         competitor_id,
         competitors(name),

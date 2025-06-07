@@ -241,8 +241,6 @@ export default function ProductsContent({
             competitors={competitors as Competitor[]} // Assert type here if needed, already typed in props
             currentFilters={complexFilters} // Pass complexFilters state down
             onComplexFilterChange={onComplexFilterChange} // Pass callback down
-            // # Reason: Pass the useSearchParams hook result down to ProductsFilter for URL updates.
-            searchParams={currentUrlSearchParams}
           />
         </div>
       )}

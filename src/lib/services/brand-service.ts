@@ -894,7 +894,7 @@ export class BrandService {
 
         // Fallback to a simpler query if RPC fails
         const { count, error: fallbackError } = await supabase
-          .from('price_changes')
+          .from('price_changes_competitors')
           .select('competitor_id', { count: 'exact', head: true })
           .eq('user_id', userId)
           .eq('brand_id', brandId);
@@ -1002,7 +1002,7 @@ export class BrandService {
                 // Fallback: try a direct query if RPC fails
                 try {
                   const { data: fallbackData, error: fallbackError } = await supabase
-                    .from('price_changes')
+                    .from('price_changes_competitors')
                     .select(`
                       competitors!inner(name)
                     `)

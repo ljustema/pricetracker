@@ -103,24 +103,24 @@ export default async function CompetitorsPage() {
   // Get our products statistics for comparison
   const supabase = createSupabaseAdminClient();
 
-  // Count our products (products with our_price)
+  // Count our products (products with our_retail_price)
   const { count: ourProductsCount, error: ourProductsError } = await supabase
     .from('products')
     .select('*', { count: 'exact', head: true })
     .eq('user_id', userId)
-    .not('our_price', 'is', null);
+    .not('our_retail_price', 'is', null);
 
   if (ourProductsError) {
     console.error('Error fetching our products count:', ourProductsError);
   }
 
   // Count our brands using the same approach as competitors
-  // Get distinct brands from products that have our_price
+  // Get distinct brands from products that have our_retail_price
   const { data: ourBrandsData, error: ourBrandsError } = await supabase
     .from('products')
     .select('brand_id')
     .eq('user_id', userId)
-    .not('our_price', 'is', null)
+    .not('our_retail_price', 'is', null)
     .not('brand_id', 'is', null);
 
   if (ourBrandsError) {

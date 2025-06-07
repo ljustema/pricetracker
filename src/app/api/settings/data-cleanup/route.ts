@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
     // Delete price changes if requested
     if (include_price_changes) {
       const { data: priceChangesData, error: priceChangesError } = await supabase
-        .from("price_changes")
+        .from("price_changes_competitors")
         .delete()
         .eq("user_id", userId)
         .lt("changed_at", cutoffDateString)

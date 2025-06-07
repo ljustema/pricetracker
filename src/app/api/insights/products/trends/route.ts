@@ -33,14 +33,14 @@ export async function GET(request: NextRequest) {
 
     // Get price changes within the time period
     const { data: priceChanges, error: priceChangesError } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select(`
         product_id,
         products(name),
         competitor_id,
         competitors(name),
-        old_price,
-        new_price,
+        old_competitor_price,
+        new_competitor_price,
         price_change_percentage,
         changed_at
       `)
@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
       const _competitorName = priceChange.competitors?.name || 'Unknown Competitor';
       const priceChangePercentage = priceChange.price_change_percentage;
       const changedAt = new Date(priceChange.changed_at);
-      
+
       if (!productTrends.has(productId)) {
         productTrends.set(productId, {
           product_id: productId,
@@ -76,25 +76,25 @@ export async function GET(request: NextRequest) {
           total_percentage_change: 0,
           avg_percentage_change: 0,
           competitors: new Set(),
-          first_price: priceChange.old_price,
-          last_price: priceChange.new_price,
+          first_price: priceChange.old_competitor_price,
+          last_price: priceChange.new_competitor_price,
           overall_change_percentage: 0,
           last_changed_at: changedAt
         });
       }
-      
+
       const trend = productTrends.get(productId);
       trend.total_changes += 1;
       trend.total_percentage_change += priceChangePercentage;
       trend.avg_percentage_change = trend.total_percentage_change / trend.total_changes;
       trend.competitors.add(competitorId);
-      trend.last_price = priceChange.new_price;
-      
+      trend.last_price = priceChange.new_competitor_price;
+
       // Update last_changed_at if this change is more recent
       if (changedAt > trend.last_changed_at) {
         trend.last_changed_at = changedAt;
       }
-      
+
       // Calculate overall change percentage from first to last price
       trend.overall_change_percentage = ((trend.last_price - trend.first_price) / trend.first_price) * 100;
     });

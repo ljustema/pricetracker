@@ -46,6 +46,8 @@ export default function CSVUploadForm({
     rows: Record<string, string>[];
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [delimiter, setDelimiter] = useState<',' | ';'>(',');
+  const [fieldMapping, setFieldMapping] = useState<Record<string, string>>({});
   interface UploadResult {
     success: boolean;
     productsAdded: number;
@@ -130,7 +132,22 @@ export default function CSVUploadForm({
     reader.readAsText(file);
   };
 
-  const parseCSVLine = (line: string): string[] => {
+  // Re-parse CSV when delimiter changes
+  const handleDelimiterChange = (newDelimiter: ',' | ';') => {
+    setDelimiter(newDelimiter);
+    if (uploadedFile) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          const content = event.target.result as string;
+          previewCSV(content);
+        }
+      };
+      reader.readAsText(uploadedFile);
+    }
+  };
+
+  const parseCSVLine = (line: string, delimiter: ',' | ';' = ','): string[] => {
     const result: string[] = [];
     let currentField = '';
     let inQuotes = false;
@@ -141,7 +158,7 @@ export default function CSVUploadForm({
       if (char === '"') {
         // Toggle quote state
         inQuotes = !inQuotes;
-      } else if (char === ',' && !inQuotes) {
+      } else if (char === delimiter && !inQuotes) {
         // End of field
         result.push(currentField.trim());
         currentField = '';
@@ -171,21 +188,21 @@ export default function CSVUploadForm({
       return;
     }
 
-    // Parse header row
-    const headers = parseCSVLine(lines[0]);
+    // Parse header row with selected delimiter
+    const headers = parseCSVLine(lines[0], delimiter);
 
     // Check for required headers based on product type
     let requiredHeaders: string[];
     let missingHeaders: string[];
 
     if (productType === 'own') {
-      // For own products, only name is required, but we should have either our_price or wholesale_price
+      // For own products, only name is required, but we should have either our_retail_price or our_wholesale_price
       requiredHeaders = ['name'];
       missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
 
-      // Check if we have at least one price field
-      const hasOurPrice = headers.includes('our_price');
-      const hasWholesalePrice = headers.includes('wholesale_price');
+      // Check if we have at least one price field (support both old and new names)
+      const hasOurPrice = headers.includes('our_price') || headers.includes('our_retail_price');
+      const hasWholesalePrice = headers.includes('wholesale_price') || headers.includes('our_wholesale_price');
 
       if (missingHeaders.length > 0) {
         alert(`CSV file is missing required headers: ${missingHeaders.join(', ')}`);
@@ -193,12 +210,12 @@ export default function CSVUploadForm({
       }
 
       if (!hasOurPrice && !hasWholesalePrice) {
-        alert(`CSV file is missing required price headers: either 'our_price' or 'wholesale_price' is required for own products`);
+        alert(`CSV file is missing required price headers: either 'our_retail_price' (or 'our_price') or 'our_wholesale_price' (or 'wholesale_price') is required for own products`);
         return;
       }
     } else if (productType === 'competitor') {
-      // For competitor products, name and price are required
-      requiredHeaders = ['name', 'price'];
+      // For competitor products, name and competitor_price are required
+      requiredHeaders = ['name', 'competitor_price'];
       missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
 
       if (missingHeaders.length > 0) {
@@ -206,8 +223,8 @@ export default function CSVUploadForm({
         return;
       }
     } else {
-      // For supplier products, name and price are required
-      requiredHeaders = ['name', 'price'];
+      // For supplier products, name and supplier_price are required
+      requiredHeaders = ['name', 'supplier_price'];
       missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
 
       if (missingHeaders.length > 0) {
@@ -221,7 +238,7 @@ export default function CSVUploadForm({
     const previewLimit = Math.min(lines.length - 1, 5);
 
     for (let i = 1; i <= previewLimit; i++) {
-      const values = parseCSVLine(lines[i]);
+      const values = parseCSVLine(lines[i], delimiter);
       if (values.length !== headers.length) {
         alert(`Row ${i+1} has ${values.length} fields, expected ${headers.length}`);
         return;
@@ -276,11 +293,11 @@ export default function CSVUploadForm({
       // Use appropriate upload method based on product type
       let result;
       if (productType === 'own') {
-        result = await uploadOwnProductsCSVViaIntegration(selectedIntegrationId, uploadedFile);
+        result = await uploadOwnProductsCSVViaIntegration(selectedIntegrationId, uploadedFile, delimiter);
       } else if (productType === 'competitor') {
-        result = await uploadProductsCSV(selectedCompetitorId, uploadedFile);
+        result = await uploadProductsCSV(selectedCompetitorId, uploadedFile, delimiter);
       } else {
-        result = await uploadSupplierProductsCSV(selectedSupplierId, uploadedFile);
+        result = await uploadSupplierProductsCSV(selectedSupplierId, uploadedFile, delimiter);
       }
       setUploadResult(result as UploadResult);
 
@@ -364,6 +381,70 @@ export default function CSVUploadForm({
               : 'Upload supplier products for sourcing and procurement'
             }
           </p>
+        </div>
+
+        {/* CSV Configuration */}
+        <div className="space-y-4">
+          <div>
+            <label className="text-base font-medium text-gray-900">CSV Configuration</label>
+            <p className="text-sm leading-5 text-gray-500">Configure how your CSV file should be parsed</p>
+
+            {/* Delimiter Selection */}
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700">Field Delimiter</label>
+              <div className="mt-2 space-x-4">
+                <label className="inline-flex items-center">
+                  <input
+                    type="radio"
+                    name="delimiter"
+                    value=","
+                    checked={delimiter === ','}
+                    onChange={(e) => handleDelimiterChange(e.target.value as ',' | ';')}
+                    className="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span className="ml-2 text-sm text-gray-700">Comma (,)</span>
+                </label>
+                <label className="inline-flex items-center">
+                  <input
+                    type="radio"
+                    name="delimiter"
+                    value=";"
+                    checked={delimiter === ';'}
+                    onChange={(e) => handleDelimiterChange(e.target.value as ',' | ';')}
+                    className="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span className="ml-2 text-sm text-gray-700">Semicolon (;)</span>
+                </label>
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                Choose the character that separates fields in your CSV file
+              </p>
+            </div>
+
+            {/* Field Requirements */}
+            <div className="mt-4 p-3 bg-blue-50 rounded-md">
+              <h4 className="text-sm font-medium text-blue-900 mb-2">Required Fields for {productType === 'own' ? 'Own Products' : productType === 'competitor' ? 'Competitor Products' : 'Supplier Products'}</h4>
+              <div className="text-xs text-blue-800 space-y-1">
+                {productType === 'own' ? (
+                  <>
+                    <div><strong>Required:</strong> name</div>
+                    <div><strong>Price fields (at least one):</strong> our_retail_price, our_wholesale_price</div>
+                    <div><strong>Optional:</strong> currency_code, sku, brand, ean, image_url, url, category, description</div>
+                  </>
+                ) : productType === 'competitor' ? (
+                  <>
+                    <div><strong>Required:</strong> name, competitor_price</div>
+                    <div><strong>Optional:</strong> currency_code, sku, brand, ean, image_url, url</div>
+                  </>
+                ) : (
+                  <>
+                    <div><strong>Required:</strong> name, supplier_price</div>
+                    <div><strong>Optional:</strong> supplier_recommended_price, currency_code, sku, brand, ean, image_url, url, minimum_order_quantity, lead_time_days</div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
         {uploadResult ? (
           <div className={`p-4 rounded-md ${uploadResult.success ? 'bg-green-50' : 'bg-red-50'}`}>
@@ -567,17 +648,18 @@ export default function CSVUploadForm({
                   {productType === 'own' ? (
                     <>
                       Required columns: name<br />
-                      Optional columns: our_price, wholesale_price, currency_code, sku, brand, ean, image_url, url, category, description
+                      Optional columns: our_retail_price, our_wholesale_price, currency_code, sku, brand, ean, image_url, url, category, description<br />
+                      <span className="text-gray-400">Note: old field names (our_price, wholesale_price) are still supported</span>
                     </>
                   ) : productType === 'competitor' ? (
                     <>
-                      Required columns: name, price<br />
+                      Required columns: name, competitor_price<br />
                       Optional columns: currency_code, sku, brand, ean, image_url, url
                     </>
                   ) : (
                     <>
-                      Required columns: name, price<br />
-                      Optional columns: currency_code, sku, brand, ean, image_url, url, minimum_order_quantity, lead_time_days
+                      Required columns: name, supplier_price<br />
+                      Optional columns: supplier_recommended_price, currency_code, sku, brand, ean, image_url, url, minimum_order_quantity, lead_time_days
                     </>
                   )}
                 </p>

@@ -49,11 +49,11 @@ export async function GET(_request: NextRequest) {
           .select(`
             id,
             name,
-            our_price
+            our_retail_price
           `)
           .eq('user_id', userId)
           .eq('brand_id', brand.id)
-          .not('our_price', 'is', null);
+          .not('our_retail_price', 'is', null);
 
         if (productsError) {
           console.error(`Error fetching products for brand ${brand.id}:`, productsError);
@@ -83,7 +83,7 @@ export async function GET(_request: NextRequest) {
         const totalProducts = products.length;
         const productIds = products.map(p => p.id);
         const productPrices = products.reduce((acc, p) => {
-          acc[p.id] = p.our_price;
+          acc[p.id] = p.our_retail_price;
           return acc;
         }, {});
 
@@ -96,11 +96,11 @@ export async function GET(_request: NextRequest) {
         for (let i = 0; i < productIds.length; i += CHUNK_SIZE) {
           const chunk = productIds.slice(i, i + CHUNK_SIZE);
           const { data: priceChangesChunk, error: priceChangesError } = await supabase
-            .from('price_changes')
+            .from('price_changes_competitors')
             .select(`
               product_id,
               competitor_id,
-              new_price,
+              new_competitor_price,
               changed_at
             `)
             .eq('user_id', userId)
@@ -137,7 +137,7 @@ export async function GET(_request: NextRequest) {
         allPriceChanges.forEach(pc => {
           const key = `${pc.product_id}_${pc.competitor_id}`;
           if (!latestPrices.has(key)) {
-            latestPrices.set(key, pc.new_price);
+            latestPrices.set(key, pc.new_competitor_price);
           }
         });
 

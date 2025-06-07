@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import DeleteButton from "@/components/ui/delete-button";
 import { PriceChange } from "@/lib/services/product-service";
+import { SupplierPriceChange } from "@/lib/services/supplier-service";
 import PriceHistoryChart from "@/components/products/PriceHistoryChart";
 import ProductCustomFields from "@/components/products/ProductCustomFields";
 
@@ -16,8 +17,8 @@ interface Product {
   sku: string | null;
   image_url: string | null;
   description: string | null;
-  our_price: number | null;
-  wholesale_price: number | null;
+  our_retail_price: number | null; // Renamed from our_price
+  our_wholesale_price: number | null; // Renamed from wholesale_price
   is_active: boolean | null;
   ean: string | null;
   url: string | null;
@@ -25,11 +26,12 @@ interface Product {
 
 interface ClientProductPageProps {
   product: Product;
-  competitorPrices: PriceChange[];
-  priceHistory: PriceChange[];
+  retailPrices: PriceChange[];
+  retailPriceHistory: PriceChange[];
+  supplierPrices: SupplierPriceChange[];
 }
 
-export default function ClientProductPage({ product, competitorPrices, priceHistory }: ClientProductPageProps) {
+export default function ClientProductPage({ product, retailPrices, retailPriceHistory, supplierPrices }: ClientProductPageProps) {
   const { formatPrice } = useCurrencyFormatter();
 
   return (
@@ -105,16 +107,16 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <h3 className="text-sm font-medium text-gray-500">Our Price</h3>
+                  <h3 className="text-sm font-medium text-gray-500">Our Retail Price</h3>
                   <p className="text-lg font-semibold text-gray-900">
-                    {product.our_price ? formatPrice(product.our_price) : "Not set"}
+                    {product.our_retail_price ? formatPrice(product.our_retail_price) : "Not set"}
                   </p>
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-medium text-gray-500">Wholesale Price</h3>
+                  <h3 className="text-sm font-medium text-gray-500">Our Wholesale Price</h3>
                   <p className="text-lg font-semibold text-gray-900">
-                    {product.wholesale_price ? formatPrice(product.wholesale_price) : "Not set"}
+                    {product.our_wholesale_price ? formatPrice(product.our_wholesale_price) : "Not set"}
                   </p>
                 </div>
 
@@ -154,19 +156,24 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
               </div>
             </div>
           </div>
+
+          {/* Custom Fields */}
+          <div className="mt-8">
+            <ProductCustomFields productId={product.id} isEditable={false} />
+          </div>
         </div>
 
-        {/* Competitor Prices */}
+        {/* Retail Prices */}
         <div className="md:col-span-2">
           <div className="rounded-lg bg-white p-6 shadow-sm">
             <div className="mb-4">
-              <h2 className="text-xl font-semibold">Competitor Prices</h2>
+              <h2 className="text-xl font-semibold">Retail Prices</h2>
               <p className="text-sm text-gray-500">
-                Prices are automatically tracked when competitors update their prices
+                Compare our retail price with competitors and integrations
               </p>
             </div>
 
-            {competitorPrices && competitorPrices.length > 0 ? (
+            {retailPrices && retailPrices.length > 0 ? (
               <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
                 <table className="min-w-full divide-y divide-gray-300">
                   <thead className="bg-gray-50">
@@ -175,7 +182,7 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
                         scope="col"
                         className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6"
                       >
-                        Competitor
+                        Source
                       </th>
                       <th
                         scope="col"
@@ -198,15 +205,20 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 bg-white">
-                    {competitorPrices.map((priceChange: PriceChange) => {
+                    {retailPrices.map((priceChange: PriceChange) => {
                       // Use source information if available, fall back to competitors
                       const sourceName = priceChange.source_name || priceChange.competitors?.name || "Unknown";
                       const sourceWebsite = priceChange.source?.website || priceChange.competitors?.website;
                       const sourceType = priceChange.source_type || "competitor";
                       const productUrl = priceChange.url;
 
-                      const priceDiff = product.our_price
-                        ? ((priceChange.new_price - product.our_price) / product.our_price) * 100
+                      // Use the appropriate price field based on source type
+                      const currentPrice = priceChange.source_type === 'integration'
+                        ? priceChange.new_our_retail_price
+                        : priceChange.new_competitor_price;
+
+                      const priceDiff = product.our_retail_price
+                        ? ((currentPrice - product.our_retail_price) / product.our_retail_price) * 100
                         : 0;
 
                       return (
@@ -241,11 +253,11 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
                           </td>
                           <td className="whitespace-nowrap px-3 py-4 text-sm">
                             <div className="font-medium text-gray-900">
-                              {formatPrice(priceChange.new_price)}
+                              {formatPrice(currentPrice)}
                             </div>
                           </td>
                           <td className="whitespace-nowrap px-3 py-4 text-sm">
-                            {product.our_price ? (
+                            {product.our_retail_price ? (
                               <span
                                 className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
                                   priceDiff > 0
@@ -274,24 +286,29 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
             ) : (
               <div className="rounded-lg border border-dashed border-gray-300 p-6 text-center">
                 <p className="text-gray-500">
-                  No competitor prices found for this product.
+                  No retail prices found for this product.
                 </p>
                 <p className="mt-1 text-sm text-gray-500">
-                  Prices will be automatically tracked when competitors are scraped.
+                  Prices will be automatically tracked when competitors are scraped or integrations are run.
                 </p>
               </div>
             )}
           </div>
 
           {/* Price History Chart */}
-          {priceHistory && priceHistory.length > 0 && (
+          {((retailPriceHistory && retailPriceHistory.length > 0) || (supplierPrices && supplierPrices.length > 0)) && (
             <div className="mt-8 rounded-lg bg-white p-6 shadow-sm">
               <h3 className="mb-2 text-lg font-medium">Price History</h3>
-              <PriceHistoryChart priceHistory={priceHistory} ourPrice={product.our_price} />
+              <PriceHistoryChart
+                retailPriceHistory={retailPriceHistory}
+                supplierPriceHistory={supplierPrices}
+                ourRetailPrice={product.our_retail_price}
+                ourWholesalePrice={product.our_wholesale_price}
+              />
 
-              <h3 className="mt-6 mb-2 text-lg font-medium">Recent Price Changes</h3>
+              <h3 className="mt-6 mb-2 text-lg font-medium">Recent Retail Price Changes</h3>
               <div className="space-y-4">
-                {priceHistory.slice(0, 5).map((change: PriceChange) => {
+                {retailPriceHistory.slice(0, 5).map((change: PriceChange) => {
                   // Use source information if available, fall back to competitors
                   const sourceName = change.source_name || change.competitors?.name || "Unknown";
                   const sourceType = change.source_type || "competitor";
@@ -318,21 +335,34 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
 
                       <div className="text-right">
                         <div className="flex items-center space-x-1">
-                          <span className="text-gray-500">{formatPrice(change.old_price)}</span>
-                          <svg
-                            className="h-4 w-4 text-gray-400"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M9 5l7 7-7 7"
-                            />
-                          </svg>
-                          <span className="font-medium">{formatPrice(change.new_price)}</span>
+                          {(() => {
+                            const oldPrice = change.source_type === 'integration'
+                              ? change.old_our_retail_price
+                              : change.old_competitor_price;
+                            const newPrice = change.source_type === 'integration'
+                              ? change.new_our_retail_price
+                              : change.new_competitor_price;
+
+                            return (
+                              <>
+                                <span className="text-gray-500">{formatPrice(oldPrice)}</span>
+                                <svg
+                                  className="h-4 w-4 text-gray-400"
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                  stroke="currentColor"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M9 5l7 7-7 7"
+                                  />
+                                </svg>
+                                <span className="font-medium">{formatPrice(newPrice)}</span>
+                              </>
+                            );
+                          })()}
                         </div>
 
                         <span
@@ -353,9 +383,129 @@ export default function ClientProductPage({ product, competitorPrices, priceHist
             </div>
           )}
 
-          {/* Custom Fields */}
-          <div className="mt-8">
-            <ProductCustomFields productId={product.id} isEditable={false} />
+          {/* Supplier Prices */}
+          <div className="mt-8 rounded-lg bg-white p-6 shadow-sm">
+            <div className="mb-4">
+              <h2 className="text-xl font-semibold">Supplier Prices</h2>
+              <p className="text-sm text-gray-500">
+                Compare our wholesale price with supplier costs and track our wholesale price changes from integrations
+              </p>
+            </div>
+
+            {supplierPrices && supplierPrices.length > 0 ? (
+              <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
+                <table className="min-w-full divide-y divide-gray-300">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th
+                        scope="col"
+                        className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6"
+                      >
+                        Source
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
+                      >
+                        Wholesale Price
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
+                      >
+                        Recommended Retail
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
+                      >
+                        Price Difference
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
+                      >
+                        Last Updated
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 bg-white">
+                    {supplierPrices.map((supplierPrice: SupplierPriceChange) => {
+                      // Determine if this is a supplier record or integration record
+                      const isIntegrationRecord = !!supplierPrice.integration_id;
+                      const sourceName = isIntegrationRecord
+                        ? (supplierPrice.integrations?.name || "Our System")
+                        : (supplierPrice.suppliers?.name || "Unknown Supplier");
+
+                      // For integration records, show our wholesale price changes
+                      // For supplier records, show supplier cost prices
+                      const displayPrice = isIntegrationRecord
+                        ? supplierPrice.new_our_wholesale_price
+                        : supplierPrice.new_supplier_price;
+
+                      const costDiff = product.our_wholesale_price && displayPrice
+                        ? ((displayPrice - product.our_wholesale_price) / product.our_wholesale_price) * 100
+                        : 0;
+
+                      return (
+                        <tr key={supplierPrice.id}>
+                          <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm sm:pl-6">
+                            <div className="font-medium text-gray-900">
+                              {sourceName}
+                              {isIntegrationRecord && (
+                                <span className="ml-2 inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                                  Our Price
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-4 text-sm">
+                            <div className="font-medium text-gray-900">
+                              {displayPrice ? formatPrice(displayPrice) : "N/A"}
+                            </div>
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-4 text-sm">
+                            <div className="text-gray-900">
+                              {supplierPrice.new_supplier_recommended_price ? formatPrice(supplierPrice.new_supplier_recommended_price) : "N/A"}
+                            </div>
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-4 text-sm">
+                            {product.our_wholesale_price && displayPrice ? (
+                              <span
+                                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                                  costDiff > 0
+                                    ? "bg-red-100 text-red-800"
+                                    : costDiff < 0
+                                    ? "bg-green-100 text-green-800"
+                                    : "bg-gray-100 text-gray-800"
+                                }`}
+                              >
+                                {costDiff > 0 ? "+" : ""}
+                                {costDiff.toFixed(2)}%
+                              </span>
+                            ) : (
+                              <span className="text-gray-500">N/A</span>
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                            {new Date(supplierPrice.changed_at).toLocaleDateString()}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-gray-300 p-6 text-center">
+                <p className="text-gray-500">
+                  No supplier prices found for this product.
+                </p>
+                <p className="mt-1 text-sm text-gray-500">
+                  Prices will be automatically tracked when suppliers are scraped or CSV uploads are processed.
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>

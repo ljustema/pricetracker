@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
       
       // Get all price changes for this competitor
       const { data: priceChanges, error: priceChangesError } = await supabase
-        .from('price_changes')
+        .from('price_changes_competitors')
         .select(`
           product_id
         `)
@@ -218,7 +218,7 @@ export async function GET(request: NextRequest) {
           // Fallback to direct query if the function doesn't exist or fails
           // Get all price changes for this competitor
           const { data: priceChanges, error: priceChangesError } = await supabase
-            .from('price_changes')
+            .from('price_changes_competitors')
             .select(`
               product_id
             `)

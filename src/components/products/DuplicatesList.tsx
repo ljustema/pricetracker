@@ -26,8 +26,8 @@ interface Product {
   ean: string | null;
   brand: string | null;
   brand_id: string | null;
-  our_price?: number | null;
-  wholesale_price?: number | null;
+  our_retail_price?: number | null; // Renamed from our_price
+  our_wholesale_price?: number | null; // Renamed from wholesale_price
   currency_code?: string | null;
   url?: string | null;
   image_url?: string | null;
@@ -581,10 +581,10 @@ export function DuplicatesList() {
                                   Updated: {new Date(latestOurPrice.updated_at).toLocaleDateString()}
                                 </div>
                               </div>
-                            ) : product.our_price ? (
+                            ) : product.our_retail_price ? (
                               <div className="text-sm bg-blue-50 p-2 rounded">
                                 <span className="font-medium">Base Price: </span>
-                                {formatPrice(product.our_price, product.currency_code || 'SEK')}
+                                {formatPrice(product.our_retail_price, product.currency_code || 'SEK')}
                               </div>
                             ) : (
                               <div className="text-sm text-gray-500 italic">No price data</div>

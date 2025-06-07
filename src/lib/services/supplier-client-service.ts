@@ -157,11 +157,13 @@ export class SupplierClientService {
  */
 export async function uploadSupplierProductsCSV(
   supplierId: string,
-  file: File
-): Promise<{ success: boolean; productsAdded: number; pricesUpdated: number }> {
+  file: File,
+  delimiter: ',' | ';' = ','
+): Promise<{ success: boolean; recordsInserted: number; message: string }> {
   const formData = new FormData();
   formData.append('supplierId', supplierId);
   formData.append('file', file);
+  formData.append('delimiter', delimiter);
 
   const response = await fetch('/api/products/csv-upload-suppliers', {
     method: 'POST',

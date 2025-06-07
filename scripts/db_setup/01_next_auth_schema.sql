@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Next Auth schema and related objects
 -- =========================================================================
--- Generated: 2025-05-30 15:46:13
+-- Generated: 2025-06-07 13:09:22
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -207,9 +207,50 @@ ALTER TABLE ONLY public.admin_communication_log
     ADD CONSTRAINT admin_communication_log_target_user_id_fkey FOREIGN KEY (target_user_id) REFERENCES next_auth.users(id);
 
 --
--- Name: companies companies_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: accounts; Type: ROW SECURITY; Schema: next_auth; Owner: -
 --
 
-ALTER TABLE ONLY public.companies
-    ADD CONSTRAINT companies_user_id_fkey FOREIGN KEY (user_id) REFERENCES next_auth.users(id);
+ALTER TABLE next_auth.accounts ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: accounts service_role_all_accounts; Type: POLICY; Schema: next_auth; Owner: -
+--
+
+CREATE POLICY service_role_all_accounts ON next_auth.accounts TO service_role USING (true) WITH CHECK (true);
+
+--
+-- Name: sessions service_role_all_sessions; Type: POLICY; Schema: next_auth; Owner: -
+--
+
+CREATE POLICY service_role_all_sessions ON next_auth.sessions TO service_role USING (true) WITH CHECK (true);
+
+--
+-- Name: users service_role_all_users; Type: POLICY; Schema: next_auth; Owner: -
+--
+
+CREATE POLICY service_role_all_users ON next_auth.users TO service_role USING (true) WITH CHECK (true);
+
+--
+-- Name: verification_tokens service_role_all_verification_tokens; Type: POLICY; Schema: next_auth; Owner: -
+--
+
+CREATE POLICY service_role_all_verification_tokens ON next_auth.verification_tokens TO service_role USING (true) WITH CHECK (true);
+
+--
+-- Name: sessions; Type: ROW SECURITY; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE next_auth.sessions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: users; Type: ROW SECURITY; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE next_auth.users ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: verification_tokens; Type: ROW SECURITY; Schema: next_auth; Owner: -
+--
+
+ALTER TABLE next_auth.verification_tokens ENABLE ROW LEVEL SECURITY;
 

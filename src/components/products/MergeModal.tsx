@@ -26,8 +26,8 @@ interface Product {
   category?: string | null;
   description?: string | null;
   image_url?: string | null;
-  our_price?: number | null;
-  wholesale_price?: number | null;
+  our_retail_price?: number | null;
+  our_wholesale_price?: number | null;
   currency_code?: string | null;
   url?: string | null;
 }

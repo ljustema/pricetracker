@@ -31,6 +31,7 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const integrationId = formData.get('integrationId') as string;
     const file = formData.get('file') as File;
+    const delimiter = (formData.get('delimiter') as string) || ',';
 
     // Validate required fields
     if (!integrationId || !file) {
@@ -62,7 +63,7 @@ export async function POST(req: NextRequest) {
     const fileContent = await file.text();
 
     // CSV parser implementation that handles quoted fields
-    const parseCSV = (csvText: string) => {
+    const parseCSV = (csvText: string, delimiter: string = ',') => {
       const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== '');
       if (lines.length === 0) {
         return { data: [], errors: [{ message: 'Empty CSV file' }] };
@@ -78,7 +79,7 @@ export async function POST(req: NextRequest) {
 
           if (char === '"') {
             inQuotes = !inQuotes;
-          } else if (char === ',' && !inQuotes) {
+          } else if (char === delimiter && !inQuotes) {
             result.push(currentField.trim());
             currentField = '';
           } else {
@@ -122,7 +123,7 @@ export async function POST(req: NextRequest) {
       return { data, errors: [] };
     };
 
-    const parsedCsv = parseCSV(fileContent);
+    const parsedCsv = parseCSV(fileContent, delimiter);
 
     if (parsedCsv.errors.length > 0) {
       return NextResponse.json(
@@ -131,15 +132,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate headers for own products
+    // Validate headers for own products (support both old and new column names)
     if (parsedCsv.data.length > 0) {
       const headers = Object.keys(parsedCsv.data[0]);
-      const hasOurPrice = headers.includes('our_price');
-      const hasWholesalePrice = headers.includes('wholesale_price');
-      
+      const hasOurPrice = headers.includes('our_price') || headers.includes('our_retail_price');
+      const hasWholesalePrice = headers.includes('wholesale_price') || headers.includes('our_wholesale_price');
+
       if (!hasOurPrice && !hasWholesalePrice) {
         return NextResponse.json(
-          { error: "CSV file is missing required headers: either 'our_price' or 'wholesale_price' is required for own products" },
+          { error: "CSV file is missing required headers: either 'our_price'/'our_retail_price' or 'wholesale_price'/'our_wholesale_price' is required for own products" },
           { status: 400 }
         );
       }
@@ -183,9 +184,11 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      // Parse prices - use our_price as the main price for integration processing
-      const ourPrice = row.our_price ? parseFloat(row.our_price) : null;
-      const wholesalePrice = row.wholesale_price ? parseFloat(row.wholesale_price) : null;
+      // Parse prices (support both old and new column names for backward compatibility)
+      const ourRetailPrice = row.our_retail_price ? parseFloat(row.our_retail_price) :
+                             (row.our_price ? parseFloat(row.our_price) : null);
+      const ourWholesalePrice = row.our_wholesale_price ? parseFloat(row.our_wholesale_price) :
+                               (row.wholesale_price ? parseFloat(row.wholesale_price) : null);
 
       // Insert into temp_integrations_scraped_data (including all fields in raw_data)
       const { error: insertError } = await supabase
@@ -198,8 +201,8 @@ export async function POST(req: NextRequest) {
           sku: row.sku || null,
           ean: row.ean || null,
           brand: row.brand || null,
-          price: ourPrice, // Use our_price as the main price
-          wholesale_price: wholesalePrice,
+          our_retail_price: ourRetailPrice, // Use our_retail_price as the main price
+          our_wholesale_price: ourWholesalePrice,
           image_url: row.image_url || null,
           url: row.url || null,
           currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',

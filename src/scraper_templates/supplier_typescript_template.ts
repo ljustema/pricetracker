@@ -33,7 +33,8 @@ import { hideBin } from 'yargs/helpers';
 interface ScrapedSupplierData {
     url: string;
     name: string;
-    price: number | null; // Supplier's selling price to us
+    supplier_price: number | null; // Supplier's selling price to us
+    supplier_recommended_price?: number | null; // Supplier's recommended retail price
     currency_code: string | null;
     sku?: string | null; // Supplier's SKU (which becomes our SKU when we source from them)
     brand?: string | null;
@@ -175,8 +176,10 @@ async function scrape(context: ScriptContext): Promise<void> {
             // Example: Parse supplier product data (replace with actual parsing)
             // const $ = cheerio.load(productHtml);
             // const name = $('h1').text().trim();
-            // const priceStr = $('.wholesale-price, .supplier-price').text().trim().replace(/[^0-9.]/g, '');
-            // const price = parseFloat(priceStr);
+            // const supplierPriceStr = $('.wholesale-price, .supplier-price').text().trim().replace(/[^0-9.]/g, '');
+            // const supplierPrice = parseFloat(supplierPriceStr);
+            // const recommendedPriceStr = $('.recommended-price, .retail-price').text().trim().replace(/[^0-9.]/g, '');
+            // const supplierRecommendedPrice = parseFloat(recommendedPriceStr) || null;
             // const sku = $('.sku').text().trim() || undefined;
             // const brand = $('.brand').text().trim() || undefined;
             // const ean = $('.ean').text().trim() || undefined;
@@ -188,7 +191,8 @@ async function scrape(context: ScriptContext): Promise<void> {
 
             // Dummy data for example:
             const name = `Supplier Product from ${link}`;
-            const price = 8.99 + productCount; // Wholesale/supplier price
+            const supplierPrice = 8.99 + productCount; // Wholesale/supplier price
+            const supplierRecommendedPrice = supplierPrice * 1.8; // Example: 80% markup
             const sku = `SUPP_SKU_${productCount}`;
             const brand = productCount % 2 === 0 ? "SupplierBrand" : "WholesaleBrand";
             const ean = productCount % 3 === 0 ? `1234567890${productCount.toString().padStart(3, '0')}` : undefined;
@@ -200,7 +204,8 @@ async function scrape(context: ScriptContext): Promise<void> {
 
             const supplierData: ScrapedSupplierData = {
                 name: name,
-                price: price,
+                supplier_price: supplierPrice,
+                supplier_recommended_price: supplierRecommendedPrice,
                 currency_code: "SEK", // Or detect from page
                 url: link,
                 image_url: imageUrl,

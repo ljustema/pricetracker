@@ -42,7 +42,7 @@ export async function GET(
       .select(`
         id,
         name,
-        our_price,
+        our_retail_price,
         currency_code
       `)
       .eq('id', productId)
@@ -59,14 +59,14 @@ export async function GET(
 
     // Get price changes for this product
     const { data: priceChanges, error: priceChangesError } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select(`
         id,
         competitor_id,
         competitors(name),
         integration_id,
-        old_price,
-        new_price,
+        old_competitor_price,
+        new_competitor_price,
         price_change_percentage,
         changed_at,
         currency_code

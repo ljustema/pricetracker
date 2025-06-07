@@ -1,0 +1,3 @@
+name,supplier_price,supplier_recommended_price,currency_code,sku,brand,ean,image_url,url,minimum_order_quantity,lead_time_days
+Test Supplier Product 1,49.99,269.99,SEK,SUPP-SKU-001,SupplierBrand,1234565890121,https://supplier.com/product1.jpg,https://supplier.com/product1,10,7
+Shared Test Product,159.00,319.00,SEK,SHARED-001,TestBrand,1234567890123,https://supplier.com/shared.jpg,https://supplier.com/shared,5,14

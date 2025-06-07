@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Row Level Security policies
 -- =========================================================================
--- Generated: 2025-05-30 15:46:13
+-- Generated: 2025-06-07 13:09:22
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -44,10 +44,10 @@ CREATE POLICY "Users can delete their own brand aliases" ON public.brand_aliases
 CREATE POLICY "Users can delete their own brands" ON public.brands FOR DELETE USING ((auth.uid() = user_id));
 
 --
--- Name: companies Users can delete their own company; Type: POLICY; Schema: public; Owner: -
+-- Name: user_settings Users can delete their own company; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can delete their own company" ON public.companies FOR DELETE USING ((auth.uid() = user_id));
+CREATE POLICY "Users can delete their own company" ON public.user_settings FOR DELETE USING ((auth.uid() = user_id));
 
 --
 -- Name: competitors Users can delete their own competitors; Type: POLICY; Schema: public; Owner: -
@@ -86,6 +86,24 @@ CREATE POLICY "Users can delete their own scraper AI sessions" ON public.scraper
 CREATE POLICY "Users can delete their own scrapers" ON public.scrapers FOR DELETE USING ((auth.uid() = user_id));
 
 --
+-- Name: price_changes_suppliers Users can delete their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own supplier price changes" ON public.price_changes_suppliers FOR DELETE USING ((auth.uid() = user_id));
+
+--
+-- Name: temp_suppliers_scraped_data Users can delete their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR DELETE USING ((auth.uid() = user_id));
+
+--
+-- Name: suppliers Users can delete their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own suppliers" ON public.suppliers FOR DELETE USING ((auth.uid() = user_id));
+
+--
 -- Name: csv_uploads Users can insert their own CSV uploads; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -104,10 +122,10 @@ CREATE POLICY "Users can insert their own brand aliases" ON public.brand_aliases
 CREATE POLICY "Users can insert their own brands" ON public.brands FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
--- Name: companies Users can insert their own company; Type: POLICY; Schema: public; Owner: -
+-- Name: user_settings Users can insert their own company; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can insert their own company" ON public.companies FOR INSERT WITH CHECK ((auth.uid() = user_id));
+CREATE POLICY "Users can insert their own company" ON public.user_settings FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
 -- Name: competitors Users can insert their own competitors; Type: POLICY; Schema: public; Owner: -
@@ -134,10 +152,10 @@ CREATE POLICY "Users can insert their own integration runs" ON public.integratio
 CREATE POLICY "Users can insert their own integrations" ON public.integrations FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
--- Name: price_changes Users can insert their own price changes; Type: POLICY; Schema: public; Owner: -
+-- Name: price_changes_competitors Users can insert their own price changes; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can insert their own price changes" ON public.price_changes FOR INSERT WITH CHECK ((auth.uid() = user_id));
+CREATE POLICY "Users can insert their own price changes" ON public.price_changes_competitors FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
 -- Name: products Users can insert their own products; Type: POLICY; Schema: public; Owner: -
@@ -156,6 +174,24 @@ CREATE POLICY "Users can insert their own scraper AI sessions" ON public.scraper
 --
 
 CREATE POLICY "Users can insert their own scrapers" ON public.scrapers FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+--
+-- Name: price_changes_suppliers Users can insert their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own supplier price changes" ON public.price_changes_suppliers FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+--
+-- Name: temp_suppliers_scraped_data Users can insert their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+--
+-- Name: suppliers Users can insert their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own suppliers" ON public.suppliers FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
 -- Name: temp_integrations_scraped_data Users can only access their own integration products; Type: POLICY; Schema: public; Owner: -
@@ -188,10 +224,10 @@ CREATE POLICY "Users can update their own CSV uploads" ON public.csv_uploads FOR
 CREATE POLICY "Users can update their own brands" ON public.brands FOR UPDATE USING ((auth.uid() = user_id));
 
 --
--- Name: companies Users can update their own company; Type: POLICY; Schema: public; Owner: -
+-- Name: user_settings Users can update their own company; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can update their own company" ON public.companies FOR UPDATE USING ((auth.uid() = user_id));
+CREATE POLICY "Users can update their own company" ON public.user_settings FOR UPDATE USING ((auth.uid() = user_id));
 
 --
 -- Name: competitors Users can update their own competitors; Type: POLICY; Schema: public; Owner: -
@@ -236,6 +272,24 @@ CREATE POLICY "Users can update their own scraper AI sessions" ON public.scraper
 CREATE POLICY "Users can update their own scrapers" ON public.scrapers FOR UPDATE USING ((auth.uid() = user_id));
 
 --
+-- Name: price_changes_suppliers Users can update their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own supplier price changes" ON public.price_changes_suppliers FOR UPDATE USING ((auth.uid() = user_id));
+
+--
+-- Name: temp_suppliers_scraped_data Users can update their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR UPDATE USING ((auth.uid() = user_id));
+
+--
+-- Name: suppliers Users can update their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own suppliers" ON public.suppliers FOR UPDATE USING ((auth.uid() = user_id));
+
+--
 -- Name: support_messages Users can view messages in own conversations; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -274,10 +328,10 @@ CREATE POLICY "Users can view their own brand aliases" ON public.brand_aliases F
 CREATE POLICY "Users can view their own brands" ON public.brands FOR SELECT USING ((auth.uid() = user_id));
 
 --
--- Name: companies Users can view their own company; Type: POLICY; Schema: public; Owner: -
+-- Name: user_settings Users can view their own company; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can view their own company" ON public.companies FOR SELECT USING ((auth.uid() = user_id));
+CREATE POLICY "Users can view their own company" ON public.user_settings FOR SELECT USING ((auth.uid() = user_id));
 
 --
 -- Name: competitors Users can view their own competitors; Type: POLICY; Schema: public; Owner: -
@@ -304,10 +358,10 @@ CREATE POLICY "Users can view their own integration runs" ON public.integration_
 CREATE POLICY "Users can view their own integrations" ON public.integrations FOR SELECT USING ((auth.uid() = user_id));
 
 --
--- Name: price_changes Users can view their own price changes; Type: POLICY; Schema: public; Owner: -
+-- Name: price_changes_competitors Users can view their own price changes; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can view their own price changes" ON public.price_changes FOR SELECT USING ((auth.uid() = user_id));
+CREATE POLICY "Users can view their own price changes" ON public.price_changes_competitors FOR SELECT USING ((auth.uid() = user_id));
 
 --
 -- Name: products Users can view their own products; Type: POLICY; Schema: public; Owner: -
@@ -338,6 +392,24 @@ CREATE POLICY "Users can view their own scrapers" ON public.scrapers FOR SELECT 
 --
 
 CREATE POLICY "Users can view their own subscriptions" ON public.user_subscriptions FOR SELECT USING ((auth.uid() = user_id));
+
+--
+-- Name: price_changes_suppliers Users can view their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own supplier price changes" ON public.price_changes_suppliers FOR SELECT USING ((auth.uid() = user_id));
+
+--
+-- Name: temp_suppliers_scraped_data Users can view their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR SELECT USING ((auth.uid() = user_id));
+
+--
+-- Name: suppliers Users can view their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own suppliers" ON public.suppliers FOR SELECT USING ((auth.uid() = user_id));
 
 --
 -- Name: admin_communication_log admin_communication_log_insert_policy; Type: POLICY; Schema: public; Owner: -

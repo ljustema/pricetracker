@@ -133,15 +133,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate headers for own products
+    // Validate headers for own products (support both old and new column names)
     if (parsedCsv.data.length > 0) {
       const headers = Object.keys(parsedCsv.data[0]);
-      const hasOurPrice = headers.includes('our_price');
-      const hasWholesalePrice = headers.includes('wholesale_price');
+      const hasOurPrice = headers.includes('our_price') || headers.includes('our_retail_price');
+      const hasWholesalePrice = headers.includes('wholesale_price') || headers.includes('our_wholesale_price');
 
       if (!hasOurPrice && !hasWholesalePrice) {
         return NextResponse.json(
-          { error: "CSV file is missing required headers: either 'our_price' or 'wholesale_price' is required for own products" },
+          { error: "CSV file is missing required headers: either 'our_retail_price' (or 'our_price') or 'our_wholesale_price' (or 'wholesale_price') is required for own products" },
           { status: 400 }
         );
       }
@@ -182,7 +182,7 @@ export async function POST(req: NextRequest) {
       if (row.ean && row.ean.trim() !== '') {
         const { data: eanProduct } = await supabase
           .from('products')
-          .select('id, our_price, wholesale_price')
+          .select('id, our_retail_price, our_wholesale_price')
           .eq('user_id', userId)
           .eq('ean', row.ean.trim())
           .single();
@@ -197,7 +197,7 @@ export async function POST(req: NextRequest) {
       if (!productId && row.sku && row.sku.trim() !== '' && brandId) {
         const { data: skuProduct } = await supabase
           .from('products')
-          .select('id, our_price, wholesale_price')
+          .select('id, our_retail_price, our_wholesale_price')
           .eq('user_id', userId)
           .eq('sku', row.sku.trim())
           .eq('brand_id', brandId)
@@ -209,9 +209,11 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Parse prices
-      const ourPrice = row.our_price ? parseFloat(row.our_price) : null;
-      const wholesalePrice = row.wholesale_price ? parseFloat(row.wholesale_price) : null;
+      // Parse prices (support both old and new column names)
+      const ourRetailPrice = row.our_retail_price ? parseFloat(row.our_retail_price) :
+                             (row.our_price ? parseFloat(row.our_price) : null);
+      const ourWholesalePrice = row.our_wholesale_price ? parseFloat(row.our_wholesale_price) :
+                               (row.wholesale_price ? parseFloat(row.wholesale_price) : null);
 
       if (productId) {
         // Update existing product
@@ -232,8 +234,8 @@ export async function POST(req: NextRequest) {
         if (row.currency_code) updateData.currency_code = row.currency_code.toUpperCase();
 
         // Update prices if provided
-        if (ourPrice !== null) updateData.our_price = ourPrice;
-        if (wholesalePrice !== null) updateData.wholesale_price = wholesalePrice;
+        if (ourRetailPrice !== null) updateData.our_retail_price = ourRetailPrice;
+        if (ourWholesalePrice !== null) updateData.our_wholesale_price = ourWholesalePrice;
 
         const { error: updateError } = await supabase
           .from('products')
@@ -246,8 +248,8 @@ export async function POST(req: NextRequest) {
         }
 
         // Check if prices changed
-        if ((ourPrice !== null && existingProduct && ourPrice !== existingProduct.our_price) ||
-            (wholesalePrice !== null && existingProduct && wholesalePrice !== existingProduct.wholesale_price)) {
+        if ((ourRetailPrice !== null && existingProduct && ourRetailPrice !== existingProduct.our_retail_price) ||
+            (ourWholesalePrice !== null && existingProduct && ourWholesalePrice !== existingProduct.our_wholesale_price)) {
           pricesUpdated++;
         }
       } else {
@@ -265,8 +267,8 @@ export async function POST(req: NextRequest) {
             description: row.description || null,
             image_url: row.image_url || null,
             url: row.url || null,
-            our_price: ourPrice,
-            wholesale_price: wholesalePrice,
+            our_retail_price: ourRetailPrice,
+            our_wholesale_price: ourWholesalePrice,
             currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
             is_active: true,
             created_at: now,

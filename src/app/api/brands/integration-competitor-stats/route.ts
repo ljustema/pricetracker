@@ -75,7 +75,7 @@ export async function GET(_request: NextRequest) {
       integrations.map(async (integration) => {
         // Get total products for this integration
         const { count: totalCount, error: totalError } = await supabase
-          .from('price_changes')
+          .from('price_changes_competitors')
           .select('product_id', { count: 'exact', head: true })
           .eq('user_id', userId)
           .eq('integration_id', integration.id);
@@ -109,13 +109,13 @@ export async function GET(_request: NextRequest) {
             .eq('user_id', userId)
             .in('id', (subquery) => {
               subquery
-                .from('price_changes')
+                .from('price_changes_competitors')
                 .select('product_id')
                 .eq('user_id', userId)
                 .eq('integration_id', integration.id)
                 .not('product_id', 'in', (subsubquery) => {
                   subsubquery
-                    .from('price_changes')
+                    .from('price_changes_competitors')
                     .select('product_id')
                     .eq('user_id', userId)
                     .neq('integration_id', integration.id);
@@ -186,13 +186,13 @@ export async function GET(_request: NextRequest) {
             .eq('user_id', userId)
             .in('id', (subquery) => {
               subquery
-                .from('price_changes')
+                .from('price_changes_competitors')
                 .select('product_id')
                 .eq('user_id', userId)
                 .eq('competitor_id', competitor.id)
                 .not('product_id', 'in', (subsubquery) => {
                   subsubquery
-                    .from('price_changes')
+                    .from('price_changes_competitors')
                     .select('product_id')
                     .eq('user_id', userId)
                     .neq('competitor_id', competitor.id);

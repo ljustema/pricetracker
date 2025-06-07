@@ -939,8 +939,8 @@ private async getDefaultCurrency(): Promise<string> {
         // Get the accurate price with discounts and tax using our new method
         const price = await this.calculateFinalPrice(product);
 
-        // Extract wholesale_price
-        const wholesalePrice = this.getNumberValue(product.wholesale_price, 0);
+        // Extract our_wholesale_price
+        const ourWholesalePrice = this.getNumberValue(product.wholesale_price, 0);
 
         // Only use supplier_reference as SKU, never use reference as fallback
         let reference = this.getStringValue(product.supplier_reference);
@@ -1148,7 +1148,7 @@ private async getDefaultCurrency(): Promise<string> {
           id,
           name,
           price,
-          wholesale_price: wholesalePrice,
+          wholesale_price: ourWholesalePrice,
           reference, // ONLY supplier_reference, no fallback
           ean13,
           manufacturer_name: manufacturerName,
@@ -1161,8 +1161,8 @@ private async getDefaultCurrency(): Promise<string> {
         // In test mode, log detailed info; in full sync mode, be quiet
         const isTestRun = process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV === 'development';
         if (isTestRun) {
-          if (wholesalePrice > 0) {
-            console.log(`Product ${id}: Found wholesale_price: ${wholesalePrice}`);
+          if (ourWholesalePrice > 0) {
+            console.log(`Product ${id}: Found wholesale_price: ${ourWholesalePrice}`);
           }
           if (ean13) {
             console.log(`Product ${id}: Found EAN13: ${ean13}`);

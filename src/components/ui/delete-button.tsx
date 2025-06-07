@@ -8,6 +8,7 @@ interface DeleteButtonProps {
   name: string;
   endpoint: string;
   onDelete?: () => void;
+  size?: 'sm' | 'md'; // Add size prop
 }
 
 export default function DeleteButton({
@@ -15,6 +16,7 @@ export default function DeleteButton({
   name,
   endpoint,
   onDelete,
+  size = 'md',
 }: DeleteButtonProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const router = useRouter();
@@ -64,17 +66,29 @@ export default function DeleteButton({
     }
   };
 
+  // Define size-based classes
+  const sizeClasses = {
+    sm: {
+      button: "rounded-md bg-gray-100 p-1 text-gray-600 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2",
+      icon: "h-3 w-3"
+    },
+    md: {
+      button: "rounded-md bg-gray-100 p-2 text-gray-600 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2",
+      icon: "h-5 w-5"
+    }
+  };
+
   return (
     <button
       type="button"
       onClick={handleDelete}
-      className="rounded-md bg-gray-100 p-2 text-gray-600 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+      className={sizeClasses[size].button}
       aria-label="Delete"
       disabled={isDeleting}
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
-        className="h-5 w-5"
+        className={sizeClasses[size].icon}
         viewBox="0 0 20 20"
         fill="currentColor"
       >

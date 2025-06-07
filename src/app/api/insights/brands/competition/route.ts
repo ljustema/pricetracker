@@ -102,7 +102,7 @@ export async function GET(_request: NextRequest) {
         for (let i = 0; i < productIds.length; i += CHUNK_SIZE) {
           const chunk = productIds.slice(i, i + CHUNK_SIZE);
           const { data: priceChangesChunk, error: priceChangesError } = await supabase
-            .from('price_changes')
+            .from('price_changes_competitors')
             .select(`
               competitor_id,
               competitors(name)

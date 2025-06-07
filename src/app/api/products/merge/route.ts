@@ -94,9 +94,9 @@ export async function POST(request: NextRequest) {
 
       // We'll check related records separately for each table
       try {
-        // Check price_changes
+        // Check price_changes_competitors
         const { data: priceChanges, error: priceError } = await supabase
-          .from('price_changes')
+          .from('price_changes_competitors')
           .select('product_id')
           .in('product_id', [primaryId, duplicateId]);
 
@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
         // Log the counts if available
         if (!priceError && !scrapedError && !stagedError) {
           console.log("Related records:", {
-            price_changes: priceChanges?.length || 0,
+            price_changes_competitors: priceChanges?.length || 0,
             temp_competitors_scraped_data: scrapedProducts?.length || 0,
             temp_integrations_scraped_data: stagedProducts?.length || 0
           });

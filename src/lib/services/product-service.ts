@@ -13,8 +13,8 @@ export interface Product {
   category: string | null; // Allow null
   description: string | null; // Allow null
   image_url: string | null; // Allow null
-  our_price: number | null; // Allow null
-  wholesale_price: number | null; // Allow null
+  our_retail_price: number | null; // Renamed from our_price
+  our_wholesale_price: number | null; // Renamed from wholesale_price
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -61,8 +61,10 @@ export interface PriceChange {
   source_id?: string; // Either competitor_id or integration_id
   source_name?: string; // Name of the competitor or integration
   source_type?: 'competitor' | 'integration';
-  old_price: number;
-  new_price: number;
+  old_competitor_price?: number; // For competitor price changes
+  new_competitor_price?: number; // For competitor price changes
+  old_our_retail_price?: number; // For our retail price changes (integrations)
+  new_our_retail_price?: number; // For our retail price changes (integrations)
   price_change_percentage: number;
   changed_at: string;
   url?: string; // URL to the product on the competitor's website
@@ -167,7 +169,7 @@ export async function getPriceChanges(
   const uuid = ensureUUID(userId);
 
   let query = supabase
-    .from("price_changes")
+    .from("price_changes_competitors")
     .select(`
       *,
       competitors(name)
@@ -211,8 +213,8 @@ export async function createProduct(userId: string, productData: Partial<Product
     category: productData.category || null,
     description: productData.description || null,
     image_url: productData.image_url || null,
-    our_price: productData.our_price || null,
-    wholesale_price: productData.wholesale_price || null,
+    our_retail_price: productData.our_retail_price || null,
+    our_wholesale_price: productData.our_wholesale_price || null,
     is_active: productData.is_active !== undefined ? productData.is_active : true,
   };
 
@@ -272,8 +274,8 @@ export async function updateProduct(
     category: productData.category || null,
     description: productData.description || null,
     image_url: productData.image_url || null,
-    our_price: productData.our_price || null,
-    wholesale_price: productData.wholesale_price || null,
+    our_retail_price: productData.our_retail_price || null,
+    our_wholesale_price: productData.our_wholesale_price || null,
     is_active: productData.is_active !== undefined ? productData.is_active : true,
     updated_at: new Date().toISOString(),
   };
@@ -357,7 +359,7 @@ export async function getLatestCompetitorPrices(
       console.error("Error fetching latest prices:", error);
       // Fall back to direct query
       const { data: fallbackData, error: fallbackError } = await supabase
-        .from("price_changes")
+        .from("price_changes_competitors")
         .select(`
           *,
           competitors(name, website)
@@ -416,7 +418,7 @@ export async function getProductPriceHistory(
       console.error("Error fetching price history:", error);
       // Fall back to direct query
       const { data: fallbackData, error: fallbackError } = await supabase
-        .from("price_changes")
+        .from("price_changes_competitors")
         .select(`
           *,
           competitors(name, website)
@@ -481,7 +483,7 @@ export async function getFilteredProducts(
     p_category: filters.category || null,
     p_search: filters.search || null,
     p_is_active: filters.isActive !== undefined ? filters.isActive : null,
-    p_source_id: filters.sourceId || null,
+    p_competitor_ids: filters.sourceId ? [filters.sourceId] : null,
     p_has_price: filters.hasPrice !== undefined ? filters.hasPrice : null,
   });
 

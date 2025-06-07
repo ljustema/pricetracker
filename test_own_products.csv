@@ -1,3 +1,0 @@
-name,our_price,wholesale_price,currency_code,sku,brand,ean,category,description,image_url,url
-"Premium LED Desk Lamp",299.99,199.99,SEK,LED-DESK-001,"LightTech Pro",7340123456789,"Office & Electronics","Adjustable LED desk lamp with USB charging port and touch controls. Perfect for home office setup.","https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400","https://example.com/led-desk-lamp"
-"Ergonomic Office Chair",1299.99,899.99,SEK,CHAIR-ERG-002,"ComfortSeating",7340987654321,"Office Furniture","High-quality ergonomic office chair with lumbar support, adjustable height, and breathable mesh back.","https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=400","https://example.com/ergonomic-chair"

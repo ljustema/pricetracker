@@ -31,11 +31,14 @@ export interface SupplierPriceChange {
   id: string;
   user_id: string;
   product_id: string;
-  supplier_id: string;
-  old_price?: number;
-  new_price: number;
-  old_wholesale_price?: number;
-  new_wholesale_price?: number;
+  supplier_id?: string;
+  integration_id?: string;
+  old_supplier_price?: number;
+  new_supplier_price?: number;
+  old_supplier_recommended_price?: number;
+  new_supplier_recommended_price?: number;
+  old_our_wholesale_price?: number;
+  new_our_wholesale_price?: number;
   price_change_percentage?: number;
   currency_code: string;
   url?: string;
@@ -43,6 +46,12 @@ export interface SupplierPriceChange {
   lead_time_days?: number;
   changed_at: string;
   change_source: 'manual' | 'csv' | 'scraper' | 'integration';
+  suppliers?: {
+    name: string;
+  };
+  integrations?: {
+    name: string;
+  };
 }
 
 /**
@@ -202,7 +211,11 @@ export async function getSupplierPriceChanges(
 
   let query = supabase
     .from("price_changes_suppliers")
-    .select("*")
+    .select(`
+      *,
+      suppliers(name),
+      integrations(name)
+    `)
     .eq("user_id", userUuid)
     .order("changed_at", { ascending: false });
 

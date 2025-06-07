@@ -200,8 +200,8 @@ export async function PUT(
         description: body.description || null,
         image_url: body.image_url || null,
         url: body.url || null, // Add URL field
-        our_price: body.our_price || null,
-        wholesale_price: body.wholesale_price || null,
+        our_retail_price: body.our_retail_price || body.our_price || null, // Support both old and new field names
+        our_wholesale_price: body.our_wholesale_price || body.wholesale_price || null, // Support both old and new field names
         is_active: body.is_active !== undefined ? body.is_active : true,
         updated_at: new Date().toISOString(),
       })
@@ -287,16 +287,16 @@ export async function DELETE(
       );
     }
 
-    // First, check if there are price_changes referencing this product
+    // First, check if there are price_changes_competitors referencing this product
     const { count: priceChangesCount, error: countError } = await supabase
-      .from("price_changes")
+      .from("price_changes_competitors")
       .select("id", { count: 'exact', head: true })
       .eq("product_id", productId);
 
     if (countError) {
-      console.error("Error checking price_changes references:", countError);
+      console.error("Error checking price_changes_competitors references:", countError);
       return NextResponse.json(
-        { error: "Error checking price_changes references" },
+        { error: "Error checking price_changes_competitors references" },
         { status: 500 }
       );
     }
@@ -304,22 +304,22 @@ export async function DELETE(
     // Note: temp_integrations_scraped_data table doesn't have a product_id column
     // so we don't need to check for references there
 
-    // Delete ALL price_changes records for this product (both competitor and integration price changes)
+    // Delete ALL price_changes_competitors records for this product (both competitor and integration price changes)
     if (priceChangesCount && priceChangesCount > 0) {
       const { error: deleteChangesError } = await supabase
-        .from("price_changes")
+        .from("price_changes_competitors")
         .delete()
         .eq("product_id", productId);
 
       if (deleteChangesError) {
-        console.error("Error deleting price_changes:", deleteChangesError);
+        console.error("Error deleting price_changes_competitors:", deleteChangesError);
         return NextResponse.json(
           { error: `Cannot delete product: it has ${priceChangesCount} price change records. Please try again or contact support.` },
           { status: 409 }
         );
       }
 
-      console.log(`Deleted ${priceChangesCount} price_changes records for product ${productId}`);
+      console.log(`Deleted ${priceChangesCount} price_changes_competitors records for product ${productId}`);
     }
 
     // temp_integrations_scraped_data doesn't have product_id column, so no cleanup needed

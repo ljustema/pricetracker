@@ -37,8 +37,8 @@ interface PriceChange {
   product_id: string;
   competitor_id: string | null;
   integration_id: string | null;
-  old_price: number;
-  new_price: number;
+  old_competitor_price?: number;
+  new_competitor_price?: number;
   price_change_percentage: number;
   changed_at: string;
   products: {

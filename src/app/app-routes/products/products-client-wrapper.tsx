@@ -163,7 +163,7 @@ export default function ProductsClientWrapper({
        router.push(newUrl, { scroll: false });
     }
 
-  }, [complexFilters, searchParams, router]); // Depend on complexFilters, searchParams, and router
+  }, [complexFilters, router]); // Only depend on complexFilters and router, not searchParams to avoid circular updates
 
   // Callback function for ProductsFilter to update complex filters
   const handleComplexFilterChange = useCallback((newFilters: Partial<ComplexFiltersState>) => {

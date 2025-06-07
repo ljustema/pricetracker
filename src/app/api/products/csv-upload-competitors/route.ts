@@ -31,6 +31,7 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const competitorId = formData.get('competitorId') as string;
     const file = formData.get('file') as File;
+    const delimiter = (formData.get('delimiter') as string) || ',';
 
     // Validate required fields
     if (!competitorId || !file) {
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest) {
     const fileContent = await file.text();
 
     // CSV parser implementation that handles quoted fields
-    const parseCSV = (csvText: string) => {
+    const parseCSV = (csvText: string, delimiter: string = ',') => {
       const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== '');
       if (lines.length === 0) {
         return { data: [], errors: [{ message: 'Empty CSV file' }] };
@@ -62,7 +63,7 @@ export async function POST(req: NextRequest) {
           if (char === '"') {
             // Toggle quote state
             inQuotes = !inQuotes;
-          } else if (char === ',' && !inQuotes) {
+          } else if (char === delimiter && !inQuotes) {
             // End of field
             result.push(currentField.trim());
             currentField = '';
@@ -88,7 +89,7 @@ export async function POST(req: NextRequest) {
       const headers = parseCSVLine(lines[0]);
 
       // Check for required headers
-      const requiredHeaders = ['name', 'price'];
+      const requiredHeaders = ['name', 'competitor_price'];
       const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
       if (missingHeaders.length > 0) {
         return {
@@ -122,7 +123,7 @@ export async function POST(req: NextRequest) {
       return { data, errors: [] };
     };
 
-    const parsedCsv = parseCSV(fileContent);
+    const parsedCsv = parseCSV(fileContent, delimiter);
 
     if (parsedCsv.errors.length > 0) {
       return NextResponse.json(
@@ -155,7 +156,7 @@ export async function POST(req: NextRequest) {
 
     for (const row of parsedCsv.data) {
       // Validate required fields
-      if (!row.name || !row.price) {
+      if (!row.name || !row.competitor_price) {
         continue; // Skip rows with missing required fields
       }
 
@@ -236,47 +237,32 @@ export async function POST(req: NextRequest) {
         productsAdded++;
       }
 
-      // Insert directly to price_changes instead of temp_competitors_scraped_data
-      const price = parseFloat(row.price);
-      if (isNaN(price)) {
-        continue; // Skip if price is not a valid number
+      // Insert into temp_competitors_scraped_data instead of direct price_changes insertion
+      const competitorPrice = parseFloat(row.competitor_price);
+      if (isNaN(competitorPrice)) {
+        continue; // Skip if competitor_price is not a valid number
       }
 
-      // Get the last price for this product from this competitor (if any)
-      const { data: lastPriceData } = await supabase
-        .from('price_changes')
-        .select('new_price')
-        .eq('product_id', productId)
-        .eq('competitor_id', competitorId)
-        .order('changed_at', { ascending: false })
-        .limit(1);
-
-      const lastPrice = lastPriceData && lastPriceData.length > 0
-        ? parseFloat(lastPriceData[0].new_price)
-        : price; // Use current price if no previous price exists
-
-      // Calculate price change percentage
-      const priceChangePercentage = lastPrice !== 0
-        ? ((price - lastPrice) / lastPrice) * 100
-        : 0;
-
-      // Insert the price change
-      const { error: priceChangeError } = await supabase
-        .from('price_changes')
+      // Insert into temp table - the trigger will handle processing and price change logic
+      const { error: tempInsertError } = await supabase
+        .from('temp_competitors_scraped_data')
         .insert({
           user_id: userId,
-          product_id: productId,
           competitor_id: competitorId,
-          old_price: lastPrice,
-          new_price: price,
-          price_change_percentage: priceChangePercentage,
-          currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
+          product_id: productId, // We already have the product ID from above
+          name: row.name,
+          competitor_price: competitorPrice,
+          sku: row.sku || null,
+          ean: row.ean || null,
+          brand: row.brand || null,
           url: row.url || null,
-          changed_at: now
+          image_url: row.image_url || null,
+          currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
+          scraped_at: now
         });
 
-      if (priceChangeError) {
-        console.error(`Failed to insert price change: ${priceChangeError.message}`);
+      if (tempInsertError) {
+        console.error(`Failed to insert into temp table: ${tempInsertError.message}`);
         continue; // Skip to next row
       }
 

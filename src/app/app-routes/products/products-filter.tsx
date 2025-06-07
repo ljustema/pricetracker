@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
-import { ReadonlyURLSearchParams } from "next/navigation";
 import type { ComplexFiltersState } from './products-client-wrapper';
 import MultiSelectDropdown from '@/components/ui/multi-select-dropdown';
 
@@ -37,8 +36,6 @@ interface ProductsFilterProps {
   currentFilters: ComplexFiltersState;
   // Callback to notify parent of complex filter changes
   onComplexFilterChange: (newFilters: Partial<ComplexFiltersState>) => void;
-  // # Reason: Accept the useSearchParams hook result from the parent for reading URL parameters.
-  searchParams: ReadonlyURLSearchParams;
 }
 
 export default function ProductsFilter({
@@ -46,34 +43,12 @@ export default function ProductsFilter({
   competitors,
   currentFilters, // Use prop for current state
   onComplexFilterChange, // Use callback for changes
-  searchParams, // Receive searchParams from parent
 }: ProductsFilterProps) {
   // No need for router as URL updates are handled by the parent
 
-  // Local state ONLY for sort dropdown, as it directly controls URL params
-  // # Reason: Initialize local sort state from the URL searchParams.
-  const initialSort = searchParams.get('sort') || 'created_at';
-  const initialSortOrder = searchParams.get('sortOrder') || 'desc';
-  const [sortBy, setSortBy] = useState<string>(`${initialSort}-${initialSortOrder}`);
-
-  // Update local sortBy state if the URL parameters change externally
-  useEffect(() => {
-    const currentSort = searchParams.get('sort') || 'created_at';
-    const currentSortOrder = searchParams.get('sortOrder') || 'desc';
-    const currentSortValue = `${currentSort}-${currentSortOrder}`;
-    if (currentSortValue !== sortBy) {
-      setSortBy(currentSortValue);
-
-      // Make sure the parent's complexFilters state is also updated
-      // This ensures consistency between local state and parent state
-      if (currentFilters.sortBy !== currentSort || currentFilters.sortOrder !== currentSortOrder) {
-        onComplexFilterChange({
-          sortBy: currentSort,
-          sortOrder: currentSortOrder as 'asc' | 'desc'
-        });
-      }
-    }
-  }, [searchParams, sortBy, currentFilters.sortBy, currentFilters.sortOrder, onComplexFilterChange]);
+  // Local state for sort dropdown - derive from currentFilters prop
+  // # Reason: Use currentFilters as the single source of truth for sort state
+  const sortBy = `${currentFilters.sortBy}-${currentFilters.sortOrder}`;
 
 
   // Use useMemo to memoize the debounced function itself
@@ -236,8 +211,6 @@ export default function ProductsFilter({
             value={sortBy} // Controlled by local state
             onChange={(e) => {
               const newSortValue = e.target.value;
-              // Update the local sort state
-              setSortBy(newSortValue);
 
               // Split the value into sortBy and sortOrder parts
               const [field, order] = newSortValue.split('-');

@@ -68,11 +68,11 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
 
   // Get recent activity (last 10 price changes)
   const { data: recentActivity, error: activityError } = await supabase
-    .from('price_changes')
+    .from('price_changes_competitors')
     .select(`
       id,
-      old_price,
-      new_price,
+      old_competitor_price,
+      new_competitor_price,
       changed_at,
       products!inner(name, user_id)
     `)

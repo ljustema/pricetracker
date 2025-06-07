@@ -951,7 +951,8 @@ CREATE TABLE public.integration_runs (
     log_details jsonb,
     created_at timestamp with time zone DEFAULT now(),
     test_products jsonb,
-    configuration jsonb
+    configuration jsonb,
+    last_progress_update timestamp with time zone
 );
 
 
@@ -1112,6 +1113,73 @@ $$;
 
 
 --
+-- Name: cleanup_stalled_integration_runs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_stalled_integration_runs() RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    timeout_count integer := 0;
+    timeout_record record;
+BEGIN
+    -- Find integration runs that are processing but haven't updated progress in 1 hour
+    FOR timeout_record IN
+        SELECT 
+            ir.id, 
+            ir.integration_id, 
+            ir.started_at,
+            ir.last_progress_update,
+            ir.products_processed,
+            i.name as integration_name
+        FROM public.integration_runs ir
+        JOIN public.integrations i ON ir.integration_id = i.id
+        WHERE ir.status = 'processing'
+          AND (
+            -- Case 1: last_progress_update exists and is older than 1 hour
+            (ir.last_progress_update IS NOT NULL AND ir.last_progress_update < now() - interval '1 hour')
+            OR
+            -- Case 2: last_progress_update is NULL but started_at is older than 1 hour (fallback)
+            (ir.last_progress_update IS NULL AND ir.started_at IS NOT NULL AND ir.started_at < now() - interval '1 hour')
+          )
+    LOOP
+        -- Update the stalled run to failed status
+        UPDATE public.integration_runs
+        SET 
+            status = 'failed',
+            completed_at = now(),
+            error_message = 'Integration run stalled - no progress update for over 1 hour (likely due to worker restart)'
+        WHERE id = timeout_record.id;
+        
+        -- Update the integration status to error
+        UPDATE public.integrations
+        SET 
+            status = 'error',
+            last_sync_status = 'failed',
+            last_sync_at = now(),
+            updated_at = now()
+        WHERE id = timeout_record.integration_id;
+        
+        timeout_count := timeout_count + 1;
+        
+        -- Log the timeout for debugging
+        INSERT INTO public.debug_logs (message, created_at)
+        VALUES (
+            'Integration run timed out - run_id: ' || timeout_record.id || 
+            ', integration: ' || timeout_record.integration_name || 
+            ', started_at: ' || timeout_record.started_at || 
+            ', last_progress: ' || COALESCE(timeout_record.last_progress_update::text, 'NULL') ||
+            ', products_processed: ' || timeout_record.products_processed,
+            now()
+        );
+    END LOOP;
+    
+    RETURN timeout_count;
+END;
+$$;
+
+
+--
 -- Name: cleanup_temp_competitors_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1153,7 +1221,7 @@ CREATE FUNCTION public.count_distinct_competitors_for_brand(p_user_id uuid, p_br
     LANGUAGE sql
     AS $$
   SELECT COUNT(DISTINCT pc.competitor_id)
-  FROM price_changes pc
+  FROM price_changes_competitors pc
   JOIN products p ON pc.product_id = p.id
   WHERE p.user_id = p_user_id
     AND p.brand_id = p_brand_id;
@@ -2124,7 +2192,7 @@ BEGIN
     SELECT
       b.id AS brand_id,
       COUNT(p.id) AS product_count,
-      COUNT(CASE WHEN p.our_price IS NOT NULL THEN 1 END) AS our_products_count
+      COUNT(CASE WHEN p.our_retail_price IS NOT NULL THEN 1 END) AS our_products_count
     FROM
       brands b
     LEFT JOIN
@@ -2144,7 +2212,7 @@ BEGIN
     LEFT JOIN
       products p ON b.id = p.brand_id AND p.user_id = b.user_id
     LEFT JOIN
-      price_changes pc ON p.id = pc.product_id AND pc.user_id = b.user_id
+      price_changes_competitors pc ON p.id = pc.product_id AND pc.user_id = b.user_id
     WHERE
       b.user_id = p_user_id
       AND (p_brand_id IS NULL OR b.id = p_brand_id)
@@ -2195,7 +2263,7 @@ BEGIN
   SELECT DISTINCT
     p.brand_id
   FROM
-    price_changes pc
+    price_changes_competitors pc
   JOIN
     products p ON pc.product_id = p.id
   WHERE
@@ -2218,7 +2286,7 @@ BEGIN
   SELECT
     ARRAY_AGG(DISTINCT c.name) AS competitor_names
   FROM
-    price_changes pc
+    price_changes_competitors pc
   JOIN
     products p ON pc.product_id = p.id
   JOIN
@@ -2246,7 +2314,7 @@ BEGIN
       pc.competitor_id,
       pc.product_id
     FROM
-      price_changes pc
+      price_changes_competitors pc
     WHERE
       pc.user_id = p_user_id
   ),
@@ -2412,23 +2480,38 @@ CREATE FUNCTION public.get_integration_run_stats(run_id uuid) RETURNS jsonb
     AS $$
 DECLARE
     stats JSONB;
+    processed_count INTEGER;
+    error_count INTEGER;
+    pending_count INTEGER;
+    price_changes_count INTEGER;
 BEGIN
-    SELECT jsonb_build_object(
-        'processed', COUNT(*) FILTER (WHERE status = 'processed'),
-        'created', COUNT(*) FILTER (WHERE status = 'processed' AND product_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM price_changes pc WHERE pc.product_id = temp_integrations_scraped_data.product_id AND pc.changed_at < temp_integrations_scraped_data.processed_at
-        )),
-        'updated', COUNT(*) FILTER (WHERE status = 'processed' AND product_id IS NOT NULL AND EXISTS (
-            SELECT 1 FROM price_changes pc WHERE pc.product_id = temp_integrations_scraped_data.product_id AND pc.changed_at < temp_integrations_scraped_data.processed_at
-        )),
-        'errors', COUNT(*) FILTER (WHERE status = 'error'),
-        'pending', COUNT(*) FILTER (WHERE status = 'pending')
-    )
-    INTO stats
+    -- Get counts from temp table
+    SELECT 
+        COUNT(*) FILTER (WHERE status = 'processed'),
+        COUNT(*) FILTER (WHERE status = 'error'),
+        COUNT(*) FILTER (WHERE status = 'pending')
+    INTO processed_count, error_count, pending_count
     FROM temp_integrations_scraped_data
     WHERE integration_run_id = run_id;
+    
+    -- Get count of price changes created for this integration run
+    SELECT COUNT(*)
+    INTO price_changes_count
+    FROM price_changes_competitors pc
+    JOIN integration_runs ir ON pc.integration_id = ir.integration_id
+    WHERE ir.id = run_id
+    AND pc.changed_at >= ir.started_at;
+    
+    -- Build stats object
+    SELECT jsonb_build_object(
+        'processed', COALESCE(processed_count, 0),
+        'created', COALESCE(price_changes_count, 0),
+        'updated', 0, -- We'll count all as created for simplicity
+        'errors', COALESCE(error_count, 0),
+        'pending', COALESCE(pending_count, 0)
+    ) INTO stats;
 
-    RETURN COALESCE(stats, '{"processed": 0, "created": 0, "updated": 0, "errors": 0, "pending": 0}'::jsonb);
+    RETURN stats;
 END;
 $$;
 
@@ -2437,208 +2520,18 @@ $$;
 -- Name: get_latest_competitor_prices(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.get_latest_competitor_prices(p_user_id uuid, p_product_id uuid) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_price numeric, new_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
+CREATE FUNCTION public.get_latest_competitor_prices(p_user_id uuid, p_product_id uuid) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_competitor_price numeric, new_competitor_price numeric, old_our_retail_price numeric, new_our_retail_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
     LANGUAGE plpgsql
-    AS $$BEGIN
-    -- First get competitor prices
-    RETURN QUERY
-    WITH LatestCompetitorPrices AS (
-        SELECT
-            pc.id AS id,
-            pc.product_id AS product_id,
-            pc.competitor_id AS competitor_id,
-            pc.integration_id AS integration_id,
-            pc.old_price AS old_price,
-            pc.new_price AS new_price,
-            pc.price_change_percentage AS price_change_percentage,
-            pc.currency_code AS currency_code,
-            pc.changed_at AS changed_at,
-            'competitor'::TEXT AS source_type,
-            c.name AS source_name,
-            c.website AS source_website,
-            NULL::TEXT AS source_platform,
-            pc.competitor_id AS source_id,
-            pc.url AS url, -- Use URL from price_changes table for competitor prices
-            ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
-        FROM price_changes pc
-        JOIN competitors c ON pc.competitor_id = c.id
-        WHERE pc.user_id = p_user_id
-        AND pc.product_id = p_product_id
-        AND pc.competitor_id IS NOT NULL
-    ),
-    LatestIntegrationPrices AS (
-        SELECT
-            pc.id AS id,
-            pc.product_id AS product_id,
-            pc.competitor_id AS competitor_id,
-            pc.integration_id AS integration_id,
-            pc.old_price AS old_price,
-            pc.new_price AS new_price,
-            pc.price_change_percentage AS price_change_percentage,
-            pc.currency_code AS currency_code,
-            pc.changed_at AS changed_at,
-            'integration'::TEXT AS source_type,
-            i.name AS source_name,
-            NULL::TEXT AS source_website,
-            i.platform AS source_platform,
-            pc.integration_id AS source_id,
-            COALESCE(pc.url, p.url) AS url, -- Try price_changes URL first, then products URL
-            ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
-        FROM price_changes pc
-        JOIN integrations i ON pc.integration_id = i.id
-        JOIN products p ON pc.product_id = p.id -- Join with products to get url
-        WHERE pc.user_id = p_user_id
-        AND pc.product_id = p_product_id
-        AND pc.integration_id IS NOT NULL
-    )
-    (
-        SELECT
-            lcp.id AS id,
-            lcp.product_id AS product_id,
-            lcp.competitor_id AS competitor_id,
-            lcp.integration_id AS integration_id,
-            lcp.old_price AS old_price,
-            lcp.new_price AS new_price,
-            lcp.price_change_percentage AS price_change_percentage,
-            lcp.currency_code AS currency_code,
-            lcp.changed_at AS changed_at,
-            lcp.source_type AS source_type,
-            lcp.source_name AS source_name,
-            lcp.source_website AS source_website,
-            lcp.source_platform AS source_platform,
-            lcp.source_id AS source_id,
-            lcp.url AS url
-        FROM LatestCompetitorPrices lcp
-        WHERE lcp.rn = 1
-    )
-    UNION ALL
-    (
-        SELECT
-            lip.id AS id,
-            lip.product_id AS product_id,
-            lip.competitor_id AS competitor_id,
-            lip.integration_id AS integration_id,
-            lip.old_price AS old_price,
-            lip.new_price AS new_price,
-            lip.price_change_percentage AS price_change_percentage,
-            lip.currency_code AS currency_code,
-            lip.changed_at AS changed_at,
-            lip.source_type AS source_type,
-            lip.source_name AS source_name,
-            lip.source_website AS source_website,
-            lip.source_platform AS source_platform,
-            lip.source_id AS source_id,
-            lip.url AS url
-        FROM LatestIntegrationPrices lip
-        WHERE lip.rn = 1
-    )
-    ORDER BY new_price ASC;
-END;$$;
+    AS $$ BEGIN RETURN QUERY WITH AllPrices AS ( SELECT pc.id, pc.product_id, pc.competitor_id, pc.integration_id, pc.old_competitor_price, pc.new_competitor_price, pc.old_our_retail_price, pc.new_our_retail_price, pc.price_change_percentage, pc.currency_code, pc.changed_at, CASE WHEN pc.competitor_id IS NOT NULL THEN 'competitor'::TEXT ELSE 'integration'::TEXT END AS source_type, CASE WHEN pc.competitor_id IS NOT NULL THEN c.name ELSE i.name END AS source_name, CASE WHEN pc.competitor_id IS NOT NULL THEN c.website ELSE NULL::TEXT END AS source_website, CASE WHEN pc.competitor_id IS NOT NULL THEN NULL::TEXT ELSE i.platform END AS source_platform, CASE WHEN pc.competitor_id IS NOT NULL THEN pc.competitor_id ELSE pc.integration_id END AS source_id, COALESCE(pc.url, p.url) AS url, ROW_NUMBER() OVER( PARTITION BY COALESCE(pc.competitor_id, pc.integration_id), CASE WHEN pc.competitor_id IS NOT NULL THEN 'competitor' ELSE 'integration' END ORDER BY pc.changed_at DESC ) as rn FROM price_changes_competitors pc LEFT JOIN competitors c ON pc.competitor_id = c.id LEFT JOIN integrations i ON pc.integration_id = i.id LEFT JOIN products p ON pc.product_id = p.id WHERE pc.user_id = p_user_id AND pc.product_id = p_product_id ) SELECT ap.id, ap.product_id, ap.competitor_id, ap.integration_id, ap.old_competitor_price, ap.new_competitor_price, ap.old_our_retail_price, ap.new_our_retail_price, ap.price_change_percentage, ap.currency_code, ap.changed_at, ap.source_type, ap.source_name, ap.source_website, ap.source_platform, ap.source_id, ap.url FROM AllPrices ap WHERE ap.rn = 1 ORDER BY COALESCE(ap.new_competitor_price, ap.new_our_retail_price) ASC; END; $$;
 
 
 --
 -- Name: get_latest_competitor_prices_batch(uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.get_latest_competitor_prices_batch(p_user_id uuid, p_product_ids uuid[]) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_price numeric, new_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
+CREATE FUNCTION public.get_latest_competitor_prices_batch(p_user_id uuid, p_product_ids uuid[]) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_competitor_price numeric, new_competitor_price numeric, old_our_retail_price numeric, new_our_retail_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
     LANGUAGE plpgsql
-    AS $$
-BEGIN
-    -- Get competitor and integration prices for multiple products at once
-    RETURN QUERY
-    WITH LatestCompetitorPrices AS (
-        SELECT
-            pc.id AS id,
-            pc.product_id AS product_id,
-            pc.competitor_id AS competitor_id,
-            pc.integration_id AS integration_id,
-            pc.old_price AS old_price,
-            pc.new_price AS new_price,
-            pc.price_change_percentage AS price_change_percentage,
-            pc.currency_code AS currency_code,
-            pc.changed_at AS changed_at,
-            'competitor'::TEXT AS source_type,
-            c.name AS source_name,
-            c.website AS source_website,
-            NULL::TEXT AS source_platform,
-            pc.competitor_id AS source_id,
-            pc.url AS url,
-            ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
-        FROM price_changes pc
-        JOIN competitors c ON pc.competitor_id = c.id
-        WHERE pc.user_id = p_user_id
-        AND pc.product_id = ANY(p_product_ids)
-        AND pc.competitor_id IS NOT NULL
-    ),
-    LatestIntegrationPrices AS (
-        SELECT
-            pc.id AS id,
-            pc.product_id AS product_id,
-            pc.competitor_id AS competitor_id,
-            pc.integration_id AS integration_id,
-            pc.old_price AS old_price,
-            pc.new_price AS new_price,
-            pc.price_change_percentage AS price_change_percentage,
-            pc.currency_code AS currency_code,
-            pc.changed_at AS changed_at,
-            'integration'::TEXT AS source_type,
-            i.name AS source_name,
-            NULL::TEXT AS source_website,
-            i.platform AS source_platform,
-            pc.integration_id AS source_id,
-            COALESCE(pc.url, p.url) AS url,
-            ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
-        FROM price_changes pc
-        JOIN integrations i ON pc.integration_id = i.id
-        JOIN products p ON pc.product_id = p.id
-        WHERE pc.user_id = p_user_id
-        AND pc.product_id = ANY(p_product_ids)
-        AND pc.integration_id IS NOT NULL
-    )
-    (
-        SELECT
-            lcp.id AS id,
-            lcp.product_id AS product_id,
-            lcp.competitor_id AS competitor_id,
-            lcp.integration_id AS integration_id,
-            lcp.old_price AS old_price,
-            lcp.new_price AS new_price,
-            lcp.price_change_percentage AS price_change_percentage,
-            lcp.currency_code AS currency_code,
-            lcp.changed_at AS changed_at,
-            lcp.source_type AS source_type,
-            lcp.source_name AS source_name,
-            lcp.source_website AS source_website,
-            lcp.source_platform AS source_platform,
-            lcp.source_id AS source_id,
-            lcp.url AS url
-        FROM LatestCompetitorPrices lcp
-        WHERE lcp.rn = 1
-    )
-    UNION ALL
-    (
-        SELECT
-            lip.id AS id,
-            lip.product_id AS product_id,
-            lip.competitor_id AS competitor_id,
-            lip.integration_id AS integration_id,
-            lip.old_price AS old_price,
-            lip.new_price AS new_price,
-            lip.price_change_percentage AS price_change_percentage,
-            lip.currency_code AS currency_code,
-            lip.changed_at AS changed_at,
-            lip.source_type AS source_type,
-            lip.source_name AS source_name,
-            lip.source_website AS source_website,
-            lip.source_platform AS source_platform,
-            lip.source_id AS source_id,
-            lip.url AS url
-        FROM LatestIntegrationPrices lip
-        WHERE lip.rn = 1
-    )
-    ORDER BY product_id, new_price ASC;
-END;
-$$;
+    AS $$ BEGIN RETURN QUERY WITH AllPrices AS ( SELECT pc.id, pc.product_id, pc.competitor_id, pc.integration_id, pc.old_competitor_price, pc.new_competitor_price, pc.old_our_retail_price, pc.new_our_retail_price, pc.price_change_percentage, pc.currency_code, pc.changed_at, CASE WHEN pc.competitor_id IS NOT NULL THEN 'competitor'::TEXT ELSE 'integration'::TEXT END AS source_type, CASE WHEN pc.competitor_id IS NOT NULL THEN c.name ELSE i.name END AS source_name, CASE WHEN pc.competitor_id IS NOT NULL THEN c.website ELSE NULL::TEXT END AS source_website, CASE WHEN pc.competitor_id IS NOT NULL THEN NULL::TEXT ELSE i.platform END AS source_platform, CASE WHEN pc.competitor_id IS NOT NULL THEN pc.competitor_id ELSE pc.integration_id END AS source_id, COALESCE(pc.url, p.url) AS url, ROW_NUMBER() OVER( PARTITION BY pc.product_id, COALESCE(pc.competitor_id, pc.integration_id), CASE WHEN pc.competitor_id IS NOT NULL THEN 'competitor' ELSE 'integration' END ORDER BY pc.changed_at DESC ) as rn FROM price_changes_competitors pc LEFT JOIN competitors c ON pc.competitor_id = c.id LEFT JOIN integrations i ON pc.integration_id = i.id LEFT JOIN products p ON pc.product_id = p.id WHERE pc.user_id = p_user_id AND pc.product_id = ANY(p_product_ids) ) SELECT ap.id, ap.product_id, ap.competitor_id, ap.integration_id, ap.old_competitor_price, ap.new_competitor_price, ap.old_our_retail_price, ap.new_our_retail_price, ap.price_change_percentage, ap.currency_code, ap.changed_at, ap.source_type, ap.source_name, ap.source_website, ap.source_platform, ap.source_id, ap.url FROM AllPrices ap WHERE ap.rn = 1 ORDER BY COALESCE(ap.new_competitor_price, ap.new_our_retail_price) ASC; END; $$;
 
 
 --
@@ -2712,104 +2605,9 @@ $$;
 -- Name: get_product_price_history(uuid, uuid, uuid, integer); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.get_product_price_history(p_user_id uuid, p_product_id uuid, p_source_id uuid, p_limit integer) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_price numeric, new_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
+CREATE FUNCTION public.get_product_price_history(p_user_id uuid, p_product_id uuid, p_source_id uuid DEFAULT NULL::uuid, p_limit integer DEFAULT 50) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_competitor_price numeric, new_competitor_price numeric, old_our_retail_price numeric, new_our_retail_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
     LANGUAGE plpgsql
-    AS $$
-BEGIN
-    -- First get competitor prices
-    RETURN QUERY
-    WITH CompetitorPrices AS (
-        SELECT
-            pc.id AS id,
-            pc.product_id AS product_id,
-            pc.competitor_id AS competitor_id,
-            pc.integration_id AS integration_id,
-            pc.old_price AS old_price,
-            pc.new_price AS new_price,
-            pc.price_change_percentage AS price_change_percentage,
-            pc.currency_code AS currency_code,
-            pc.changed_at AS changed_at,
-            'competitor'::TEXT AS source_type,
-            c.name AS source_name,
-            c.website AS source_website,
-            NULL::TEXT AS source_platform,
-            pc.competitor_id AS source_id,
-            pc.url AS url -- Use URL from price_changes table
-        FROM price_changes pc
-        JOIN competitors c ON pc.competitor_id = c.id
-        WHERE pc.user_id = p_user_id
-        AND pc.product_id = p_product_id
-        AND pc.competitor_id IS NOT NULL
-        AND (p_source_id IS NULL OR pc.competitor_id = p_source_id)
-    ),
-    IntegrationPrices AS (
-        SELECT
-            pc.id AS id,
-            pc.product_id AS product_id,
-            pc.competitor_id AS competitor_id,
-            pc.integration_id AS integration_id,
-            pc.old_price AS old_price,
-            pc.new_price AS new_price,
-            pc.price_change_percentage AS price_change_percentage,
-            pc.currency_code AS currency_code,
-            pc.changed_at AS changed_at,
-            'integration'::TEXT AS source_type,
-            i.name AS source_name,
-            NULL::TEXT AS source_website,
-            i.platform AS source_platform,
-            pc.integration_id AS source_id,
-            COALESCE(pc.url, p.url) AS url -- Try price_changes URL first, then products URL
-        FROM price_changes pc
-        JOIN integrations i ON pc.integration_id = i.id
-        JOIN products p ON pc.product_id = p.id -- Join with products to get url
-        WHERE pc.user_id = p_user_id
-        AND pc.product_id = p_product_id
-        AND pc.integration_id IS NOT NULL
-        AND (p_source_id IS NULL OR pc.integration_id = p_source_id)
-    )
-    (
-        SELECT
-            cp.id AS id,
-            cp.product_id AS product_id,
-            cp.competitor_id AS competitor_id,
-            cp.integration_id AS integration_id,
-            cp.old_price AS old_price,
-            cp.new_price AS new_price,
-            cp.price_change_percentage AS price_change_percentage,
-            cp.currency_code AS currency_code,
-            cp.changed_at AS changed_at,
-            cp.source_type AS source_type,
-            cp.source_name AS source_name,
-            cp.source_website AS source_website,
-            cp.source_platform AS source_platform,
-            cp.source_id AS source_id,
-            cp.url AS url
-        FROM CompetitorPrices cp
-    )
-    UNION ALL
-    (
-        SELECT
-            ip.id AS id,
-            ip.product_id AS product_id,
-            ip.competitor_id AS competitor_id,
-            ip.integration_id AS integration_id,
-            ip.old_price AS old_price,
-            ip.new_price AS new_price,
-            ip.price_change_percentage AS price_change_percentage,
-            ip.currency_code AS currency_code,
-            ip.changed_at AS changed_at,
-            ip.source_type AS source_type,
-            ip.source_name AS source_name,
-            ip.source_website AS source_website,
-            ip.source_platform AS source_platform,
-            ip.source_id AS source_id,
-            ip.url AS url
-        FROM IntegrationPrices ip
-    )
-    ORDER BY changed_at DESC
-    LIMIT p_limit;
-END;
-$$;
+    AS $$ BEGIN RETURN QUERY SELECT pc.id, pc.product_id, pc.competitor_id, pc.integration_id, pc.old_competitor_price, pc.new_competitor_price, pc.old_our_retail_price, pc.new_our_retail_price, pc.price_change_percentage, pc.currency_code, pc.changed_at, CASE WHEN pc.competitor_id IS NOT NULL THEN 'competitor'::TEXT ELSE 'integration'::TEXT END AS source_type, CASE WHEN pc.competitor_id IS NOT NULL THEN c.name ELSE i.name END AS source_name, CASE WHEN pc.competitor_id IS NOT NULL THEN c.website ELSE NULL::TEXT END AS source_website, CASE WHEN pc.competitor_id IS NOT NULL THEN NULL::TEXT ELSE i.platform END AS source_platform, CASE WHEN pc.competitor_id IS NOT NULL THEN pc.competitor_id ELSE pc.integration_id END AS source_id, COALESCE(pc.url, p.url) AS url FROM price_changes_competitors pc LEFT JOIN competitors c ON pc.competitor_id = c.id LEFT JOIN integrations i ON pc.integration_id = i.id LEFT JOIN products p ON pc.product_id = p.id WHERE pc.user_id = p_user_id AND pc.product_id = p_product_id AND (p_source_id IS NULL OR pc.competitor_id = p_source_id OR pc.integration_id = p_source_id) ORDER BY pc.changed_at DESC LIMIT p_limit; END; $$;
 
 
 --
@@ -2817,529 +2615,199 @@ $$;
 --
 
 CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean) RETURNS json
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-    _query text;
-    _count_query text;
-    _offset integer;
-    _limit integer;
-    _sort_direction text;
-    _allowed_sort_columns text[] := ARRAY['name', 'sku', 'ean', 'brand', 'category', 'our_price', 'cost_price', 'created_at', 'updated_at'];
-    _safe_sort_by text;
-    _result json;
-    _total_count bigint;
-BEGIN
-    -- Calculate offset and limit
-    _offset := (p_page - 1) * p_page_size;
-    _limit := p_page_size;
-
-    -- Validate sort_by parameter to prevent null field name error
-    IF p_sort_by IS NULL OR p_sort_by = '' THEN
-        _safe_sort_by := 'created_at';
-    ELSIF p_sort_by = ANY(_allowed_sort_columns) THEN
-        _safe_sort_by := p_sort_by;
-    ELSE
-        _safe_sort_by := 'created_at'; -- Default sort column
-    END IF;
-
-    -- Validate and sanitize sort direction
-    IF p_sort_order IS NULL OR p_sort_order = '' THEN
-        _sort_direction := 'DESC';
-    ELSIF lower(p_sort_order) = 'asc' THEN
-        _sort_direction := 'ASC';
-    ELSE
-        _sort_direction := 'DESC';
-    END IF;
-
-    -- Base query construction for counting
-    _count_query := format('
-        WITH CompetitorPricesForFilter AS (
-            SELECT
-                pc.product_id,
-                MIN(pc.new_price) as min_competitor_price
-            FROM price_changes pc
-            WHERE pc.user_id = %L 
-            AND pc.competitor_id IS NOT NULL
-            GROUP BY pc.product_id
-        )
-        SELECT count(DISTINCT p.id)
-        FROM products p
-        LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-        LEFT JOIN CompetitorPricesForFilter cpf ON p.id = cpf.product_id
-        WHERE p.user_id = %L', p_user_id, p_user_id);
-
-    -- Apply filters dynamically to count query
-    IF p_brand IS NOT NULL AND p_brand <> '' THEN
-        _count_query := _count_query || format(' AND p.brand_id = %L', p_brand);
-    END IF;
-    IF p_category IS NOT NULL AND p_category <> '' THEN
-        _count_query := _count_query || format(' AND p.category = %L', p_category);
-    END IF;
-    IF p_search IS NOT NULL AND p_search <> '' THEN
-        _count_query := _count_query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
-    END IF;
-    IF p_is_active IS NOT NULL THEN
-        _count_query := _count_query || format(' AND p.is_active = %L', p_is_active);
-    END IF;
-    IF p_has_price = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL';
-    END IF;
-
-    -- Add price comparison filters to count query
-    IF p_price_lower_than_competitors = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price < cpf.min_competitor_price';
-    END IF;
-    IF p_price_higher_than_competitors = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price > cpf.min_competitor_price';
-    END IF;
-
-    -- Add competitor filter to count query (modified for array)
-    IF p_competitor_ids IS NOT NULL AND array_length(p_competitor_ids, 1) > 0 THEN
-        _count_query := _count_query || format('
-            AND p.id IN (
-                SELECT DISTINCT pc.product_id
-                FROM price_changes pc
-                WHERE pc.user_id = %L
-                AND pc.competitor_id = ANY(%L)
-            )', p_user_id, p_competitor_ids);
-    END IF;
-
-    -- Execute count query first
-    EXECUTE _count_query INTO _total_count;
-
-    -- Base query construction for data fetching
-    _query := format('
-        WITH CompetitorPricesForFilter AS (
-            SELECT
-                pc.product_id,
-                MIN(pc.new_price) as min_competitor_price
-            FROM price_changes pc
-            WHERE pc.user_id = %L 
-            AND pc.competitor_id IS NOT NULL
-            GROUP BY pc.product_id
-        ),
-        FilteredProductsBase AS ( -- Renamed to avoid conflict later
-            SELECT p.id
-            FROM products p
-            LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-            LEFT JOIN CompetitorPricesForFilter cpf ON p.id = cpf.product_id
-            WHERE p.user_id = %L', p_user_id, p_user_id);
-
-    -- Apply filters dynamically to data query (similar to count query)
-    IF p_brand IS NOT NULL AND p_brand <> '' THEN
-        _query := _query || format(' AND p.brand_id = %L', p_brand);
-    END IF;
-    IF p_category IS NOT NULL AND p_category <> '' THEN
-        _query := _query || format(' AND p.category = %L', p_category);
-    END IF;
-    IF p_search IS NOT NULL AND p_search <> '' THEN
-        _query := _query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
-    END IF;
-    IF p_is_active IS NOT NULL THEN
-        _query := _query || format(' AND p.is_active = %L', p_is_active);
-    END IF;
-    IF p_has_price = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL';
-    END IF;
-
-    -- Add price comparison filters to data query
-    IF p_price_lower_than_competitors = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price < cpf.min_competitor_price';
-    END IF;
-    IF p_price_higher_than_competitors = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price > cpf.min_competitor_price';
-    END IF;
-
-    -- Add competitor filter to data query (modified for array)
-    IF p_competitor_ids IS NOT NULL AND array_length(p_competitor_ids, 1) > 0 THEN
-        _query := _query || format('
-            AND p.id IN (
-                SELECT DISTINCT pc.product_id
-                FROM price_changes pc
-                WHERE pc.user_id = %L
-                AND pc.competitor_id = ANY(%L)
-            )', p_user_id, p_competitor_ids);
-    END IF;
-
-    -- Add grouping, sorting and pagination to the subquery selecting product IDs
-    -- Add id as a secondary sort to ensure consistent ordering
-    _query := _query || format('
-            GROUP BY p.id -- Ensure unique product IDs before sorting/limiting
-            ORDER BY p.%I %s, p.id ASC
-            LIMIT %L OFFSET %L
-        ),
-        LatestCompetitorPrices AS (
-            SELECT
-                pc.product_id,
-                pc.competitor_id as source_id,
-                pc.new_price,
-                ''competitor'' as source_type,
-                c.name as source_name,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            JOIN competitors c ON pc.competitor_id = c.id
-            WHERE pc.user_id = %L AND pc.competitor_id IS NOT NULL
-        ),
-        LatestIntegrationPrices AS (
-            SELECT
-                pc.product_id,
-                pc.integration_id as source_id,
-                pc.new_price,
-                ''integration'' as source_type,
-                i.name as source_name,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            JOIN integrations i ON pc.integration_id = i.id
-            WHERE pc.user_id = %L AND pc.integration_id IS NOT NULL
-        ),
-        AllLatestPrices AS (
-            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestCompetitorPrices WHERE rn = 1
-            UNION ALL
-            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestIntegrationPrices WHERE rn = 1
-        ),
-        AggregatedSourcePrices AS (
-            SELECT
-                product_id,
-                jsonb_object_agg(
-                    source_id::text,
-                    jsonb_build_object(''price'', new_price, ''source_type'', source_type, ''source_name'', COALESCE(source_name, ''Unknown''))
-                ) as source_prices
-            FROM AllLatestPrices
-            GROUP BY product_id
-        ),
-        AggregatedCompetitorPrices AS (
-             SELECT
-                product_id,
-                jsonb_object_agg(source_id::text, new_price) as competitor_prices
-            FROM AllLatestPrices
-            GROUP BY product_id
-        )
-        -- Final SELECT joining products with aggregated prices
-        SELECT
-            p.*,
-            COALESCE(asp.source_prices, ''{}''::jsonb) as source_prices,
-            COALESCE(acp.competitor_prices, ''{}''::jsonb) as competitor_prices
-        FROM products p
-        JOIN FilteredProductsBase fp ON p.id = fp.id -- Join with the filtered product IDs
-        LEFT JOIN AggregatedSourcePrices asp ON p.id = asp.product_id
-        LEFT JOIN AggregatedCompetitorPrices acp ON p.id = acp.product_id
-        ORDER BY p.%I %s, p.id ASC', -- Apply final sorting based on the main product table fields with id as secondary sort
-        _safe_sort_by, _sort_direction, _limit, _offset, -- Parameters for LIMIT/OFFSET
-        p_user_id, -- For LatestCompetitorPrices CTE
-        p_user_id, -- For LatestIntegrationPrices CTE
-        _safe_sort_by, _sort_direction -- Parameters for final ORDER BY
-    );
-
-    -- Execute the main query and construct the JSON result
-    EXECUTE format('SELECT json_build_object(%L, COALESCE(json_agg(q), %L::json), %L, %L) FROM (%s) q',
-                   'data', '[]', 'totalCount', _total_count, _query)
-    INTO _result;
-
-    RETURN _result;
-END;
-$$;
-
-
---
--- Name: get_products_filtered(uuid, integer, integer, text, text, text, text, text, boolean, uuid, boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_id uuid DEFAULT NULL::uuid, p_has_price boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean) RETURNS json
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-    _query text;
-    _count_query text;
-    _offset integer;
-    _limit integer;
-    _sort_direction text;
-    _allowed_sort_columns text[] := ARRAY['name', 'sku', 'ean', 'brand', 'category', 'our_price', 'cost_price', 'created_at', 'updated_at'];
-    _safe_sort_by text;
-    _result json;
-    _total_count bigint;
-BEGIN
-    -- Calculate offset and limit
-    _offset := (p_page - 1) * p_page_size;
-    _limit := p_page_size;
-
-    -- Validate sort_by parameter to prevent null field name error
-    IF p_sort_by IS NULL OR p_sort_by = '' THEN
-        _safe_sort_by := 'created_at';
-    ELSIF p_sort_by = ANY(_allowed_sort_columns) THEN
-        _safe_sort_by := p_sort_by;
-    ELSE
-        _safe_sort_by := 'created_at'; -- Default sort column
-    END IF;
-
-    -- Validate and sanitize sort direction
-    IF p_sort_order IS NULL OR p_sort_order = '' THEN
-        _sort_direction := 'DESC';
-    ELSIF lower(p_sort_order) = 'asc' THEN
-        _sort_direction := 'ASC';
-    ELSE
-        _sort_direction := 'DESC';
-    END IF;
-
-    -- Base query construction for counting
-    _count_query := format('
-        WITH CompetitorPricesForFilter AS (
-            SELECT
-                pc.product_id,
-                MIN(pc.new_price) as min_competitor_price
-            FROM price_changes pc
-            WHERE pc.user_id = %L 
-            AND pc.competitor_id IS NOT NULL
-            GROUP BY pc.product_id
-        )
-        SELECT count(DISTINCT p.id)
-        FROM products p
-        LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-        LEFT JOIN CompetitorPricesForFilter cpf ON p.id = cpf.product_id
-        WHERE p.user_id = %L', p_user_id, p_user_id);
-
-    -- Apply filters dynamically to count query
-    IF p_brand IS NOT NULL AND p_brand <> '' THEN
-        _count_query := _count_query || format(' AND p.brand_id = %L', p_brand);
-    END IF;
-    IF p_category IS NOT NULL AND p_category <> '' THEN
-        _count_query := _count_query || format(' AND p.category = %L', p_category);
-    END IF;
-    IF p_search IS NOT NULL AND p_search <> '' THEN
-        _count_query := _count_query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
-    END IF;
-    IF p_is_active IS NOT NULL THEN
-        _count_query := _count_query || format(' AND p.is_active = %L', p_is_active);
-    END IF;
-    IF p_has_price = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL';
-    END IF;
-
-    -- Add price comparison filters to count query
-    IF p_price_lower_than_competitors = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price < cpf.min_competitor_price';
-    END IF;
-    IF p_price_higher_than_competitors = TRUE THEN
-        _count_query := _count_query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price > cpf.min_competitor_price';
-    END IF;
-
-    -- Add competitor filter to count query
-    IF p_competitor_id IS NOT NULL THEN
-        _count_query := _count_query || format('
-            AND p.id IN (
-                SELECT DISTINCT pc.product_id
-                FROM price_changes pc
-                WHERE pc.user_id = %L
-                AND pc.competitor_id = %L
-            )', p_user_id, p_competitor_id);
-    END IF;
-
-    -- Execute count query first
-    EXECUTE _count_query INTO _total_count;
-
-    -- Base query construction for data fetching
-    _query := format('
-        WITH CompetitorPricesForFilter AS (
-            SELECT
-                pc.product_id,
-                MIN(pc.new_price) as min_competitor_price
-            FROM price_changes pc
-            WHERE pc.user_id = %L 
-            AND pc.competitor_id IS NOT NULL
-            GROUP BY pc.product_id
-        ),
-        FilteredProductsBase AS ( -- Renamed to avoid conflict later
-            SELECT p.id
-            FROM products p
-            LEFT JOIN price_changes pc_filter ON pc_filter.product_id = p.id AND pc_filter.user_id = p.user_id
-            LEFT JOIN CompetitorPricesForFilter cpf ON p.id = cpf.product_id
-            WHERE p.user_id = %L', p_user_id, p_user_id);
-
-    -- Apply filters dynamically to data query (similar to count query)
-    IF p_brand IS NOT NULL AND p_brand <> '' THEN
-        _query := _query || format(' AND p.brand_id = %L', p_brand);
-    END IF;
-    IF p_category IS NOT NULL AND p_category <> '' THEN
-        _query := _query || format(' AND p.category = %L', p_category);
-    END IF;
-    IF p_search IS NOT NULL AND p_search <> '' THEN
-        _query := _query || format(' AND (p.name ILIKE %L OR p.sku ILIKE %L OR p.ean ILIKE %L OR p.brand ILIKE %L OR p.category ILIKE %L)',
-                               '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%', '%' || p_search || '%');
-    END IF;
-    IF p_is_active IS NOT NULL THEN
-        _query := _query || format(' AND p.is_active = %L', p_is_active);
-    END IF;
-    IF p_has_price = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL';
-    END IF;
-
-    -- Add price comparison filters to data query
-    IF p_price_lower_than_competitors = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price < cpf.min_competitor_price';
-    END IF;
-    IF p_price_higher_than_competitors = TRUE THEN
-        _query := _query || ' AND p.our_price IS NOT NULL AND cpf.min_competitor_price IS NOT NULL AND p.our_price > cpf.min_competitor_price';
-    END IF;
-
-    -- Add competitor filter to data query
-    IF p_competitor_id IS NOT NULL THEN
-        _query := _query || format('
-            AND p.id IN (
-                SELECT DISTINCT pc.product_id
-                FROM price_changes pc
-                WHERE pc.user_id = %L
-                AND pc.competitor_id = %L
-            )', p_user_id, p_competitor_id);
-    END IF;
-
-    -- Add grouping, sorting and pagination to the subquery selecting product IDs
-    -- Add id as a secondary sort to ensure consistent ordering
-    _query := _query || format('
-            GROUP BY p.id -- Ensure unique product IDs before sorting/limiting
-            ORDER BY p.%I %s, p.id ASC
-            LIMIT %L OFFSET %L
-        ),
-        LatestCompetitorPrices AS (
-            SELECT
-                pc.product_id,
-                pc.competitor_id as source_id,
-                pc.new_price,
-                ''competitor'' as source_type,
-                c.name as source_name,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.competitor_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            JOIN competitors c ON pc.competitor_id = c.id
-            WHERE pc.user_id = %L AND pc.competitor_id IS NOT NULL
-        ),
-        LatestIntegrationPrices AS (
-            SELECT
-                pc.product_id,
-                pc.integration_id as source_id,
-                pc.new_price,
-                ''integration'' as source_type,
-                i.name as source_name,
-                ROW_NUMBER() OVER(PARTITION BY pc.product_id, pc.integration_id ORDER BY pc.changed_at DESC) as rn
-            FROM price_changes pc
-            JOIN integrations i ON pc.integration_id = i.id
-            WHERE pc.user_id = %L AND pc.integration_id IS NOT NULL
-        ),
-        AllLatestPrices AS (
-            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestCompetitorPrices WHERE rn = 1
-            UNION ALL
-            SELECT product_id, source_id, new_price, source_type, source_name FROM LatestIntegrationPrices WHERE rn = 1
-        ),
-        AggregatedSourcePrices AS (
-            SELECT
-                product_id,
-                jsonb_object_agg(
-                    source_id::text,
-                    jsonb_build_object(''price'', new_price, ''source_type'', source_type, ''source_name'', COALESCE(source_name, ''Unknown''))
-                ) as source_prices
-            FROM AllLatestPrices
-            GROUP BY product_id
-        ),
-        AggregatedCompetitorPrices AS (
-             SELECT
-                product_id,
-                jsonb_object_agg(source_id::text, new_price) as competitor_prices
-            FROM AllLatestPrices
-            GROUP BY product_id
-        )
-        -- Final SELECT joining products with aggregated prices
-        SELECT
-            p.*,
-            COALESCE(asp.source_prices, ''{}''::jsonb) as source_prices,
-            COALESCE(acp.competitor_prices, ''{}''::jsonb) as competitor_prices
-        FROM products p
-        JOIN FilteredProductsBase fp ON p.id = fp.id -- Join with the filtered product IDs
-        LEFT JOIN AggregatedSourcePrices asp ON p.id = asp.product_id
-        LEFT JOIN AggregatedCompetitorPrices acp ON p.id = acp.product_id
-        ORDER BY p.%I %s, p.id ASC', -- Apply final sorting based on the main product table fields with id as secondary sort
-        _safe_sort_by, _sort_direction, _limit, _offset, -- Parameters for LIMIT/OFFSET
-        p_user_id, -- For LatestCompetitorPrices CTE
-        p_user_id, -- For LatestIntegrationPrices CTE
-        _safe_sort_by, _sort_direction -- Parameters for final ORDER BY
-    );
-
-    -- Execute the main query and construct the JSON result
-    EXECUTE format('SELECT json_build_object(%L, COALESCE(json_agg(q), %L::json), %L, %L) FROM (%s) q',
-                   'data', '[]', 'totalCount', _total_count, _query)
-    INTO _result;
-
-    RETURN _result;
-END;
-$$;
-
-
---
--- Name: get_products_filtered_with_user_check(uuid, integer, integer, text, text, text, text, text, boolean, uuid[], boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.get_products_filtered_with_user_check(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean) RETURNS json
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
 DECLARE
-  v_result json;
+    _offset integer;
+    _limit integer;
+    _sort_direction text;
+    _total_count integer;
+    _result json;
+    _safe_sort_by text;
+    _products_data json;
 BEGIN
-  -- First ensure the user exists
-  PERFORM ensure_user_exists_simple(p_user_id);
-
-  -- Then call the original function with all parameters
-  SELECT get_products_filtered(
-    p_user_id,
-    p_page,
-    p_page_size,
-    p_sort_by,
-    p_sort_order,
-    p_brand,
-    p_category,
-    p_search,
-    p_is_active,
-    p_competitor_ids,
-    p_has_price,
-    p_price_lower_than_competitors,
-    p_price_higher_than_competitors
-  ) INTO v_result;
-
-  RETURN v_result;
-END;
-$$;
-
-
---
--- Name: get_products_filtered_with_user_check(uuid, integer, integer, text, text, text, text, text, boolean, uuid, boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.get_products_filtered_with_user_check(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_id uuid DEFAULT NULL::uuid, p_has_price boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean) RETURNS json
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-  v_result json;
-BEGIN
-  -- First ensure the user exists
-  PERFORM ensure_user_exists_simple(p_user_id);
-  
-  -- Then call the original function with all parameters
-  SELECT get_products_filtered(
-    p_user_id,
-    p_page,
-    p_page_size,
-    p_sort_by,
-    p_sort_order,
-    p_brand,
-    p_category,
-    p_search,
-    p_is_active,
-    p_competitor_id,
-    p_has_price,
-    p_price_lower_than_competitors,
-    p_price_higher_than_competitors
-  ) INTO v_result;
-  
-  RETURN v_result;
+    -- First ensure the user exists
+    PERFORM ensure_user_exists_simple(p_user_id);
+    
+    -- Calculate offset and limit
+    _offset := (p_page - 1) * p_page_size;
+    _limit := p_page_size;
+    
+    -- Validate and sanitize sort direction
+    _sort_direction := CASE WHEN UPPER(p_sort_order) = 'ASC' THEN 'ASC' ELSE 'DESC' END;
+    
+    -- Validate and sanitize sort column
+    _safe_sort_by := CASE 
+        WHEN p_sort_by IN ('name', 'created_at', 'updated_at', 'our_retail_price', 'our_wholesale_price', 'sku', 'ean') THEN p_sort_by
+        ELSE 'created_at'
+    END;
+    
+    -- Get total count using a CTE approach
+    WITH filtered_products AS (
+        SELECT p.id
+        FROM products p 
+        LEFT JOIN brands b ON p.brand_id = b.id
+        WHERE p.user_id = p_user_id
+        AND (p_brand IS NULL OR p_brand = '' OR p.brand_id = p_brand::uuid)
+        AND (p_category IS NULL OR p_category = '' OR p.category = p_category)
+        AND (p_search IS NULL OR p_search = '' OR (
+            p.name ILIKE '%' || p_search || '%' OR 
+            p.sku ILIKE '%' || p_search || '%' OR 
+            p.ean ILIKE '%' || p_search || '%'
+        ))
+        AND (p_is_active IS NULL OR p.is_active = p_is_active)
+        AND (p_has_price IS NULL OR p_has_price = false OR p.our_retail_price IS NOT NULL)
+        AND (p_competitor_ids IS NULL OR array_length(p_competitor_ids, 1) IS NULL OR p.id IN (
+            SELECT DISTINCT product_id 
+            FROM price_changes_competitors 
+            WHERE user_id = p_user_id 
+            AND competitor_id = ANY(p_competitor_ids)
+        ))
+    )
+    SELECT COUNT(*) INTO _total_count FROM filtered_products;
+    
+    -- Get the actual data with competitor prices
+    WITH filtered_products AS (
+        SELECT p.*, b.name as brand_name
+        FROM products p 
+        LEFT JOIN brands b ON p.brand_id = b.id
+        WHERE p.user_id = p_user_id
+        AND (p_brand IS NULL OR p_brand = '' OR p.brand_id = p_brand::uuid)
+        AND (p_category IS NULL OR p_category = '' OR p.category = p_category)
+        AND (p_search IS NULL OR p_search = '' OR (
+            p.name ILIKE '%' || p_search || '%' OR 
+            p.sku ILIKE '%' || p_search || '%' OR 
+            p.ean ILIKE '%' || p_search || '%'
+        ))
+        AND (p_is_active IS NULL OR p.is_active = p_is_active)
+        AND (p_has_price IS NULL OR p_has_price = false OR p.our_retail_price IS NOT NULL)
+        AND (p_competitor_ids IS NULL OR array_length(p_competitor_ids, 1) IS NULL OR p.id IN (
+            SELECT DISTINCT product_id 
+            FROM price_changes_competitors 
+            WHERE user_id = p_user_id 
+            AND competitor_id = ANY(p_competitor_ids)
+        ))
+        ORDER BY 
+            CASE WHEN _safe_sort_by = 'name' AND _sort_direction = 'ASC' THEN p.name END ASC,
+            CASE WHEN _safe_sort_by = 'name' AND _sort_direction = 'DESC' THEN p.name END DESC,
+            CASE WHEN _safe_sort_by = 'created_at' AND _sort_direction = 'ASC' THEN p.created_at END ASC,
+            CASE WHEN _safe_sort_by = 'created_at' AND _sort_direction = 'DESC' THEN p.created_at END DESC,
+            CASE WHEN _safe_sort_by = 'updated_at' AND _sort_direction = 'ASC' THEN p.updated_at END ASC,
+            CASE WHEN _safe_sort_by = 'updated_at' AND _sort_direction = 'DESC' THEN p.updated_at END DESC,
+            CASE WHEN _safe_sort_by = 'our_retail_price' AND _sort_direction = 'ASC' THEN p.our_retail_price END ASC,
+            CASE WHEN _safe_sort_by = 'our_retail_price' AND _sort_direction = 'DESC' THEN p.our_retail_price END DESC,
+            CASE WHEN _safe_sort_by = 'our_wholesale_price' AND _sort_direction = 'ASC' THEN p.our_wholesale_price END ASC,
+            CASE WHEN _safe_sort_by = 'our_wholesale_price' AND _sort_direction = 'DESC' THEN p.our_wholesale_price END DESC,
+            CASE WHEN _safe_sort_by = 'sku' AND _sort_direction = 'ASC' THEN p.sku END ASC,
+            CASE WHEN _safe_sort_by = 'sku' AND _sort_direction = 'DESC' THEN p.sku END DESC,
+            CASE WHEN _safe_sort_by = 'ean' AND _sort_direction = 'ASC' THEN p.ean END ASC,
+            CASE WHEN _safe_sort_by = 'ean' AND _sort_direction = 'DESC' THEN p.ean END DESC,
+            p.id ASC
+        LIMIT _limit OFFSET _offset
+    ),
+    -- Get latest competitor prices
+    latest_competitor_prices AS (
+        SELECT DISTINCT ON (product_id, competitor_id)
+            product_id,
+            competitor_id,
+            new_competitor_price,
+            c.name as competitor_name
+        FROM price_changes_competitors pcc
+        JOIN competitors c ON pcc.competitor_id = c.id
+        WHERE pcc.user_id = p_user_id
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.product_id IN (SELECT id FROM filtered_products)
+        ORDER BY product_id, competitor_id, changed_at DESC
+    ),
+    -- Get latest integration prices
+    latest_integration_prices AS (
+        SELECT DISTINCT ON (product_id, integration_id)
+            product_id,
+            integration_id,
+            new_competitor_price,
+            i.name as integration_name
+        FROM price_changes_competitors pcc
+        JOIN integrations i ON pcc.integration_id = i.id
+        WHERE pcc.user_id = p_user_id
+        AND pcc.integration_id IS NOT NULL
+        AND pcc.product_id IN (SELECT id FROM filtered_products)
+        ORDER BY product_id, integration_id, changed_at DESC
+    )
+    SELECT COALESCE(
+        json_agg(
+            json_build_object(
+                'id', fp.id,
+                'user_id', fp.user_id,
+                'name', fp.name,
+                'sku', fp.sku,
+                'ean', fp.ean,
+                'brand', fp.brand,
+                'brand_id', fp.brand_id,
+                'brand_name', fp.brand_name,
+                'category', fp.category,
+                'description', fp.description,
+                'image_url', fp.image_url,
+                'our_retail_price', fp.our_retail_price,
+                'our_wholesale_price', fp.our_wholesale_price,
+                'is_active', fp.is_active,
+                'created_at', fp.created_at,
+                'updated_at', fp.updated_at,
+                'currency_code', fp.currency_code,
+                'url', fp.url,
+                'competitor_prices', COALESCE(
+                    (
+                        SELECT json_object_agg(lcp.competitor_id::text, lcp.new_competitor_price)
+                        FROM latest_competitor_prices lcp
+                        WHERE lcp.product_id = fp.id
+                    ),
+                    '{}'
+                ),
+                'source_prices', COALESCE(
+                    (
+                        WITH combined_sources AS (
+                            SELECT 
+                                lcp.competitor_id as source_id,
+                                lcp.new_competitor_price as price,
+                                'competitor' as source_type,
+                                lcp.competitor_name as source_name
+                            FROM latest_competitor_prices lcp
+                            WHERE lcp.product_id = fp.id
+                            
+                            UNION ALL
+                            
+                            SELECT 
+                                lip.integration_id as source_id,
+                                lip.new_competitor_price as price,
+                                'integration' as source_type,
+                                lip.integration_name as source_name
+                            FROM latest_integration_prices lip
+                            WHERE lip.product_id = fp.id
+                        )
+                        SELECT json_object_agg(
+                            source_id::text,
+                            json_build_object(
+                                'price', price,
+                                'source_type', source_type,
+                                'source_name', source_name
+                            )
+                        )
+                        FROM combined_sources
+                    ),
+                    '{}'
+                )
+            )
+        ), 
+        '[]'
+    ) INTO _products_data 
+    FROM filtered_products fp;
+    
+    -- Construct the final result
+    SELECT json_build_object(
+        'data', _products_data,
+        'totalCount', _total_count
+    ) INTO _result;
+    
+    RETURN _result;
 END;
 $$;
 
@@ -3430,12 +2898,12 @@ CREATE FUNCTION public.get_unique_competitor_products(p_user_id uuid, p_competit
     LANGUAGE sql
     AS $$
   SELECT COUNT(DISTINCT pc1.product_id)
-  FROM price_changes pc1
+  FROM price_changes_competitors pc1
   WHERE pc1.user_id = p_user_id
     AND pc1.competitor_id = p_competitor_id
     AND NOT EXISTS (
       SELECT 1
-      FROM price_changes pc2
+      FROM price_changes_competitors pc2
       WHERE pc2.user_id = p_user_id
         AND pc2.product_id = pc1.product_id
         AND (
@@ -3454,12 +2922,12 @@ CREATE FUNCTION public.get_unique_integration_products(p_user_id uuid, p_integra
     LANGUAGE sql
     AS $$
   SELECT COUNT(DISTINCT pc1.product_id)
-  FROM price_changes pc1
+  FROM price_changes_competitors pc1
   WHERE pc1.user_id = p_user_id
     AND pc1.integration_id = p_integration_id
     AND NOT EXISTS (
       SELECT 1
-      FROM price_changes pc2
+      FROM price_changes_competitors pc2
       WHERE pc2.user_id = p_user_id
         AND pc2.product_id = pc1.product_id
         AND (
@@ -3875,8 +3343,8 @@ BEGIN
             THEN duplicate_record.image_url 
             ELSE primary_record.image_url 
         END,
-        our_price = COALESCE(primary_record.our_price, duplicate_record.our_price),
-        wholesale_price = COALESCE(primary_record.wholesale_price, duplicate_record.wholesale_price),
+        our_retail_price = COALESCE(primary_record.our_retail_price, duplicate_record.our_retail_price),
+        our_wholesale_price = COALESCE(primary_record.our_wholesale_price, duplicate_record.our_wholesale_price),
         currency_code = COALESCE(primary_record.currency_code, duplicate_record.currency_code),
         url = CASE 
             WHEN duplicate_record.url IS NOT NULL AND LENGTH(TRIM(duplicate_record.url)) > 0 
@@ -3886,17 +3354,16 @@ BEGIN
         updated_at = NOW()
     WHERE id = primary_id;
     
-    -- Update references in price_changes table and count affected rows
-    UPDATE price_changes
+    -- Update references in price_changes_competitors table and count affected rows
+    UPDATE price_changes_competitors
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
     
     GET DIAGNOSTICS price_changes_count = ROW_COUNT;
     
     -- Check if there are any remaining references to the duplicate product
-    -- REMOVED: temp table checks (they are temporary and get deleted)
     SELECT EXISTS (
-        SELECT 1 FROM price_changes WHERE product_id = duplicate_id
+        SELECT 1 FROM price_changes_competitors WHERE product_id = duplicate_id
         LIMIT 1
     ) INTO remaining_refs;
     
@@ -3904,7 +3371,7 @@ BEGIN
         -- There are still references to the duplicate product
         RETURN jsonb_build_object(
             'success', false,
-            'message', 'Cannot delete product: still referenced in price_changes table',
+            'message', 'Cannot delete product: still referenced in price_changes_competitors table',
             'primary_id', primary_id,
             'duplicate_id', duplicate_id,
             'stats', jsonb_build_object(
@@ -4000,6 +3467,106 @@ CREATE FUNCTION public.optimize_scraper_schedules() RETURNS integer
 
 
 --
+-- Name: process_custom_fields_from_raw_data(uuid, uuid, jsonb); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_custom_fields_from_raw_data(p_user_id uuid, p_product_id uuid, p_raw_data jsonb) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $_$
+DECLARE
+    field_key TEXT;
+    field_value TEXT;
+    field_type TEXT;
+    custom_field_id UUID;
+    fields_processed INTEGER := 0;
+    fields_created INTEGER := 0;
+    standard_fields TEXT[] := ARRAY[
+        'id', 'user_id', 'name', 'sku', 'ean', 'brand', 'brand_id', 'category',
+        'description', 'image_url', 'url', 'price', 'our_retail_price', 'our_wholesale_price',
+        'currency_code', 'currency', 'is_active', 'created_at', 'updated_at',
+        'scraped_at', 'competitor_id', 'integration_id', 'scraper_id', 'status',
+        'error_message', 'processed_at', 'product_id', 'prestashop_product_id',
+        'raw_data', 'integration_run_id'
+    ];
+BEGIN
+    -- Return early if no raw_data
+    IF p_raw_data IS NULL THEN
+        RETURN jsonb_build_object('fields_processed', 0, 'fields_created', 0);
+    END IF;
+
+    -- Process each field in raw_data
+    FOR field_key, field_value IN SELECT * FROM jsonb_each_text(p_raw_data)
+    LOOP
+        -- Skip if field is a standard field or empty
+        IF field_key = ANY(standard_fields) OR field_value IS NULL OR field_value = '' THEN
+            CONTINUE;
+        END IF;
+
+        -- Validate field name format
+        IF NOT (field_key ~ '^[a-zA-Z][a-zA-Z0-9_]*$') THEN
+            CONTINUE;
+        END IF;
+
+        -- Detect field type
+        field_type := 'text'; -- Default
+        IF field_value ~ '^[0-9]+\.?[0-9]*$' THEN
+            field_type := 'number';
+        ELSIF field_value IN ('true', 'false') THEN
+            field_type := 'boolean';
+        ELSIF field_value ~ '^https?://' THEN
+            field_type := 'url';
+        ELSIF field_value ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN
+            field_type := 'date';
+        END IF;
+
+        -- Check if custom field already exists
+        SELECT id INTO custom_field_id
+        FROM user_custom_fields
+        WHERE user_id = p_user_id AND field_name = field_key;
+
+        -- Create custom field if it doesn't exist
+        IF custom_field_id IS NULL THEN
+            INSERT INTO user_custom_fields (
+                user_id, field_name, field_type, is_required, default_value, validation_rules
+            ) VALUES (
+                p_user_id, field_key, field_type, false, NULL, NULL
+            ) RETURNING id INTO custom_field_id;
+            
+            fields_created := fields_created + 1;
+        END IF;
+
+        -- Delete existing value for this field and product (to avoid duplicates)
+        DELETE FROM product_custom_field_values
+        WHERE product_id = p_product_id AND custom_field_id = custom_field_id;
+
+        -- Insert new custom field value
+        INSERT INTO product_custom_field_values (
+            product_id, custom_field_id, value
+        ) VALUES (
+            p_product_id, custom_field_id, field_value
+        );
+
+        fields_processed := fields_processed + 1;
+    END LOOP;
+
+    RETURN jsonb_build_object(
+        'fields_processed', fields_processed,
+        'fields_created', fields_created
+    );
+
+EXCEPTION WHEN OTHERS THEN
+    -- Log error but don't fail the main process
+    RAISE WARNING 'Error processing custom fields for product %: %', p_product_id, SQLERRM;
+    RETURN jsonb_build_object(
+        'fields_processed', 0,
+        'fields_created', 0,
+        'error', SQLERRM
+    );
+END;
+$_$;
+
+
+--
 -- Name: process_pending_integration_products(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -4008,11 +3575,48 @@ CREATE FUNCTION public.process_pending_integration_products(run_id uuid) RETURNS
     AS $$
 DECLARE
     stats JSONB;
+    batch_size INTEGER := 100;
+    processed_count INTEGER := 0;
+    total_pending INTEGER;
+    batch_ids UUID[];
 BEGIN
-    -- Force processing of any pending products by updating them in place
-    UPDATE temp_integrations_scraped_data
-    SET status = status  -- This is a no-op update that will trigger the BEFORE UPDATE trigger
+    -- Get total pending count
+    SELECT COUNT(*) INTO total_pending
+    FROM temp_integrations_scraped_data
     WHERE integration_run_id = run_id AND status = 'pending';
+    
+    -- Process in batches to avoid timeouts
+    WHILE total_pending > 0 LOOP
+        -- Get a batch of IDs to process
+        SELECT ARRAY(
+            SELECT id
+            FROM temp_integrations_scraped_data
+            WHERE integration_run_id = run_id AND status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT batch_size
+        ) INTO batch_ids;
+        
+        -- Exit if no more records to process
+        IF array_length(batch_ids, 1) IS NULL THEN
+            EXIT;
+        END IF;
+        
+        -- Process this batch by triggering the UPDATE trigger
+        UPDATE temp_integrations_scraped_data
+        SET status = status  -- This is a no-op update that will trigger the BEFORE UPDATE trigger
+        WHERE id = ANY(batch_ids);
+        
+        -- Update counters
+        processed_count := processed_count + array_length(batch_ids, 1);
+        
+        -- Check remaining count
+        SELECT COUNT(*) INTO total_pending
+        FROM temp_integrations_scraped_data
+        WHERE integration_run_id = run_id AND status = 'pending';
+        
+        -- Add a small delay to prevent overwhelming the database
+        PERFORM pg_sleep(0.1);
+    END LOOP;
 
     -- Get the statistics
     SELECT get_integration_run_stats(run_id) INTO stats;
@@ -4035,27 +3639,166 @@ CREATE FUNCTION public.process_scraper_timeouts() RETURNS integer
 
 
 --
--- Name: process_staged_integration_product(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: process_temp_competitors_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.process_staged_integration_product() RETURNS trigger
+CREATE FUNCTION public.process_temp_competitors_scraped_data() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+DECLARE
+    matched_product_id UUID;
+    current_competitor_price NUMERIC(10,2);
+    v_brand_id UUID;
+BEGIN
+    -- If product_id is already provided, use it
+    IF NEW.product_id IS NOT NULL THEN
+        matched_product_id := NEW.product_id;
+    ELSE
+        -- Try to find existing product by EAN first
+        IF NEW.ean IS NOT NULL AND NEW.ean != '' THEN
+            SELECT id INTO matched_product_id
+            FROM products
+            WHERE user_id = NEW.user_id
+              AND ean = NEW.ean
+            LIMIT 1;
+        END IF;
+
+        -- If no match by EAN, try by SKU and brand
+        IF matched_product_id IS NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+            SELECT id INTO matched_product_id
+            FROM products
+            WHERE user_id = NEW.user_id
+              AND sku = NEW.sku
+              AND brand = NEW.brand
+            LIMIT 1;
+        END IF;
+
+        -- If we found a match, update it with missing information only
+        IF matched_product_id IS NOT NULL THEN
+            -- Find or create brand if we have brand name
+            IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+                SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
+            END IF;
+
+            -- Update existing product ONLY with missing information (don't overwrite existing data)
+            -- For competitors: only fill in NULL or empty fields
+            UPDATE products SET
+                name = CASE WHEN (name IS NULL OR name = '') AND NEW.name IS NOT NULL AND NEW.name != '' THEN NEW.name ELSE name END,
+                sku = CASE WHEN (sku IS NULL OR sku = '') AND NEW.sku IS NOT NULL AND NEW.sku != '' THEN NEW.sku ELSE sku END,
+                ean = CASE WHEN (ean IS NULL OR ean = '') AND NEW.ean IS NOT NULL AND NEW.ean != '' THEN NEW.ean ELSE ean END,
+                brand = CASE WHEN (brand IS NULL OR brand = '') AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN NEW.brand ELSE brand END,
+                brand_id = CASE WHEN brand_id IS NULL AND v_brand_id IS NOT NULL THEN v_brand_id ELSE brand_id END,
+                image_url = CASE WHEN (image_url IS NULL OR image_url = '') AND NEW.image_url IS NOT NULL AND NEW.image_url != '' THEN NEW.image_url ELSE image_url END,
+                url = CASE WHEN (url IS NULL OR url = '') AND NEW.url IS NOT NULL AND NEW.url != '' THEN NEW.url ELSE url END,
+                currency_code = CASE WHEN (currency_code IS NULL OR currency_code = '') AND NEW.currency_code IS NOT NULL AND NEW.currency_code != '' THEN NEW.currency_code ELSE currency_code END,
+                updated_at = NOW()
+            WHERE id = matched_product_id;
+        ELSE
+            -- If still no match, create new product
+            -- Find or create brand if we have brand name
+            IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+                SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
+            END IF;
+
+            -- Create new product
+            INSERT INTO products (
+                user_id,
+                name,
+                sku,
+                ean,
+                brand,
+                brand_id,
+                image_url,
+                currency_code,
+                url
+            ) VALUES (
+                NEW.user_id,
+                NEW.name,
+                NEW.sku,
+                NEW.ean,
+                NEW.brand,
+                v_brand_id,
+                NEW.image_url,
+                NEW.currency_code,
+                NEW.url
+            ) RETURNING id INTO matched_product_id;
+        END IF;
+
+        -- Update the temp record with the matched/created product_id
+        UPDATE temp_competitors_scraped_data
+        SET product_id = matched_product_id
+        WHERE id = NEW.id;
+    END IF;
+
+    -- Get current competitor price for this product and competitor
+    SELECT new_competitor_price INTO current_competitor_price
+    FROM price_changes_competitors
+    WHERE product_id = matched_product_id
+      AND competitor_id = NEW.competitor_id
+      AND user_id = NEW.user_id
+    ORDER BY changed_at DESC
+    LIMIT 1;
+
+    -- Insert competitor price change record (ONLY competitor price fields)
+    INSERT INTO price_changes_competitors (
+        user_id,
+        product_id,
+        competitor_id,
+        old_competitor_price,
+        new_competitor_price,
+        price_change_percentage,
+        changed_at,
+        currency_code,
+        url
+    ) VALUES (
+        NEW.user_id,
+        matched_product_id,
+        NEW.competitor_id,
+        COALESCE(current_competitor_price, NEW.competitor_price), -- Use current price as old price, or new price if first time
+        NEW.competitor_price,
+        CASE 
+            WHEN current_competitor_price IS NULL OR current_competitor_price = 0 THEN 0
+            ELSE ROUND(((NEW.competitor_price - current_competitor_price) / current_competitor_price * 100)::numeric, 2)
+        END,
+        NOW(),
+        NEW.currency_code,
+        NEW.url
+    );
+
+    -- Delete the processed temp record
+    DELETE FROM temp_competitors_scraped_data WHERE id = NEW.id;
+
+    RETURN NULL; -- Don't insert into temp table since we're deleting it
+END;
+$$;
+
+
+--
+-- Name: process_temp_integrations_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_temp_integrations_scraped_data() RETURNS trigger
+    LANGUAGE plpgsql
     AS $$
 DECLARE
     existing_product_id UUID;
     v_brand_id UUID;
-    old_price DECIMAL(10, 2);
-    new_price DECIMAL(10, 2);
+    old_retail_price DECIMAL(10, 2);
+    old_wholesale_price DECIMAL(10, 2);
+    new_retail_price DECIMAL(10, 2);
+    new_wholesale_price DECIMAL(10, 2);
     merged_data JSONB;
     existing_product RECORD;
+    custom_fields_result JSONB;
 BEGIN
     -- Skip if already processed
     IF NEW.status = 'processed' THEN
         RETURN NEW;
     END IF;
 
-    -- Calculate new price (integration prices already include tax)
-    new_price := NEW.price;
+    -- Calculate new prices (integration prices already include tax) and round to remove decimals
+    new_retail_price := ROUND(NEW.our_retail_price);
+    new_wholesale_price := ROUND(NEW.our_wholesale_price);
 
     -- Find or create brand
     IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
@@ -4073,72 +3816,139 @@ BEGIN
     ) INTO existing_product_id;
 
     IF existing_product_id IS NOT NULL THEN
-        -- Product exists - UPDATE with intelligent data merging
-        SELECT our_price, name, sku, ean, brand, brand_id, image_url, url
-        INTO existing_product
-        FROM products
-        WHERE id = existing_product_id;
+        -- Get existing product data
+        SELECT * INTO existing_product FROM products WHERE id = existing_product_id;
         
-        old_price := existing_product.our_price;
-
-        -- Use intelligent data merging
-        SELECT merge_product_data(
-            existing_product.name, NEW.name,
-            existing_product.sku, NEW.sku,
-            existing_product.ean, NEW.ean,
-            existing_product.brand, NEW.brand,
-            existing_product.brand_id, v_brand_id,
-            existing_product.image_url, NEW.image_url,
-            existing_product.url, NEW.url
-        ) INTO merged_data;
-
-        -- Update product with merged data
-        UPDATE products
-        SET
-            name = merged_data->>'name',
-            sku = merged_data->>'sku',
-            ean = merged_data->>'ean',
-            brand = merged_data->>'brand',
-            brand_id = (merged_data->>'brand_id')::UUID,
-            our_price = new_price,
-            wholesale_price = COALESCE(NEW.wholesale_price, wholesale_price),
-            image_url = merged_data->>'image_url',
-            url = merged_data->>'url',
-            currency_code = COALESCE(NEW.currency_code, currency_code),
+        -- Store old prices
+        old_retail_price := existing_product.our_retail_price;
+        old_wholesale_price := existing_product.our_wholesale_price;
+        
+        -- Update existing product with new data
+        UPDATE products SET
+            name = COALESCE(NULLIF(NEW.name, ''), name),
+            sku = COALESCE(NULLIF(NEW.sku, ''), sku),
+            ean = COALESCE(NULLIF(NEW.ean, ''), ean),
+            brand = COALESCE(NULLIF(NEW.brand, ''), brand),
+            brand_id = COALESCE(v_brand_id, brand_id),
+            our_retail_price = new_retail_price,
+            our_wholesale_price = new_wholesale_price,
+            image_url = COALESCE(NULLIF(NEW.image_url, ''), image_url),
+            url = COALESCE(NULLIF(NEW.url, ''), url),
+            currency_code = COALESCE(NULLIF(NEW.currency_code, ''), currency_code),
             updated_at = NOW()
         WHERE id = existing_product_id;
-
-        NEW.product_id := existing_product_id;
     ELSE
-        -- Product doesn't exist - CREATE new product
-        INSERT INTO products (
-            user_id, name, sku, ean, brand, brand_id,
-            our_price, wholesale_price, image_url, url, currency_code,
-            is_active, created_at, updated_at
-        ) VALUES (
-            NEW.user_id, NEW.name, NEW.sku, NEW.ean, NEW.brand, v_brand_id,
-            new_price, NEW.wholesale_price, NEW.image_url, NEW.url, NEW.currency_code,
-            true, NOW(), NOW()
-        ) RETURNING id INTO existing_product_id;
+        -- Create new product if we have sufficient data
+        IF (NEW.ean IS NOT NULL AND NEW.ean != '') OR
+           (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL) THEN
 
-        NEW.product_id := existing_product_id;
+            INSERT INTO products (
+                user_id, name, sku, ean, brand, brand_id,
+                our_retail_price, our_wholesale_price, image_url, url, currency_code,
+                is_active, created_at, updated_at
+            ) VALUES (
+                NEW.user_id, NEW.name, NEW.sku, NEW.ean, NEW.brand, v_brand_id,
+                new_retail_price, new_wholesale_price, NEW.image_url, NEW.url, NEW.currency_code,
+                true, NOW(), NOW()
+            ) RETURNING id INTO existing_product_id;
+            
+            -- For new products, old_price should be NULL (no previous price)
+            old_retail_price := NULL;
+            old_wholesale_price := NULL;
+        END IF;
     END IF;
 
-    -- Record price change if we have a price
-    IF new_price IS NOT NULL THEN
-        INSERT INTO price_changes (
-            user_id, product_id, integration_id, old_price, new_price,
-            price_change_percentage, currency_code, changed_at, url
-        ) VALUES (
-            NEW.user_id, existing_product_id, NEW.integration_id,
-            old_price, new_price,
-            CASE
-                WHEN old_price IS NOT NULL AND old_price > 0 THEN
-                    ROUND(((new_price - old_price) / old_price * 100)::numeric, 2)
-                ELSE NULL
-            END,
-            NEW.currency_code, NOW(), NEW.url
-        );
+    -- Process custom fields from raw_data if we have a product
+    IF existing_product_id IS NOT NULL AND NEW.raw_data IS NOT NULL THEN
+        SELECT process_custom_fields_from_raw_data(
+            NEW.user_id,
+            existing_product_id,
+            NEW.raw_data
+        ) INTO custom_fields_result;
+    END IF;
+
+    -- Record retail price change if we have a price and a product
+    -- For integration data, we track our retail price changes in price_changes_competitors
+    IF new_retail_price IS NOT NULL AND existing_product_id IS NOT NULL THEN
+        -- Handle retail price change logic - ONLY use our retail price columns for integration data
+        IF old_retail_price IS NULL THEN
+            -- First time for the product, record initial price
+            INSERT INTO price_changes_competitors (
+                user_id, product_id, integration_id, 
+                old_competitor_price, new_competitor_price,  -- Set to NULL for integration data
+                old_our_retail_price, new_our_retail_price,
+                price_change_percentage, currency_code, changed_at, url
+            ) VALUES (
+                NEW.user_id, existing_product_id, NEW.integration_id,
+                NULL, NULL,  -- No competitor prices for integration data
+                new_retail_price, -- Use current price as old price the first time
+                new_retail_price,
+                0, -- 0% change the first time
+                NEW.currency_code, NOW(), NEW.url
+            );
+        ELSE
+            -- Check if retail price has changed
+            IF new_retail_price != old_retail_price THEN
+                INSERT INTO price_changes_competitors (
+                    user_id, product_id, integration_id,
+                    old_competitor_price, new_competitor_price,  -- Set to NULL for integration data
+                    old_our_retail_price, new_our_retail_price,
+                    price_change_percentage, currency_code, changed_at, url
+                ) VALUES (
+                    NEW.user_id, existing_product_id, NEW.integration_id,
+                    NULL, NULL,  -- No competitor prices for integration data
+                    old_retail_price, new_retail_price,
+                    CASE
+                        WHEN old_retail_price IS NOT NULL AND old_retail_price > 0 THEN
+                            ROUND(((new_retail_price - old_retail_price) / old_retail_price * 100)::numeric, 2)
+                        ELSE 0
+                    END,
+                    NEW.currency_code, NOW(), NEW.url
+                );
+            END IF;
+        END IF;
+    END IF;
+
+    -- Record wholesale price change if we have a wholesale price and a product
+    -- For integration data, we track our wholesale price changes in price_changes_suppliers
+    IF new_wholesale_price IS NOT NULL AND existing_product_id IS NOT NULL THEN
+        -- Handle wholesale price change logic in suppliers table
+        IF old_wholesale_price IS NULL THEN
+            -- First time for the product, record initial wholesale price
+            INSERT INTO price_changes_suppliers (
+                user_id, product_id, integration_id, 
+                old_our_wholesale_price, new_our_wholesale_price,
+                old_supplier_price, new_supplier_price,  -- Set to NULL for integration data
+                price_change_percentage, currency_code, changed_at, url, change_source
+            ) VALUES (
+                NEW.user_id, existing_product_id, NEW.integration_id,
+                new_wholesale_price, -- Use current price as old price the first time
+                new_wholesale_price,
+                NULL, NULL, -- No supplier price data from integration
+                0, -- 0% change the first time
+                NEW.currency_code, NOW(), NEW.url, 'integration'
+            );
+        ELSE
+            -- Check if wholesale price has changed
+            IF new_wholesale_price != old_wholesale_price THEN
+                INSERT INTO price_changes_suppliers (
+                    user_id, product_id, integration_id,
+                    old_our_wholesale_price, new_our_wholesale_price,
+                    old_supplier_price, new_supplier_price,  -- Set to NULL for integration data
+                    price_change_percentage, currency_code, changed_at, url, change_source
+                ) VALUES (
+                    NEW.user_id, existing_product_id, NEW.integration_id,
+                    old_wholesale_price, new_wholesale_price,
+                    NULL, NULL, -- No supplier price data from integration
+                    CASE
+                        WHEN old_wholesale_price IS NOT NULL AND old_wholesale_price > 0 THEN
+                            ROUND(((new_wholesale_price - old_wholesale_price) / old_wholesale_price * 100)::numeric, 2)
+                        ELSE 0
+                    END,
+                    NEW.currency_code, NOW(), NEW.url, 'integration'
+                );
+            END IF;
+        END IF;
     END IF;
 
     -- Mark as processed
@@ -4147,7 +3957,7 @@ BEGIN
 
     -- Delete from temp table (cleanup after processing)
     DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
-    
+
     -- Return NULL to prevent the UPDATE (since we deleted the record)
     RETURN NULL;
 
@@ -4162,166 +3972,199 @@ $$;
 
 
 --
--- Name: FUNCTION process_staged_integration_product(); Type: COMMENT; Schema: public; Owner: -
+-- Name: process_temp_suppliers_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.process_staged_integration_product() IS 'Enhanced integration processing with user settings support and intelligent data merging';
-
-
---
--- Name: record_price_change(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.record_price_change() RETURNS trigger
+CREATE FUNCTION public.process_temp_suppliers_scraped_data() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
 DECLARE
-    last_price DECIMAL(10, 2);
-    price_change_pct DECIMAL(10, 2);
     matched_product_id UUID;
     v_brand_id UUID;
-    debug_info TEXT;
+    last_supplier_price DECIMAL(10, 2);
+    last_our_wholesale_price DECIMAL(10, 2);
+    last_supplier_recommended_price DECIMAL(10, 2);
+    price_change_pct DECIMAL(10, 2);
+    existing_product RECORD;
 BEGIN
-    -- Match product if not already matched
-    IF NEW.product_id IS NULL THEN
-        -- Find or create brand if we have brand name
-        IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
-            SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
-        END IF;
-
-        -- Use enhanced fuzzy matching to find existing product
-        SELECT find_product_with_fuzzy_matching(
-            NEW.user_id,
-            NEW.ean,
-            NEW.brand,
-            NEW.sku,
-            NEW.name,
-            v_brand_id
-        ) INTO matched_product_id;
-
-        -- If no match found, create a new product if we have sufficient data
-        IF matched_product_id IS NULL THEN
-            -- Check if we have sufficient data to create a product
-            IF (NEW.ean IS NOT NULL AND NEW.ean != '') OR
-               (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL) THEN
-
-                -- Create a new product
-                INSERT INTO products (
-                    user_id,
-                    name,
-                    sku,
-                    ean,
-                    brand,
-                    brand_id,
-                    image_url,
-                    url,
-                    currency_code
-                ) VALUES (
-                    NEW.user_id,
-                    NEW.name,
-                    NEW.sku,
-                    NEW.ean,
-                    NEW.brand,
-                    v_brand_id,
-                    NEW.image_url,
-                    NEW.url,
-                    COALESCE(NEW.currency_code, 'SEK')
-                )
-                RETURNING id INTO matched_product_id;
-
-                -- Update the scraped_product with the new product_id
-                NEW.product_id := matched_product_id;
-            ELSE
-                -- Insufficient data to create a product
-                RETURN NEW;
-            END IF;
-        ELSE
-            -- Update the scraped_product with the matched product_id
-            NEW.product_id := matched_product_id;
-        END IF;
+    -- Find or create brand if we have brand name
+    IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+        SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
     END IF;
 
-    -- Get the latest price for this product from this competitor
-    SELECT new_price INTO last_price
-    FROM price_changes
-    WHERE competitor_id = NEW.competitor_id
-      AND product_id = NEW.product_id
-    ORDER BY changed_at DESC
-    LIMIT 1;
+    -- Use enhanced fuzzy matching to find existing product
+    SELECT find_product_with_fuzzy_matching(
+        NEW.user_id,
+        NEW.ean,
+        NEW.brand,
+        NEW.sku,
+        NEW.name,
+        v_brand_id
+    ) INTO matched_product_id;
 
-    -- Only add a price change if:
-    -- 1. This is the first time we see this product (last_price IS NULL), OR
-    -- 2. The price has actually changed
-    IF last_price IS NULL THEN
-        -- First time for the product, record initial price
-        INSERT INTO price_changes (
-            user_id,
-            product_id,
-            competitor_id,
-            old_price,
-            new_price,
-            price_change_percentage,
-            changed_at,
-            currency_code,
-            url
-        ) VALUES (
-            NEW.user_id,
-            NEW.product_id,
-            NEW.competitor_id,
-            NEW.price, -- Use current price as old price the first time
-            NEW.price,
-            0,  -- 0% change the first time
-            NOW(),
-            NEW.currency_code,
-            NEW.url
-        );
-    ELSE
-        -- Calculate price change percentage
-        IF last_price = 0 THEN
-            price_change_pct := 0; -- Avoid division by zero
-        ELSE
-            price_change_pct := ((NEW.price - last_price) / last_price) * 100;
+    -- If no match found, create a new product if we have sufficient data
+    IF matched_product_id IS NULL THEN
+        -- Check if we have sufficient data to create a product
+        IF (NEW.ean IS NOT NULL AND NEW.ean != '') OR
+           (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL) THEN
+
+            -- Create a new product
+            INSERT INTO products (
+                user_id,
+                name,
+                sku,
+                ean,
+                brand,
+                brand_id,
+                image_url,
+                url,
+                currency_code
+            ) VALUES (
+                NEW.user_id,
+                NEW.name,
+                NEW.sku,
+                NEW.ean,
+                NEW.brand,
+                v_brand_id,
+                NEW.image_url,
+                NEW.url,
+                COALESCE(NEW.currency_code, 'SEK')
+            )
+            RETURNING id INTO matched_product_id;
         END IF;
+    ELSE
+        -- Update existing product ONLY with missing information (don't overwrite existing data)
+        -- For suppliers/competitors: only fill in NULL or empty fields
+        UPDATE products SET
+            name = CASE WHEN (name IS NULL OR name = '') AND NEW.name IS NOT NULL AND NEW.name != '' THEN NEW.name ELSE name END,
+            sku = CASE WHEN (sku IS NULL OR sku = '') AND NEW.sku IS NOT NULL AND NEW.sku != '' THEN NEW.sku ELSE sku END,
+            ean = CASE WHEN (ean IS NULL OR ean = '') AND NEW.ean IS NOT NULL AND NEW.ean != '' THEN NEW.ean ELSE ean END,
+            brand = CASE WHEN (brand IS NULL OR brand = '') AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN NEW.brand ELSE brand END,
+            brand_id = CASE WHEN brand_id IS NULL AND v_brand_id IS NOT NULL THEN v_brand_id ELSE brand_id END,
+            image_url = CASE WHEN (image_url IS NULL OR image_url = '') AND NEW.image_url IS NOT NULL AND NEW.image_url != '' THEN NEW.image_url ELSE image_url END,
+            url = CASE WHEN (url IS NULL OR url = '') AND NEW.url IS NOT NULL AND NEW.url != '' THEN NEW.url ELSE url END,
+            currency_code = CASE WHEN (currency_code IS NULL OR currency_code = '') AND NEW.currency_code IS NOT NULL AND NEW.currency_code != '' THEN NEW.currency_code ELSE currency_code END,
+            updated_at = NOW()
+        WHERE id = matched_product_id;
+    END IF;
 
-        -- Check if price has changed
-        IF NEW.price != last_price THEN
-            -- Only add price change entry if the price changed
-            INSERT INTO price_changes (
+    -- Only proceed with price tracking if we have a product
+    IF matched_product_id IS NOT NULL THEN
+        -- Get the last prices for this product from this supplier
+        SELECT 
+            new_supplier_price,
+            new_our_wholesale_price,
+            new_supplier_recommended_price
+        INTO 
+            last_supplier_price,
+            last_our_wholesale_price,
+            last_supplier_recommended_price
+        FROM price_changes_suppliers
+        WHERE product_id = matched_product_id 
+          AND supplier_id = NEW.supplier_id
+          AND user_id = NEW.user_id
+        ORDER BY changed_at DESC
+        LIMIT 1;
+
+        -- Only add a price change if:
+        -- 1. This is the first time we see this product (last_supplier_price IS NULL), OR
+        -- 2. Any of the prices have actually changed
+        IF last_supplier_price IS NULL THEN
+            -- First time for the product, record initial prices
+            INSERT INTO price_changes_suppliers (
                 user_id,
                 product_id,
-                competitor_id,
-                old_price,
-                new_price,
+                supplier_id,
+                old_supplier_price,
+                new_supplier_price,
+                old_our_wholesale_price,
+                new_our_wholesale_price,
+                old_supplier_recommended_price,
+                new_supplier_recommended_price,
                 price_change_percentage,
                 changed_at,
                 currency_code,
-                url
+                url,
+                minimum_order_quantity,
+                lead_time_days,
+                change_source
             ) VALUES (
                 NEW.user_id,
-                NEW.product_id,
-                NEW.competitor_id,
-                last_price,
-                NEW.price,
-                price_change_pct,
+                matched_product_id,
+                NEW.supplier_id,
+                NEW.supplier_price, -- Use current price as old price the first time
+                NEW.supplier_price,
+                NULL, -- No previous wholesale price
+                NULL, -- No new wholesale price from supplier data
+                NEW.supplier_recommended_price, -- Use current as old the first time
+                NEW.supplier_recommended_price,
+                0,  -- 0% change the first time
                 NOW(),
                 NEW.currency_code,
-                NEW.url
+                NEW.url,
+                NEW.minimum_order_quantity,
+                NEW.lead_time_days,
+                'scraper'
             );
+        ELSE
+            -- Check if any price has changed
+            IF NEW.supplier_price != last_supplier_price OR 
+               COALESCE(NEW.supplier_recommended_price, 0) != COALESCE(last_supplier_recommended_price, 0) THEN
+                
+                -- Calculate price change percentage based on supplier price
+                IF last_supplier_price = 0 THEN
+                    price_change_pct := 0; -- Avoid division by zero
+                ELSE
+                    price_change_pct := ((NEW.supplier_price - last_supplier_price) / last_supplier_price) * 100;
+                END IF;
+
+                -- Only add price change entry if something changed
+                INSERT INTO price_changes_suppliers (
+                    user_id,
+                    product_id,
+                    supplier_id,
+                    old_supplier_price,
+                    new_supplier_price,
+                    old_our_wholesale_price,
+                    new_our_wholesale_price,
+                    old_supplier_recommended_price,
+                    new_supplier_recommended_price,
+                    price_change_percentage,
+                    changed_at,
+                    currency_code,
+                    url,
+                    minimum_order_quantity,
+                    lead_time_days,
+                    change_source
+                ) VALUES (
+                    NEW.user_id,
+                    matched_product_id,
+                    NEW.supplier_id,
+                    last_supplier_price,
+                    NEW.supplier_price,
+                    last_our_wholesale_price,
+                    last_our_wholesale_price, -- Keep same wholesale price
+                    last_supplier_recommended_price,
+                    NEW.supplier_recommended_price,
+                    price_change_pct,
+                    NOW(),
+                    NEW.currency_code,
+                    NEW.url,
+                    NEW.minimum_order_quantity,
+                    NEW.lead_time_days,
+                    'scraper'
+                );
+            END IF;
         END IF;
     END IF;
 
-    -- Leave products in scraped_products for now
-    -- Daily cleanup will handle removing them
-    RETURN NEW;
+    -- IMMEDIATE CLEANUP: Delete the processed record from temp table
+    DELETE FROM temp_suppliers_scraped_data WHERE id = NEW.id;
+    
+    -- Return NULL to prevent the INSERT (since we deleted the record)
+    RETURN NULL;
 END;
 $$;
-
-
---
--- Name: FUNCTION record_price_change(); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.record_price_change() IS 'Enhanced competitor price processing with user settings support and fuzzy matching';
 
 
 --
@@ -4580,6 +4423,26 @@ BEGIN
   SET updated_at = NOW() 
   WHERE id = NEW.conversation_id;
   RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: update_integration_progress_timestamp(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_integration_progress_timestamp() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Only update last_progress_update if products_processed actually changed
+    -- and the status is 'processing'
+    IF NEW.status = 'processing' AND 
+       (OLD.products_processed IS NULL OR NEW.products_processed != OLD.products_processed) THEN
+        NEW.last_progress_update = now();
+    END IF;
+    
+    RETURN NEW;
 END;
 $$;
 
@@ -6412,31 +6275,84 @@ CREATE TABLE public.newsletter_subscriptions (
 
 
 --
--- Name: price_changes; Type: TABLE; Schema: public; Owner: -
+-- Name: price_changes_competitors; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.price_changes (
+CREATE TABLE public.price_changes_competitors (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     user_id uuid NOT NULL,
     product_id uuid NOT NULL,
     competitor_id uuid,
-    old_price numeric(10,2) NOT NULL,
-    new_price numeric(10,2) NOT NULL,
+    old_competitor_price numeric(10,2),
+    new_competitor_price numeric(10,2),
     price_change_percentage numeric(10,2) NOT NULL,
     changed_at timestamp with time zone DEFAULT now(),
     integration_id uuid,
     currency_code text,
     url text,
+    old_our_retail_price numeric(10,2),
+    new_our_retail_price numeric(10,2),
+    CONSTRAINT check_competitor_price_consistency CHECK (((old_competitor_price IS NULL) = (new_competitor_price IS NULL))),
+    CONSTRAINT check_competitor_price_has_competitor_id CHECK ((((old_competitor_price IS NULL) AND (new_competitor_price IS NULL)) OR ((competitor_id IS NOT NULL) AND (integration_id IS NULL)))),
+    CONSTRAINT check_exactly_one_price_type CHECK ((((old_competitor_price IS NOT NULL) AND (old_our_retail_price IS NULL)) OR ((old_competitor_price IS NULL) AND (old_our_retail_price IS NOT NULL)))),
+    CONSTRAINT check_our_retail_price_consistency CHECK (((old_our_retail_price IS NULL) = (new_our_retail_price IS NULL))),
+    CONSTRAINT check_our_retail_price_has_integration_id CHECK ((((old_our_retail_price IS NULL) AND (new_our_retail_price IS NULL)) OR ((integration_id IS NOT NULL) AND (competitor_id IS NULL)))),
     CONSTRAINT price_changes_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code)))),
     CONSTRAINT price_changes_source_check CHECK (((competitor_id IS NOT NULL) OR (integration_id IS NOT NULL)))
 );
 
 
 --
--- Name: COLUMN price_changes.currency_code; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN price_changes_competitors.currency_code; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.price_changes.currency_code IS 'ISO 4217 currency code (e.g., SEK, USD)';
+COMMENT ON COLUMN public.price_changes_competitors.currency_code IS 'ISO 4217 currency code (e.g., SEK, USD)';
+
+
+--
+-- Name: price_changes_suppliers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.price_changes_suppliers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    supplier_id uuid,
+    old_our_wholesale_price numeric(10,2),
+    new_our_wholesale_price numeric(10,2),
+    price_change_percentage numeric(10,2),
+    currency_code text DEFAULT 'SEK'::text,
+    url text,
+    minimum_order_quantity integer DEFAULT 1,
+    lead_time_days integer,
+    changed_at timestamp with time zone DEFAULT now(),
+    change_source text DEFAULT 'manual'::text,
+    old_supplier_price numeric(10,2),
+    new_supplier_price numeric(10,2),
+    old_supplier_recommended_price numeric(10,2),
+    new_supplier_recommended_price numeric(10,2),
+    integration_id uuid,
+    CONSTRAINT check_exactly_one_source CHECK ((((supplier_id IS NOT NULL) AND (integration_id IS NULL)) OR ((supplier_id IS NULL) AND (integration_id IS NOT NULL)))),
+    CONSTRAINT check_our_wholesale_price_consistency CHECK (((old_our_wholesale_price IS NULL) = (new_our_wholesale_price IS NULL))),
+    CONSTRAINT check_our_wholesale_price_has_integration_id CHECK ((((old_our_wholesale_price IS NULL) AND (new_our_wholesale_price IS NULL)) OR ((integration_id IS NOT NULL) AND (supplier_id IS NULL)))),
+    CONSTRAINT check_supplier_price_consistency CHECK (((old_supplier_price IS NULL) = (new_supplier_price IS NULL))),
+    CONSTRAINT check_supplier_price_has_supplier_id CHECK ((((old_supplier_price IS NULL) AND (new_supplier_price IS NULL)) OR ((supplier_id IS NOT NULL) AND (integration_id IS NULL)))),
+    CONSTRAINT price_changes_suppliers_change_source_check CHECK ((change_source = ANY (ARRAY['manual'::text, 'csv'::text, 'scraper'::text, 'integration'::text])))
+);
+
+
+--
+-- Name: product_custom_field_values; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.product_custom_field_values (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    product_id uuid NOT NULL,
+    custom_field_id uuid NOT NULL,
+    value text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
 
 
 --
@@ -6453,8 +6369,8 @@ CREATE TABLE public.products (
     category text,
     description text,
     image_url text,
-    our_price numeric(10,2),
-    wholesale_price numeric(10,2),
+    our_retail_price numeric(10,2),
+    our_wholesale_price numeric(10,2),
     is_active boolean DEFAULT true,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
@@ -6645,7 +6561,9 @@ CREATE TABLE public.scrapers (
     last_products_per_second numeric(10,2),
     typescript_script text,
     scrape_only_own_products boolean DEFAULT false NOT NULL,
-    filter_by_active_brands boolean DEFAULT false NOT NULL
+    filter_by_active_brands boolean DEFAULT false NOT NULL,
+    supplier_id uuid,
+    CONSTRAINT scrapers_target_check CHECK ((((competitor_id IS NOT NULL) AND (supplier_id IS NULL)) OR ((competitor_id IS NULL) AND (supplier_id IS NOT NULL))))
 );
 
 
@@ -6675,6 +6593,36 @@ COMMENT ON COLUMN public.scrapers.last_products_per_second IS 'Products per seco
 --
 
 COMMENT ON COLUMN public.scrapers.scrape_only_own_products IS 'Flag to only scrape products matching the user''s own product catalog (based on EAN/SKU/Brand matching)';
+
+
+--
+-- Name: suppliers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.suppliers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text NOT NULL,
+    website text,
+    contact_email text,
+    contact_phone text,
+    logo_url text,
+    notes text,
+    login_username text,
+    login_password text,
+    api_key text,
+    api_url text,
+    login_url text,
+    price_file_url text,
+    scraping_config jsonb,
+    sync_frequency text DEFAULT 'weekly'::text,
+    last_sync_at timestamp with time zone,
+    last_sync_status text,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT suppliers_sync_frequency_check CHECK ((sync_frequency = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text, 'manual'::text])))
+);
 
 
 --
@@ -6728,8 +6676,7 @@ CREATE TABLE public.temp_competitors_scraped_data (
     competitor_id uuid NOT NULL,
     product_id uuid,
     name text NOT NULL,
-    price numeric(10,2) NOT NULL,
-    currency text DEFAULT 'USD'::text,
+    competitor_price numeric(10,2) NOT NULL,
     url text,
     image_url text,
     sku text,
@@ -6755,8 +6702,8 @@ CREATE TABLE public.temp_integrations_scraped_data (
     sku text,
     ean text,
     brand text,
-    price numeric(10,2),
-    wholesale_price numeric(10,2),
+    our_retail_price numeric(10,2),
+    our_wholesale_price numeric(10,2),
     image_url text,
     raw_data jsonb,
     status text DEFAULT 'pending'::text NOT NULL,
@@ -6766,6 +6713,67 @@ CREATE TABLE public.temp_integrations_scraped_data (
     currency_code text,
     url text,
     CONSTRAINT temp_integrations_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
+);
+
+
+--
+-- Name: temp_suppliers_scraped_data; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.temp_suppliers_scraped_data (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    supplier_id uuid NOT NULL,
+    scraper_id uuid NOT NULL,
+    run_id text NOT NULL,
+    name text,
+    sku text,
+    brand text,
+    ean text,
+    supplier_price numeric(10,2),
+    currency_code text DEFAULT 'SEK'::text,
+    url text,
+    image_url text,
+    minimum_order_quantity integer DEFAULT 1,
+    lead_time_days integer,
+    stock_level integer,
+    product_description text,
+    category text,
+    scraped_at timestamp with time zone DEFAULT now(),
+    processed boolean DEFAULT false,
+    created_at timestamp with time zone DEFAULT now(),
+    supplier_recommended_price numeric(10,2)
+);
+
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.supplier_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.supplier_price IS 'Supplier cost price (what they charge us)';
+
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.supplier_recommended_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.supplier_recommended_price IS 'Supplier recommended retail price (what they suggest we charge customers)';
+
+
+--
+-- Name: user_custom_fields; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_custom_fields (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    field_name text NOT NULL,
+    field_type text NOT NULL,
+    is_required boolean DEFAULT false,
+    default_value text,
+    validation_rules jsonb,
+    created_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT user_custom_fields_field_type_check CHECK ((field_type = ANY (ARRAY['text'::text, 'number'::text, 'boolean'::text, 'url'::text, 'date'::text])))
 );
 
 
@@ -6817,6 +6825,7 @@ CREATE TABLE public.user_settings (
     price_thresholds jsonb,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
+    auto_create_custom_fields boolean DEFAULT true,
     CONSTRAINT companies_primary_currency_check CHECK ((char_length(primary_currency) = 3))
 );
 
@@ -7374,11 +7383,35 @@ ALTER TABLE ONLY public.newsletter_subscriptions
 
 
 --
--- Name: price_changes price_changes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: price_changes_competitors price_changes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.price_changes
+ALTER TABLE ONLY public.price_changes_competitors
     ADD CONSTRAINT price_changes_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: product_custom_field_values product_custom_field_values_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: product_custom_field_values product_custom_field_values_product_id_custom_field_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_product_id_custom_field_id_key UNIQUE (product_id, custom_field_id);
 
 
 --
@@ -7438,6 +7471,14 @@ ALTER TABLE ONLY public.scrapers
 
 
 --
+-- Name: suppliers suppliers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.suppliers
+    ADD CONSTRAINT suppliers_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: support_conversations support_conversations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7470,6 +7511,14 @@ ALTER TABLE ONLY public.temp_integrations_scraped_data
 
 
 --
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: brand_aliases unique_brand_alias; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7499,6 +7548,22 @@ ALTER TABLE ONLY public.products_dismissed_duplicates
 
 ALTER TABLE ONLY public.brands
     ADD CONSTRAINT unique_user_brand UNIQUE (user_id, name);
+
+
+--
+-- Name: user_custom_fields user_custom_fields_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_custom_fields
+    ADD CONSTRAINT user_custom_fields_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_custom_fields user_custom_fields_user_id_field_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_custom_fields
+    ADD CONSTRAINT user_custom_fields_user_id_field_name_key UNIQUE (user_id, field_name);
 
 
 --
@@ -8037,35 +8102,63 @@ CREATE INDEX idx_marketing_contacts_status ON public.marketing_contacts USING bt
 -- Name: idx_price_changes_competitor_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_competitor_id ON public.price_changes USING btree (competitor_id);
+CREATE INDEX idx_price_changes_competitor_id ON public.price_changes_competitors USING btree (competitor_id);
 
 
 --
 -- Name: idx_price_changes_integration_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_integration_id ON public.price_changes USING btree (integration_id);
+CREATE INDEX idx_price_changes_integration_id ON public.price_changes_competitors USING btree (integration_id);
 
 
 --
 -- Name: idx_price_changes_product_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_product_id ON public.price_changes USING btree (product_id);
+CREATE INDEX idx_price_changes_product_id ON public.price_changes_competitors USING btree (product_id);
 
 
 --
 -- Name: idx_price_changes_product_user_time; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_product_user_time ON public.price_changes USING btree (product_id, user_id, changed_at DESC);
+CREATE INDEX idx_price_changes_product_user_time ON public.price_changes_competitors USING btree (product_id, user_id, changed_at DESC);
+
+
+--
+-- Name: idx_price_changes_suppliers_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_changed_at ON public.price_changes_suppliers USING btree (changed_at);
+
+
+--
+-- Name: idx_price_changes_suppliers_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_product_id ON public.price_changes_suppliers USING btree (product_id);
+
+
+--
+-- Name: idx_price_changes_suppliers_supplier_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_supplier_id ON public.price_changes_suppliers USING btree (supplier_id);
+
+
+--
+-- Name: idx_price_changes_suppliers_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_user_id ON public.price_changes_suppliers USING btree (user_id);
 
 
 --
 -- Name: idx_price_changes_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id ON public.price_changes USING btree (user_id);
+CREATE INDEX idx_price_changes_user_id ON public.price_changes_competitors USING btree (user_id);
 
 
 --
@@ -8079,7 +8172,7 @@ COMMENT ON INDEX public.idx_price_changes_user_id IS 'Optimizes user-based price
 -- Name: idx_price_changes_user_id_changed_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id_changed_at ON public.price_changes USING btree (user_id, changed_at DESC);
+CREATE INDEX idx_price_changes_user_id_changed_at ON public.price_changes_competitors USING btree (user_id, changed_at DESC);
 
 
 --
@@ -8093,7 +8186,7 @@ COMMENT ON INDEX public.idx_price_changes_user_id_changed_at IS 'Optimizes time-
 -- Name: idx_price_changes_user_id_competitor_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id_competitor_id ON public.price_changes USING btree (user_id, competitor_id) WHERE (competitor_id IS NOT NULL);
+CREATE INDEX idx_price_changes_user_id_competitor_id ON public.price_changes_competitors USING btree (user_id, competitor_id) WHERE (competitor_id IS NOT NULL);
 
 
 --
@@ -8107,7 +8200,7 @@ COMMENT ON INDEX public.idx_price_changes_user_id_competitor_id IS 'Optimizes co
 -- Name: idx_price_changes_user_id_integration_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id_integration_id ON public.price_changes USING btree (user_id, integration_id) WHERE (integration_id IS NOT NULL);
+CREATE INDEX idx_price_changes_user_id_integration_id ON public.price_changes_competitors USING btree (user_id, integration_id) WHERE (integration_id IS NOT NULL);
 
 
 --
@@ -8121,7 +8214,7 @@ COMMENT ON INDEX public.idx_price_changes_user_id_integration_id IS 'Optimizes i
 -- Name: idx_price_changes_user_id_percentage_changed_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id_percentage_changed_at ON public.price_changes USING btree (user_id, price_change_percentage, changed_at DESC);
+CREATE INDEX idx_price_changes_user_id_percentage_changed_at ON public.price_changes_competitors USING btree (user_id, price_change_percentage, changed_at DESC);
 
 
 --
@@ -8135,7 +8228,7 @@ COMMENT ON INDEX public.idx_price_changes_user_id_percentage_changed_at IS 'Opti
 -- Name: idx_price_changes_user_id_product_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_price_changes_user_id_product_id ON public.price_changes USING btree (user_id, product_id);
+CREATE INDEX idx_price_changes_user_id_product_id ON public.price_changes_competitors USING btree (user_id, product_id);
 
 
 --
@@ -8143,6 +8236,20 @@ CREATE INDEX idx_price_changes_user_id_product_id ON public.price_changes USING 
 --
 
 COMMENT ON INDEX public.idx_price_changes_user_id_product_id IS 'Optimizes get_brand_analytics function joins';
+
+
+--
+-- Name: idx_product_custom_field_values_custom_field_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_custom_field_id ON public.product_custom_field_values USING btree (custom_field_id);
+
+
+--
+-- Name: idx_product_custom_field_values_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_product_id ON public.product_custom_field_values USING btree (product_id);
 
 
 --
@@ -8370,6 +8477,27 @@ CREATE INDEX idx_scrapers_scraper_type ON public.scrapers USING btree (scraper_t
 
 
 --
+-- Name: idx_suppliers_is_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_suppliers_is_active ON public.suppliers USING btree (is_active);
+
+
+--
+-- Name: idx_suppliers_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_suppliers_name ON public.suppliers USING btree (name);
+
+
+--
+-- Name: idx_suppliers_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_suppliers_user_id ON public.suppliers USING btree (user_id);
+
+
+--
 -- Name: idx_support_conversations_admin_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8475,6 +8603,48 @@ CREATE INDEX idx_temp_integrations_scraped_data_status ON public.temp_integratio
 
 
 --
+-- Name: idx_temp_suppliers_scraped_data_processed; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_processed ON public.temp_suppliers_scraped_data USING btree (processed);
+
+
+--
+-- Name: idx_temp_suppliers_scraped_data_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_run_id ON public.temp_suppliers_scraped_data USING btree (run_id);
+
+
+--
+-- Name: idx_temp_suppliers_scraped_data_scraper_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_scraper_id ON public.temp_suppliers_scraped_data USING btree (scraper_id);
+
+
+--
+-- Name: idx_temp_suppliers_scraped_data_supplier_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_supplier_id ON public.temp_suppliers_scraped_data USING btree (supplier_id);
+
+
+--
+-- Name: idx_temp_suppliers_scraped_data_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_user_id ON public.temp_suppliers_scraped_data USING btree (user_id);
+
+
+--
+-- Name: idx_user_custom_fields_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_custom_fields_user_id ON public.user_custom_fields USING btree (user_id);
+
+
+--
 -- Name: idx_user_profiles_admin_role; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8573,6 +8743,13 @@ CREATE TRIGGER update_user_profile_trigger AFTER UPDATE ON next_auth.users FOR E
 
 
 --
+-- Name: integration_runs integration_runs_progress_update_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER integration_runs_progress_update_trigger BEFORE UPDATE ON public.integration_runs FOR EACH ROW EXECUTE FUNCTION public.update_integration_progress_timestamp();
+
+
+--
 -- Name: scrapers one_active_scraper_per_competitor; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -8580,17 +8757,24 @@ CREATE TRIGGER one_active_scraper_per_competitor BEFORE INSERT OR UPDATE ON publ
 
 
 --
--- Name: temp_competitors_scraped_data price_change_trigger; Type: TRIGGER; Schema: public; Owner: -
+-- Name: temp_competitors_scraped_data process_temp_competitors_trigger; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER price_change_trigger AFTER INSERT ON public.temp_competitors_scraped_data FOR EACH ROW EXECUTE FUNCTION public.record_price_change();
+CREATE TRIGGER process_temp_competitors_trigger BEFORE INSERT ON public.temp_competitors_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_competitors_scraped_data();
 
 
 --
--- Name: temp_integrations_scraped_data process_temp_integration_product_trigger; Type: TRIGGER; Schema: public; Owner: -
+-- Name: temp_integrations_scraped_data process_temp_integrations_trigger; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER process_temp_integration_product_trigger BEFORE UPDATE ON public.temp_integrations_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_staged_integration_product();
+CREATE TRIGGER process_temp_integrations_trigger BEFORE UPDATE ON public.temp_integrations_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_integrations_scraped_data();
+
+
+--
+-- Name: temp_suppliers_scraped_data process_temp_suppliers_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER process_temp_suppliers_trigger BEFORE INSERT ON public.temp_suppliers_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_suppliers_scraped_data();
 
 
 --
@@ -8861,7 +9045,7 @@ ALTER TABLE ONLY public.integration_runs
 --
 
 ALTER TABLE ONLY public.integration_runs
-    ADD CONSTRAINT integration_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+    ADD CONSTRAINT integration_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id);
 
 
 --
@@ -8869,39 +9053,87 @@ ALTER TABLE ONLY public.integration_runs
 --
 
 ALTER TABLE ONLY public.integrations
-    ADD CONSTRAINT integrations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+    ADD CONSTRAINT integrations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id);
 
 
 --
--- Name: price_changes price_changes_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: price_changes_competitors price_changes_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.price_changes
+ALTER TABLE ONLY public.price_changes_competitors
     ADD CONSTRAINT price_changes_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
 
 
 --
--- Name: price_changes price_changes_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: price_changes_competitors price_changes_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.price_changes
-    ADD CONSTRAINT price_changes_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id);
-
-
---
--- Name: price_changes price_changes_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.price_changes
-    ADD CONSTRAINT price_changes_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
+ALTER TABLE ONLY public.price_changes_competitors
+    ADD CONSTRAINT price_changes_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id) ON DELETE CASCADE;
 
 
 --
--- Name: price_changes price_changes_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: price_changes_competitors price_changes_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.price_changes
+ALTER TABLE ONLY public.price_changes_competitors
+    ADD CONSTRAINT price_changes_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE;
+
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id);
+
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE;
+
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_supplier_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id);
+
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: price_changes_competitors price_changes_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_competitors
     ADD CONSTRAINT price_changes_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: product_custom_field_values product_custom_field_values_custom_field_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_custom_field_id_fkey FOREIGN KEY (custom_field_id) REFERENCES public.user_custom_fields(id);
+
+
+--
+-- Name: product_custom_field_values product_custom_field_values_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
 
 
 --
@@ -9001,11 +9233,27 @@ ALTER TABLE ONLY public.scrapers
 
 
 --
+-- Name: scrapers scrapers_supplier_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scrapers
+    ADD CONSTRAINT scrapers_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id);
+
+
+--
 -- Name: scrapers scrapers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.scrapers
     ADD CONSTRAINT scrapers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: suppliers suppliers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.suppliers
+    ADD CONSTRAINT suppliers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 
 --
@@ -9078,6 +9326,38 @@ ALTER TABLE ONLY public.temp_competitors_scraped_data
 
 ALTER TABLE ONLY public.temp_integrations_scraped_data
     ADD CONSTRAINT temp_integrations_scraped_data_integration_run_id_fkey FOREIGN KEY (integration_run_id) REFERENCES public.integration_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
+
+
+--
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_supplier_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id);
+
+
+--
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: user_custom_fields user_custom_fields_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_custom_fields
+    ADD CONSTRAINT user_custom_fields_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 
 --
@@ -9362,6 +9642,27 @@ CREATE POLICY "Users can delete their own scrapers" ON public.scrapers FOR DELET
 
 
 --
+-- Name: price_changes_suppliers Users can delete their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own supplier price changes" ON public.price_changes_suppliers FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: temp_suppliers_scraped_data Users can delete their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: suppliers Users can delete their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own suppliers" ON public.suppliers FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
 -- Name: csv_uploads Users can insert their own CSV uploads; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -9418,10 +9719,10 @@ CREATE POLICY "Users can insert their own integrations" ON public.integrations F
 
 
 --
--- Name: price_changes Users can insert their own price changes; Type: POLICY; Schema: public; Owner: -
+-- Name: price_changes_competitors Users can insert their own price changes; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can insert their own price changes" ON public.price_changes FOR INSERT WITH CHECK ((auth.uid() = user_id));
+CREATE POLICY "Users can insert their own price changes" ON public.price_changes_competitors FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 
 --
@@ -9443,6 +9744,27 @@ CREATE POLICY "Users can insert their own scraper AI sessions" ON public.scraper
 --
 
 CREATE POLICY "Users can insert their own scrapers" ON public.scrapers FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: price_changes_suppliers Users can insert their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own supplier price changes" ON public.price_changes_suppliers FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: temp_suppliers_scraped_data Users can insert their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: suppliers Users can insert their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own suppliers" ON public.suppliers FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 
 --
@@ -9537,6 +9859,27 @@ CREATE POLICY "Users can update their own scrapers" ON public.scrapers FOR UPDAT
 
 
 --
+-- Name: price_changes_suppliers Users can update their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own supplier price changes" ON public.price_changes_suppliers FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: temp_suppliers_scraped_data Users can update their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: suppliers Users can update their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own suppliers" ON public.suppliers FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
 -- Name: support_messages Users can view messages in own conversations; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -9616,10 +9959,10 @@ CREATE POLICY "Users can view their own integrations" ON public.integrations FOR
 
 
 --
--- Name: price_changes Users can view their own price changes; Type: POLICY; Schema: public; Owner: -
+-- Name: price_changes_competitors Users can view their own price changes; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "Users can view their own price changes" ON public.price_changes FOR SELECT USING ((auth.uid() = user_id));
+CREATE POLICY "Users can view their own price changes" ON public.price_changes_competitors FOR SELECT USING ((auth.uid() = user_id));
 
 
 --
@@ -9655,6 +9998,27 @@ CREATE POLICY "Users can view their own scrapers" ON public.scrapers FOR SELECT 
 --
 
 CREATE POLICY "Users can view their own subscriptions" ON public.user_subscriptions FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: price_changes_suppliers Users can view their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own supplier price changes" ON public.price_changes_suppliers FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: temp_suppliers_scraped_data Users can view their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: suppliers Users can view their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own suppliers" ON public.suppliers FOR SELECT USING ((auth.uid() = user_id));
 
 
 --
@@ -9742,10 +10106,22 @@ ALTER TABLE public.marketing_contacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.newsletter_subscriptions ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: price_changes; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: price_changes_competitors; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
-ALTER TABLE public.price_changes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.price_changes_competitors ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: price_changes_suppliers; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.price_changes_suppliers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: product_custom_field_values; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.product_custom_field_values ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: products; Type: ROW SECURITY; Schema: public; Owner: -
@@ -9790,6 +10166,12 @@ ALTER TABLE public.scraper_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scrapers ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: suppliers; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.suppliers ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: support_conversations; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -9812,6 +10194,18 @@ ALTER TABLE public.temp_competitors_scraped_data ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.temp_integrations_scraped_data ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: temp_suppliers_scraped_data; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.temp_suppliers_scraped_data ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_custom_fields; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_custom_fields ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: user_profiles; Type: ROW SECURITY; Schema: public; Owner: -
