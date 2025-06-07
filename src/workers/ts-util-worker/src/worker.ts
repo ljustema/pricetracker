@@ -28,6 +28,20 @@ console.log('Using Supabase URL:', supabaseUrl);
 // Using unknown for database types as specific types are not available
 const supabase = createClient<unknown>(supabaseUrl, supabaseServiceRoleKey);
 
+// Type for integration data
+interface Integration {
+  id: string;
+  name: string;
+  platform: string;
+  api_url: string;
+  api_key: string;
+  configuration: Record<string, unknown> | null;
+  user_id: string;
+  created_at: string;
+  updated_at: string;
+  is_active: boolean;
+}
+
 // Type for the data returned by the claim_next_integration_job RPC
 interface ClaimedIntegrationJobData {
   id: string; // UUID
@@ -128,15 +142,18 @@ async function fetchAndProcessIntegrationJob() {
     lastJobTime = Date.now();
 
     // 3. Fetch the integration details
-    const { data: integration, error: integrationError } = await supabase
+    const { data: integrationData, error: integrationError } = await supabase
       .from('integrations')
       .select('*')
       .eq('id', job.integration_id)
       .single();
 
-    if (integrationError) {
-      throw new Error(`Failed to fetch integration details: ${integrationError.message}`);
+    if (integrationError || !integrationData) {
+      throw new Error(`Failed to fetch integration details: ${integrationError?.message || 'Integration not found'}`);
     }
+
+    // Type assertion for the integration data
+    const integration = integrationData as Integration;
 
     // Check if this is a test run
     const isTestRun = job.configuration?.is_test_run === true;

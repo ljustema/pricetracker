@@ -25,9 +25,9 @@ interface CompilerOptions {
 }
 
 // Interface for compiler result
-interface CompilerResult {
+export interface CompilerResult {
   success: boolean;
-  outputPath: string | null;
+  outputPath?: string;
   error?: string;
   tempDir?: string;
 }
@@ -449,7 +449,6 @@ export async function compileTypeScriptScraper(
           // If both TypeScript and Babel fail, return the original TypeScript error
           return {
             success: false,
-            outputPath: null,
             error: errorMessage,
             tempDir
           };
@@ -474,7 +473,6 @@ export async function compileTypeScriptScraper(
 
       return {
         success: false,
-        outputPath: null,
         error: `TypeScript compilation failed: ${errorMessage}`,
         tempDir
       };
@@ -484,7 +482,6 @@ export async function compileTypeScriptScraper(
     debugLog(`Error during TypeScript compilation: ${errorMessage}`);
     return {
       success: false,
-      outputPath: null,
       error: `Error during TypeScript compilation: ${errorMessage}`,
       tempDir
     };

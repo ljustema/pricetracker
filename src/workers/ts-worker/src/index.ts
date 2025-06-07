@@ -13,10 +13,13 @@ debugLog('TypeScript worker started with debug logging enabled');
 // Import Database type for type safety
 import type { Database } from './database.types';
 
-// Lazy loading functions for heavy dependencies
-let supabaseClient: ReturnType<typeof import('@supabase/supabase-js').createClient> | null = null;
+// Import Supabase types
+import type { SupabaseClient } from '@supabase/supabase-js';
 
-async function getSupabaseClient() {
+// Lazy loading functions for heavy dependencies
+let supabaseClient: SupabaseClient<Database> | null = null;
+
+async function getSupabaseClient(): Promise<SupabaseClient<Database>> {
   if (!supabaseClient) {
     const { createClient } = await import('@supabase/supabase-js');
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -244,8 +247,8 @@ async function fetchAndProcessJob() {
         if (brandError) {
             logStructured(job.id, 'warn', 'SETUP', `Failed to fetch active brands: ${brandError.message}. Proceeding without brand filter.`);
         } else if (brands) {
-            activeBrandNames = brands.map((b: { name: string }) => b.name);
-            activeBrandIds = brands.map((b: { id: string }) => b.id);
+            activeBrandNames = brands.map((b) => String(b.name));
+            activeBrandIds = brands.map((b) => String(b.id));
             logStructured(job.id, 'info', 'SETUP', `Fetched ${activeBrandNames.length} active brands.`);
         }
     }
@@ -261,13 +264,13 @@ async function fetchAndProcessJob() {
         if (productError) {
             logStructured(job.id, 'warn', 'SETUP', `Failed to fetch own products: ${productError.message}. Proceeding without own product filter.`);
         } else if (products) {
-            ownProductEans = products.map((p: { ean?: string }) => p.ean).filter((ean: string | undefined): ean is string => !!ean);
+            ownProductEans = products.map((p) => p.ean).filter((ean): ean is string => typeof ean === 'string' && !!ean);
             ownProductSkuBrands = products
-                .filter((p: { sku?: string; brand?: string; brand_id?: string }) => p.sku && (p.brand || p.brand_id))
-                .map((p: { sku: string; brand?: string; brand_id?: string }) => ({
-                    sku: p.sku,
-                    brand: p.brand || '',
-                    brand_id: p.brand_id || ''
+                .filter((p) => p.sku && (p.brand || p.brand_id))
+                .map((p) => ({
+                    sku: String(p.sku),
+                    brand: String(p.brand || ''),
+                    brand_id: String(p.brand_id || '')
                 }));
             logStructured(job.id, 'info', 'SETUP', `Fetched ${ownProductEans.length} EANs and ${ownProductSkuBrands.length} SKU/Brand pairs.`);
         }
@@ -280,7 +283,7 @@ async function fetchAndProcessJob() {
     let productCount = 0;
     const productsBuffer: _ScrapedProductData[] = [];
     let tmpScriptPath: string | null = null;
-    let compilationResult: { success: boolean; outputPath?: string; error?: string; tempDir?: string } | null = null; // Store compilation result for cleanup
+    let compilationResult: import('./typescript-compiler').CompilerResult | null = null; // Store compilation result for cleanup
     const startTime = Date.now();
 
     try {
@@ -300,10 +303,10 @@ async function fetchAndProcessJob() {
 
         try {
           // Log the first 100 characters of the script for debugging
-          const scriptPreview = scraper.typescript_script.substring(0, 100).replace(/\n/g, ' ');
+          const scriptPreview = String(scraper.typescript_script).substring(0, 100).replace(/\n/g, ' ');
           debugLog(`Script preview: ${scriptPreview}...`);
 
-          compilationResult = await compileTypeScriptScraper(scraper.typescript_script, {
+          compilationResult = await compileTypeScriptScraper(String(scraper.typescript_script), {
             timeout: 60000 // 60 seconds timeout for compilation
           });
 
@@ -394,6 +397,7 @@ async function fetchAndProcessJob() {
 
         // Add error handler for the spawn itself
         childProcess.on('error', (err: Error) => {
+            if (!job) return;
             debugLog(`Process spawn error: ${err.message}`);
             logToDatabase(job.id, `Process spawn error: ${err.message}`, { error: err.toString(), stack: err.stack });
 
@@ -431,7 +435,9 @@ async function fetchAndProcessJob() {
                     if (line.startsWith('INFO') || line.startsWith('DEBUG') || line.startsWith('WARN') ||
                         line.startsWith('ERROR') || line.includes('CheerioCrawler:')) {
                         // This is a log message, not a product - log it and continue
-                        logStructured(job.id, 'info', 'SCRIPT_LOG', `STDOUT: ${line}`);
+                        if (job) {
+                            logStructured(job.id, 'info', 'SCRIPT_LOG', `STDOUT: ${line}`);
+                        }
                         continue;
                     }
 
@@ -442,7 +448,7 @@ async function fetchAndProcessJob() {
                             productCount++;
 
                             // Update product count in database every 10 products
-                            if (productCount % 10 === 0) {
+                            if (productCount % 10 === 0 && job) {
                                 try {
                                     const updateResult = await supabase
                                         .from('scraper_runs')
@@ -460,21 +466,33 @@ async function fetchAndProcessJob() {
                                 }
                             }
 
-                            if (productsBuffer.length >= DB_BATCH_SIZE) {
+                            if (productsBuffer.length >= DB_BATCH_SIZE && job) {
                                 const batchToSave = [...productsBuffer]; // Copy buffer
                                 productsBuffer.length = 0; // Clear buffer
                                 logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Saving batch of ${batchToSave.length} products...`);
                                 // Use job.fetched_competitor_id from the RPC response
                                 saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave, supabase)
-                                    .then(() => logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted batch.`))
-                                    .catch(err => logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save product batch: ${err.message}`));
+                                    .then(() => {
+                                        if (job) {
+                                            logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted batch.`);
+                                        }
+                                    })
+                                    .catch(err => {
+                                        if (job) {
+                                            logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save product batch: ${err.message}`);
+                                        }
+                                    });
                             }
                         } else {
-                            logStructured(job.id, 'warn', 'SCRIPT_STDOUT', `Skipping invalid product JSON structure: ${line.substring(0, 100)}...`);
+                            if (job) {
+                                logStructured(job.id, 'warn', 'SCRIPT_STDOUT', `Skipping invalid product JSON structure: ${line.substring(0, 100)}...`);
+                            }
                         }
                     } catch (_e) {
                         // Instead of warning about JSON decode failure, treat it as a log message
-                        logStructured(job.id, 'info', 'SCRIPT_LOG', `STDOUT: ${line}`);
+                        if (job) {
+                            logStructured(job.id, 'info', 'SCRIPT_LOG', `STDOUT: ${line}`);
+                        }
                     }
                 }
             }
@@ -492,9 +510,11 @@ async function fetchAndProcessJob() {
                 debugLog(`STDERR: ${line}`);
 
                 // Also log to database for better visibility
-                logToDatabase(job.id, `STDERR: ${line}`);
+                if (job) {
+                    logToDatabase(job.id, `STDERR: ${line}`);
+                }
 
-                if (line.startsWith("PROGRESS:")) {
+                if (line.startsWith("PROGRESS:") && job) {
                     const progressMessage = line.substring(9).trim();
                     logStructured(job.id, 'info', 'SCRIPT_LOG', progressMessage);
 
@@ -549,11 +569,12 @@ async function fetchAndProcessJob() {
                             }
                         }
                     }
-                } else if (line.startsWith("ERROR:")) {
+                } else if (line.startsWith("ERROR:") && job) {
                     const errorLine = line.substring(6).trim();
                     logStructured(job.id, 'error', 'SCRIPT_LOG', errorLine);
                     scriptErrors.push(errorLine);
                 } else if (
+                    job && (
                     line.includes("Error:") ||
                     line.includes("error:") ||
                     line.includes("Exception:") ||
@@ -566,18 +587,19 @@ async function fetchAndProcessJob() {
                     line.includes("is not a function") ||
                     line.includes("Cannot read property") ||
                     line.includes("Cannot read properties")
+                    )
                 ) {
                     // Capture error-like messages that don't have the ERROR: prefix
                     logStructured(job.id, 'error', 'SCRIPT_ERROR', line);
                     scriptErrors.push(line);
-                } else if (line.includes("at ") && (line.includes(".js:") || line.includes(".ts:"))) {
+                } else if (line.includes("at ") && (line.includes(".js:") || line.includes(".ts:")) && job) {
                     // This looks like a stack trace line
                     logStructured(job.id, 'debug', 'SCRIPT_STACKTRACE', line);
                     // Add to errors if we've seen an error recently
                     if (scriptErrors.length > 0) {
                         scriptErrors.push(line);
                     }
-                } else {
+                } else if (job) {
                     logStructured(job.id, 'debug', 'SCRIPT_STDERR', line);
                 }
             });
@@ -586,7 +608,9 @@ async function fetchAndProcessJob() {
         // Handle process exit and timeout
         await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
-                logStructured(job.id, 'error', 'JOB_TIMEOUT', `Script execution timed out after ${SCRIPT_TIMEOUT_SECONDS} seconds.`);
+                if (job) {
+                    logStructured(job.id, 'error', 'JOB_TIMEOUT', `Script execution timed out after ${SCRIPT_TIMEOUT_SECONDS} seconds.`);
+                }
                 childProcess.kill(); // Use kill without signal for TypeScript compatibility
                 // Give it a moment to terminate before force killing
                 setTimeout(() => {
@@ -604,17 +628,27 @@ async function fetchAndProcessJob() {
 
             childProcess.on('error', (err: Error) => {
                 clearTimeout(timeout);
-                logStructured(job.id, 'error', 'SUBPROCESS_ERROR', `Failed to start subprocess: ${err.message}`);
+                if (job) {
+                    logStructured(job.id, 'error', 'SUBPROCESS_ERROR', `Failed to start subprocess: ${err.message}`);
+                }
                 reject(err);
             });
 
             childProcess.on('close', async (code: number | null) => {
                 clearTimeout(timeout);
+
+                // Guard clause: if job is null, we can't proceed with job-specific operations
+                if (!job) {
+                    debugLog(`Process exited with code: ${code} but job is null`);
+                    resolve();
+                    return;
+                }
+
                 logStructured(job.id, 'info', 'SUBPROCESS_EXEC', `Script finished with exit code: ${code}`);
+                logToDatabase(job.id, `Process exited with code: ${code}`);
 
                 // Debug log the exit code
                 debugLog(`Process exited with code: ${code}`);
-                logToDatabase(job.id, `Process exited with code: ${code}`);
 
                 // If the process failed, log the stderr output
                 if (code !== 0) {
@@ -715,8 +749,16 @@ async function fetchAndProcessJob() {
                     productsBuffer.length = 0;
                     logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Saving final batch of ${batchToSave.length} products...`);
                     saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave, supabase)
-                         .then(() => logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted final batch.`))
-                         .catch(err => logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save final product batch: ${err.message}`));
+                         .then(() => {
+                             if (job) {
+                                 logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted final batch.`);
+                             }
+                         })
+                         .catch(err => {
+                             if (job) {
+                                 logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save final product batch: ${err.message}`);
+                             }
+                         });
                 }
 
                 // Final update of product count in database
@@ -813,7 +855,9 @@ async function fetchAndProcessJob() {
         const errorMsg = err instanceof Error ? err.message : String(err);
         errorMessage = `Worker error during job processing: ${errorMsg}`;
         errorDetails = err instanceof Error ? err.stack || null : null;
-        logStructured(job.id, 'error', 'JOB_PROCESSING', errorMessage, { stack: err instanceof Error ? err.stack : null });
+        if (job) {
+            logStructured(job.id, 'error', 'JOB_PROCESSING', errorMessage, { stack: err instanceof Error ? err.stack : null });
+        }
     } finally {
         // Cleanup temporary files
         if (tmpScriptPath) {
@@ -825,7 +869,9 @@ async function fetchAndProcessJob() {
 
                     // Use the cleanupCompilation function to clean up the entire directory
                     await cleanupCompilation(compilationResult.tempDir);
-                    logStructured(job.id, 'debug', 'CLEANUP', `Cleaned up compilation directory: ${compilationResult.tempDir}`);
+                    if (job) {
+                        logStructured(job.id, 'debug', 'CLEANUP', `Cleaned up compilation directory: ${compilationResult.tempDir}`);
+                    }
                 } else {
                     // Fall back to the original cleanup logic for non-compiled scripts
                     try {
@@ -836,15 +882,21 @@ async function fetchAndProcessJob() {
                             // Use recursive removal instead of rmdir
                             await fsPromises.rm(dirPath, { recursive: true, force: true });
                         }
-                        logStructured(job.id, 'debug', 'CLEANUP', `Removed temporary script and directory: ${tmpScriptPath}`);
+                        if (job) {
+                            logStructured(job.id, 'debug', 'CLEANUP', `Removed temporary script and directory: ${tmpScriptPath}`);
+                        }
                     } catch (unlinkError) {
-                        logStructured(job.id, 'warn', 'CLEANUP', `Error removing temporary script: ${unlinkError instanceof Error ? unlinkError.message : String(unlinkError)}`);
+                        if (job) {
+                            logStructured(job.id, 'warn', 'CLEANUP', `Error removing temporary script: ${unlinkError instanceof Error ? unlinkError.message : String(unlinkError)}`);
+                        }
                     }
                 }
             } catch (cleanupError: unknown) {
                 const errorMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-                logStructured(job.id, 'warn', 'CLEANUP', `Error cleaning up temporary files: ${errorMessage}`);
-                debugLog(`Error cleaning up temporary files for job ${job.id}: ${errorMessage}`);
+                if (job) {
+                    logStructured(job.id, 'warn', 'CLEANUP', `Error cleaning up temporary files: ${errorMessage}`);
+                    debugLog(`Error cleaning up temporary files for job ${job.id}: ${errorMessage}`);
+                }
             }
         }
     }
@@ -852,6 +904,12 @@ async function fetchAndProcessJob() {
     // 6. Final status update
     const executionTimeMs = Date.now() - startTime;
     const productsPerSecond = executionTimeMs > 0 ? (productCount / (executionTimeMs / 1000.0)) : 0;
+
+    // Guard clause: if job is null, we can't update the database
+    if (!job) {
+        debugLog('Cannot update final status: job is null');
+        return;
+    }
 
     try {
         // Create update object
@@ -1184,7 +1242,7 @@ $$;
 
 
 // --- Function to save scraped products ---
-async function saveScrapedProducts(runId: string, userId: string, competitorId: string | undefined, products: _ScrapedProductData[], supabaseClient?: ReturnType<typeof import('@supabase/supabase-js').createClient>) {
+async function saveScrapedProducts(runId: string, userId: string, competitorId: string | undefined, products: _ScrapedProductData[], supabaseClient?: SupabaseClient<Database>) {
     if (!products || products.length === 0) return;
 
     // Check if competitorId is provided
