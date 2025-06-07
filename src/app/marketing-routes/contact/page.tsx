@@ -23,7 +23,7 @@ export default function ContactPage() {
             </h1>
             <p className="mt-6 text-lg leading-8 text-gray-600">
               Have questions about PriceTracker? Need help with competitive pricing strategies?
-              We're here to help you succeed.
+              We&apos;re here to help you succeed.
             </p>
           </div>
         </div>
@@ -39,7 +39,7 @@ export default function ContactPage() {
                     Get in touch
                   </h2>
                   <p className="mt-4 text-lg leading-7 text-gray-600">
-                    We'd love to hear from you. Send us a message and we'll respond as soon as possible.
+                    We&apos;d love to hear from you. Send us a message and we&apos;ll respond as soon as possible.
                   </p>
                 </div>
 
@@ -104,8 +104,8 @@ export default function ContactPage() {
                   How does PriceTracker work?
                 </h3>
                 <p className="text-gray-600">
-                  PriceTracker automatically monitors your competitors prices using advanced scraping technology.
-                  You'll receive real-time alerts when prices change and can analyze trends over time.
+                  PriceTracker automatically monitors your competitors&apos; prices using advanced scraping technology.
+                  You&apos;ll receive real-time alerts when prices change and can analyze trends over time.
                 </p>
               </div>
 

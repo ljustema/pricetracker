@@ -290,7 +290,7 @@ export default function ScraperList({
                 </div>
               </div>
             </li>
-          );})}
+          ))}
         </ul>
       )}
     </div>

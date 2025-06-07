@@ -23,7 +23,7 @@ export default function NotAuthorizedPage() {
           <CardHeader className="text-center">
             <CardTitle className="text-xl">Not Authorized</CardTitle>
             <CardDescription>
-              You don't have permission to access this page. This area is restricted to authorized administrators only.
+              You don&apos;t have permission to access this page. This area is restricted to authorized administrators only.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">

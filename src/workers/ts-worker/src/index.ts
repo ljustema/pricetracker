@@ -296,8 +296,7 @@ async function fetchAndProcessJob() {
         logStructured(job.id, 'info', 'TYPESCRIPT_COMPILATION', 'Compiling TypeScript script...');
         debugLog(`Compiling TypeScript script for job ${job.id}`);
 
-        // Declare the compilationResult variable at a higher scope
-        let compilationResult;
+        // Use the compilationResult variable declared at higher scope
 
         try {
           // Log the first 100 characters of the script for debugging

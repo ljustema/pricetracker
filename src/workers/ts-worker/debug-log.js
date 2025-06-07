@@ -1,6 +1,6 @@
 // Simple debug script to check if the worker is running with our changes
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
 
 // Create logs directory if it doesn't exist
 const logsDir = path.join(__dirname, 'logs');

@@ -1,10 +1,10 @@
 /**
  * Script to apply the database migration to fix the progress_messages type mismatch
  */
-require('dotenv').config();
-const { createClient } = require('@supabase/supabase-js');
-const fs = require('fs');
-const path = require('path');
+import 'dotenv/config';
+import { createClient } from '@supabase/supabase-js';
+import fs from 'fs';
+import path from 'path';
 
 // Create Supabase client
 const supabaseUrl = process.env.SUPABASE_URL;
