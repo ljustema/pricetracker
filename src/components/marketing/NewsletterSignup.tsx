@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
-import { Mail, Send, CheckCircle, AlertCircle, MailOpen } from "lucide-react";
+import { Send, CheckCircle, AlertCircle, MailOpen } from "lucide-react";
 
 interface NewsletterFormData {
   email: string;

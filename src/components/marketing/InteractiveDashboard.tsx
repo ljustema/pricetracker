@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import Image from 'next/image';
 
 type Tab = 'dashboard' | 'competitors' | 'products';
 
@@ -79,10 +80,13 @@ export default function InteractiveDashboard({ className = '' }: InteractiveDash
       <div className="px-6 pb-14 pt-6 relative">
         {/* Add a subtle animation for tab switching */}
         <div className={`relative transition-all duration-200 ease-in-out ${isTransitioning ? 'opacity-0 scale-[0.98]' : 'opacity-100 scale-100'}`}>
-          <img
+          <Image
             src={tabScreenshots[activeTab]}
             alt={tabAltText[activeTab]}
             className="rounded-lg shadow-md w-full"
+            width={1200}
+            height={800}
+            priority
           />
 
           {/* Add a subtle overlay to indicate interactivity */}

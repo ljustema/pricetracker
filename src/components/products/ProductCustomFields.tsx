@@ -62,10 +62,10 @@ export default function ProductCustomFields({
     }
   }, [productId]);
 
-  const getFieldValue = (fieldId: string): string => {
+  const getFieldValue = useCallback((fieldId: string): string => {
     const fieldValue = customFieldValues.find(cfv => cfv.custom_field_id === fieldId);
     return fieldValue?.value || '';
-  };
+  }, [customFieldValues]);
 
   const handleEdit = () => {
     // Initialize editing values with current values
@@ -87,7 +87,7 @@ export default function ProductCustomFields({
       setEditingValues(initialValues);
       setIsEditing(true);
     }
-  }, [customFields, alwaysEditable]);
+  }, [customFields, alwaysEditable, getFieldValue]);
 
   const handleCancel = () => {
     setEditingValues({});

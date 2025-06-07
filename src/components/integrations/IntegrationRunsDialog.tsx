@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -40,10 +40,10 @@ export function IntegrationRunsDialog({ open, onOpenChange, integration }: Integ
     if (open && integration) {
       fetchRuns();
     }
-  }, [open, integration]);
+  }, [open, integration, fetchRuns]);
 
   // Fetch integration runs
-  const fetchRuns = async () => {
+  const fetchRuns = useCallback(async () => {
     if (!integration) return;
 
     setLoading(true);
@@ -65,7 +65,7 @@ export function IntegrationRunsDialog({ open, onOpenChange, integration }: Integ
     } finally {
       setLoading(false);
     }
-  };
+  }, [integration, toast]);
 
   // Refresh integration runs
   const handleRefresh = async () => {

@@ -8,14 +8,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { 
-  ArrowLeft, 
-  User, 
-  Mail, 
-  Calendar, 
-  Crown, 
-  Shield, 
-  UserX, 
+import {
+  ArrowLeft,
+  User,
+  Crown,
+  Shield,
+  UserX,
   UserCheck,
   Package,
   Users,
@@ -68,9 +66,9 @@ interface UserDetailsViewProps {
   userId: string;
 }
 
-export function UserDetailsView({ userData, adminUser, userId }: UserDetailsViewProps) {
+export function UserDetailsView({ userData, adminUser, userId: _userId }: UserDetailsViewProps) {
   const { user, statistics, recentActivity, communications } = userData;
-  const [isUpdating, setIsUpdating] = useState(false);
+  const [_isUpdating, _setIsUpdating] = useState(false);
 
   // Format date
   const formatDate = (dateString: string) => {

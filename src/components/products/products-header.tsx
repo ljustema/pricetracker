@@ -6,14 +6,11 @@ import { UploadIcon, PlusIcon, GitMergeIcon, DownloadIcon } from "lucide-react";
 import CSVUploadForm from "./csv-upload-form";
 import CSVExportDialog from "./csv-export-dialog";
 import { useSearchParams } from "next/navigation";
-import { useToast } from "@/components/ui/use-toast";
-
 export default function ProductsHeader() {
   const [showCSVUploadForm, setShowCSVUploadForm] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const searchParams = useSearchParams();
-  const { toast } = useToast();
 
   const handleCSVUploadSuccess = () => {
     setShowCSVUploadForm(false);

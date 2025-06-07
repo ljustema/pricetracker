@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { ValidationProduct, ValidationLog } from "@/lib/services/scraper-types";
 import { AlertCircle, CheckCircle, XCircle, Loader2 } from "lucide-react";
 
