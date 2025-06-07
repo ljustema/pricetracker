@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -148,7 +148,7 @@ export default function SchedulingDashboard() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const { toast } = useToast();
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       const response = await fetch('/api/admin/scheduling');
@@ -167,7 +167,7 @@ export default function SchedulingDashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
 
   const executeAction = async (action: string, description: string) => {
     try {
@@ -209,7 +209,7 @@ export default function SchedulingDashboard() {
     // Auto-refresh every 30 seconds
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchData]);
 
   if (loading && !data) {
     return (

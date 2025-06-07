@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Edit, Save, X, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,9 +37,9 @@ export default function ProductCustomFields({
 
   useEffect(() => {
     fetchData();
-  }, [productId]);
+  }, [productId, fetchData]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       
@@ -60,7 +60,7 @@ export default function ProductCustomFields({
     } finally {
       setLoading(false);
     }
-  };
+  }, [productId]);
 
   const getFieldValue = (fieldId: string): string => {
     const fieldValue = customFieldValues.find(cfv => cfv.custom_field_id === fieldId);
