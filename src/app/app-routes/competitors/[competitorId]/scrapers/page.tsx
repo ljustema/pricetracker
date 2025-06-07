@@ -2,11 +2,11 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import ScraperManager from "@/components/scrapers/scraper-manager";
 import { redirect } from "next/navigation";
 
-// Updated interface to match standard Next.js server component props
+// Updated interface to match Next.js 15 server component props
 interface CompetitorScrapersPageProps {
-  params: {
+  params: Promise<{
     competitorId: string;
-  };
+  }>;
   // Optional: Add searchParams if needed
   // searchParams?: { [key: string]: string | string[] | undefined };
 }

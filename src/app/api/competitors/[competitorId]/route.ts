@@ -18,7 +18,7 @@ export async function GET(
     // Safely extract competitorId with error handling
     let competitorId;
     try {
-      const params = await context.params;
+      const params = await params;
       competitorId = params?.competitorId;
     } catch (error) {
       console.error("Error parsing params:", error);

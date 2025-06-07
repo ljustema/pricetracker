@@ -11,7 +11,7 @@ const CACHE_MAX_AGE = 60; // Cache for 60 seconds
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { productId: string } }
+  { params }: { params: Promise<{ productId: string }> }
 ) {
   try {
     // Get the authenticated user's session
@@ -23,7 +23,7 @@ export async function GET(
     const supabase = createSupabaseAdminClient();
 
     // Get the product ID from the route params
-    const { productId } = params;
+    const { productId } = await params;
 
     // Get time period from query params (default to 90 days)
     const url = new URL(request.url);

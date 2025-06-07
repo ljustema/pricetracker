@@ -14,7 +14,7 @@ const routeContext = "API:scrapers/ai/sessions/[sessionId]/approve-data-validati
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { sessionId: string } }
+  { params }: { params: Promise<{ sessionId: string }> }
 ) {
   try {
     // 1. Get the authenticated user

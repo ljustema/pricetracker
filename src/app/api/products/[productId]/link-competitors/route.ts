@@ -20,7 +20,7 @@ function ensureUUID(id: string): string {
 // POST handler to link competitors to a product
 export async function POST(
   request: NextRequest,
-  { params }: { params: { productId: string } }
+  { params }: { params: Promise<{ productId: string }> }
 ) {
   try {
     // Get the current user from the session
@@ -61,8 +61,8 @@ export async function POST(
     // Convert the NextAuth user ID to a UUID
     const userId = ensureUUID(session.user.id);
 
-    // Access productId directly from params
-    const productId = params.productId;
+    // Access productId from params
+    const { productId } = await params;
 
     // Check if the product exists and belongs to the user
     const { data: product, error: productError } = await supabase

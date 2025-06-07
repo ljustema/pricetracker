@@ -29,8 +29,8 @@ export async function POST(req: NextRequest, context: Params) {
 
     // In Next.js App Router, we need to await the params
     logger.debug(routeContext, 'Awaiting params from context');
-    const params = await context.params;
-    const { scraperId } = params;
+    const params = await params;
+    const { scraperId } = await params;
     logger.info(routeContext, `Processing full run for scraper ID: ${scraperId}`);
     
     if (!scraperId) {

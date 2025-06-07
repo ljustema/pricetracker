@@ -230,7 +230,7 @@ export async function PUT(
 // DELETE handler to delete a specific product
 export async function DELETE(
   _request: NextRequest,
-  context: { params: { productId: string } }
+  { params }: { params: Promise<{ productId: string }> }
 ) {
   try {
     // Get the current user from the session

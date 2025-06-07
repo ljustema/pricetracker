@@ -6,7 +6,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 // GET /api/custom-fields/[id] - Get a specific custom field
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -14,7 +14,7 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { id } = params;
+    const { id } = await params;
     const supabase = createSupabaseAdminClient();
 
     const { data: customField, error } = await supabase
@@ -51,7 +51,7 @@ export async function GET(
 // PUT /api/custom-fields/[id] - Update a custom field
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -59,7 +59,7 @@ export async function PUT(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { id } = params;
+    const { id } = await params;
     const body = await request.json();
     const { field_name, field_type, is_required, default_value, validation_rules } = body;
 
@@ -159,7 +159,7 @@ export async function PUT(
 // DELETE /api/custom-fields/[id] - Delete a custom field
 export async function DELETE(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -167,7 +167,7 @@ export async function DELETE(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { id } = params;
+    const { id } = await params;
     const supabase = createSupabaseAdminClient();
 
     // Check if the custom field exists and belongs to the user
