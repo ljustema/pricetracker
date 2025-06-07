@@ -438,7 +438,7 @@ async function fetchAndProcessJob() {
 
                     try {
                         const product = JSON.parse(line);
-                        if (typeof product === 'object' && product !== null && product.name && product.price !== undefined) {
+                        if (typeof product === 'object' && product !== null && product.name && product.competitor_price !== undefined) {
                             productsBuffer.push(product as ScrapedProductData);
                             productCount++;
 
@@ -1198,8 +1198,8 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
         competitor_id: p.competitor_id || competitorId, // Use product's competitor_id if available, otherwise use the one passed to the function
         // product_id will be handled by DB trigger/matching logic later if implemented
         name: p.name,
-        price: p.price,
-        currency_code: (p.currency ?? 'SEK').toUpperCase(), // Use currency_code instead of currency
+        competitor_price: p.competitor_price,
+        currency_code: (p.currency_code ?? 'SEK').toUpperCase(), // Use currency_code instead of currency
         url: p.url,
         image_url: p.image_url,
         sku: p.sku,
