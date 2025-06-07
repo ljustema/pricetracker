@@ -24,6 +24,7 @@ export async function updateIntegrationStatus(
 
   if (error) {
     console.error('Error updating integration status:', error);
-    throw new Error(`Failed to update integration status: ${error.message}`);
+    const errorMessage = error && typeof error === 'object' && 'message' in error ? (error as any).message : 'Unknown error';
+    throw new Error(`Failed to update integration status: ${errorMessage}`);
   }
 }

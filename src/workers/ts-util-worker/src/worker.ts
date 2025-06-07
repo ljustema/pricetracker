@@ -157,7 +157,7 @@ async function fetchAndProcessIntegrationJob() {
 
     // Check if this is a test run
     const isTestRun = job.configuration?.is_test_run === true;
-    const testRunLimit = job.configuration?.limit || 10;
+    const testRunLimit = Number(job.configuration?.limit) || 10;
     const activeOnly = job.configuration?.activeOnly !== false; // Default to true if not specified
 
     // Pass the activeOnly setting to the integration configuration if it's not already set
@@ -189,7 +189,7 @@ async function fetchAndProcessIntegrationJob() {
         console.log('API connection successful');
 
         // Update run status to processing
-        await supabase
+        const updateResult1 = await (supabase as any)
           .from('integration_runs')
           .update({
             status: 'processing',
@@ -203,13 +203,20 @@ async function fetchAndProcessIntegrationJob() {
           })
           .eq('id', job.id);
 
+        if (updateResult1.error) {
+          console.error('Failed to update integration run status:', updateResult1.error);
+        }
+
         // Fetch a limited number of products for the test run using the optimized getProducts method
         console.log(`Starting test run to fetch ${testRunLimit} random ${activeOnly ? 'active ' : ''}products...`);
-        const products = await client.getProducts({
+        const productsResult = await client.getProducts({
           limit: testRunLimit,
           activeOnly,
           random: true
         });
+
+        // Type assertion to ensure products is treated as an array
+        const products = productsResult as any[];
 
         console.log(`Fetched ${products.length} products for test run`);
 
@@ -219,7 +226,7 @@ async function fetchAndProcessIntegrationJob() {
         });
 
         // Store the test products in the run
-        await supabase
+        const updateResult2 = await (supabase as any)
           .from('integration_runs')
           .update({
             status: 'completed',
@@ -236,13 +243,17 @@ async function fetchAndProcessIntegrationJob() {
           })
           .eq('id', job.id);
 
+        if (updateResult2.error) {
+          console.error('Failed to update integration run with results:', updateResult2.error);
+        }
+
         console.log(`Test run completed successfully. Fetched ${products.length} products.`);
 
       } catch (error) {
         console.error('Test run failed:', error);
 
         // Update run status to failed
-        await supabase
+        const updateResult3 = await (supabase as any)
           .from('integration_runs')
           .update({
             status: 'failed',
@@ -257,6 +268,10 @@ async function fetchAndProcessIntegrationJob() {
             }])
           })
           .eq('id', job.id);
+
+        if (updateResult3.error) {
+          console.error('Failed to update integration run with error:', updateResult3.error);
+        }
       }
 
     } else {
@@ -268,7 +283,7 @@ async function fetchAndProcessIntegrationJob() {
         job.user_id,
         job.integration_id,
         job.id,
-        supabase
+        supabase as any // Type assertion to work around the unknown type
       );
 
       // Execute the sync process
@@ -289,7 +304,7 @@ async function fetchAndProcessIntegrationJob() {
     // Attempt to mark the job as failed if an error occurred after it was claimed
     if (job && job.id) { // Check if job was successfully fetched and potentially claimed
       try {
-        await supabase
+        const updateResult4 = await (supabase as any)
           .from('integration_runs')
           .update({
             status: 'failed',
@@ -297,6 +312,10 @@ async function fetchAndProcessIntegrationJob() {
             error_message: error instanceof Error ? error.message : 'Unhandled worker error',
           })
           .eq('id', job.id);
+
+        if (updateResult4.error) {
+          console.error('Failed to update integration run with unhandled error:', updateResult4.error);
+        }
         console.error(`Job ${job.id} marked as failed due to unhandled worker error.`);
       } catch (updateError) {
         console.error(`Failed to update job ${job.id} status after unhandled error:`, updateError);

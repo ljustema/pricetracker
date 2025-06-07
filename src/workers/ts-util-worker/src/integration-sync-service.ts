@@ -125,7 +125,8 @@ export class IntegrationSyncService {
 
     if (error) {
       console.error('Error updating run status:', error);
-      throw new Error(`Failed to update run status: ${error.message}`);
+      const errorMessage = error && typeof error === 'object' && 'message' in error ? (error as any).message : 'Unknown error';
+      throw new Error(`Failed to update run status: ${errorMessage}`);
     }
   }
 
@@ -200,16 +201,18 @@ export class IntegrationSyncService {
     // Check if the temp_integrations_scraped_data table has any records for this run
     const { data: stagedCount, error: countError } = await this.supabase
       .from('temp_integrations_scraped_data')
-      .select('id', { count: 'exact' })
+      .select('id')
       .eq('integration_run_id', this.runId);
 
     if (countError) {
-      this.log('error', 'DB_COUNT_ERROR', `Error counting staged products: ${countError.message}`);
+      const errorMessage = countError && typeof countError === 'object' && 'message' in countError ? (countError as any).message : 'Unknown error';
+      this.log('error', 'DB_COUNT_ERROR', `Error counting staged products: ${errorMessage}`);
     } else {
-      this.log('info', 'DB_COUNT', `Staged ${stagedCount?.length || 0} products for run ${this.runId}`);
+      const countArray = stagedCount as any[];
+      this.log('info', 'DB_COUNT', `Staged ${countArray?.length || 0} products for run ${this.runId}`);
 
       // Set the processed count to the number of staged products
-      productsProcessed = stagedCount?.length || 0;
+      productsProcessed = countArray?.length || 0;
     }
 
     // Call the process_pending_integration_products function one final time to ensure all products are processed
@@ -220,7 +223,8 @@ export class IntegrationSyncService {
         .rpc('process_pending_integration_products', { run_id: this.runId });
 
       if (finalProcessError) {
-        this.log('error', 'FINAL_PROCESSING_ERROR', `Error in final processing: ${finalProcessError.message}`);
+        const errorMessage = finalProcessError && typeof finalProcessError === 'object' && 'message' in finalProcessError ? (finalProcessError as any).message : 'Unknown error';
+        this.log('error', 'FINAL_PROCESSING_ERROR', `Error in final processing: ${errorMessage}`);
       } else {
         this.log('info', 'FINAL_PROCESSING_COMPLETE', `Final processing complete: ${JSON.stringify(finalProcessResult)}`);
       }
@@ -240,12 +244,14 @@ export class IntegrationSyncService {
         .eq('integration_run_id', this.runId);
 
       if (statsError) {
-        this.log('error', 'DB_STATS_ERROR', `Error getting product statistics: ${statsError.message}`);
+        const errorMessage = statsError && typeof statsError === 'object' && 'message' in statsError ? (statsError as any).message : 'Unknown error';
+        this.log('error', 'DB_STATS_ERROR', `Error getting product statistics: ${errorMessage}`);
       } else if (stats) {
         // Count products by status
-        const processed = stats.filter((p: { status: string }) => p.status === 'processed').length;
-        const errors = stats.filter((p: { status: string }) => p.status === 'error').length;
-        const pending = stats.filter((p: { status: string }) => p.status === 'pending').length;
+        const statsArray = stats as any[];
+        const processed = statsArray.filter((p: { status: string }) => p.status === 'processed').length;
+        const errors = statsArray.filter((p: { status: string }) => p.status === 'error').length;
+        const pending = statsArray.filter((p: { status: string }) => p.status === 'pending').length;
 
         // Estimate created vs updated (we don't have this info directly)
         // For now, assume all processed products are created
@@ -322,12 +328,14 @@ export class IntegrationSyncService {
 
     console.log(`Insert response: ${insertError ? 'ERROR' : 'SUCCESS'}`);
     if (insertData) {
-      console.log(`Inserted ${insertData.length} rows`);
+      const insertArray = insertData as any[];
+      console.log(`Inserted ${insertArray.length} rows`);
     }
 
     if (insertError) {
-      this.log('error', 'STAGING_ERROR', `Error staging batch ${batchNumber}: ${insertError.message}`);
-      throw new Error(`Failed to stage products: ${insertError.message}`);
+      const errorMessage = insertError && typeof insertError === 'object' && 'message' in insertError ? (insertError as any).message : 'Unknown error';
+      this.log('error', 'STAGING_ERROR', `Error staging batch ${batchNumber}: ${errorMessage}`);
+      throw new Error(`Failed to stage products: ${errorMessage}`);
     }
 
     this.log('info', 'BATCH_STAGED', `Staged batch ${batchNumber}/${totalBatches} (${batch.length} products)`);
@@ -341,7 +349,8 @@ export class IntegrationSyncService {
         .rpc('process_pending_integration_products', { run_id: this.runId });
 
       if (processError) {
-        this.log('error', 'BATCH_PROCESSING_ERROR', `Error processing batch ${batchNumber}: ${processError.message}`);
+        const errorMessage = processError && typeof processError === 'object' && 'message' in processError ? (processError as any).message : 'Unknown error';
+        this.log('error', 'BATCH_PROCESSING_ERROR', `Error processing batch ${batchNumber}: ${errorMessage}`);
       } else {
         this.log('info', 'BATCH_PROCESSED', `Processed batch ${batchNumber}/${totalBatches}: ${JSON.stringify(processResult)}`);
       }
@@ -367,20 +376,24 @@ export class IntegrationSyncService {
         .eq('user_id', this.userId)
         .single();
 
-      if (integrationError) {
-        throw new Error(`Failed to fetch integration: ${integrationError.message}`);
+      if (integrationError || !integration) {
+        const errorMessage = integrationError && typeof integrationError === 'object' && 'message' in integrationError ? (integrationError as any).message : 'Integration not found';
+        throw new Error(`Failed to fetch integration: ${errorMessage}`);
       }
+
+      // Type assertion for the integration data
+      const typedIntegration = integration as Integration;
 
       // Execute the appropriate sync method based on the platform
       let result: SyncResult;
 
-      switch (integration.platform.toLowerCase()) {
+      switch (typedIntegration.platform.toLowerCase()) {
         case 'prestashop':
-          result = await this.syncPrestashop(integration);
+          result = await this.syncPrestashop(typedIntegration);
           break;
 
         default:
-          throw new Error(`Unsupported platform: ${integration.platform}`);
+          throw new Error(`Unsupported platform: ${typedIntegration.platform}`);
       }
 
       // Update run status to completed
@@ -392,7 +405,7 @@ export class IntegrationSyncService {
 
       // Update integration status
       await updateIntegrationStatus(
-        this.supabase,
+        this.supabase as any,
         this.integrationId,
         'active',
         'success'
@@ -410,7 +423,7 @@ export class IntegrationSyncService {
 
       // Update integration status
       await updateIntegrationStatus(
-        this.supabase,
+        this.supabase as any,
         this.integrationId,
         'error',
         'failed'
