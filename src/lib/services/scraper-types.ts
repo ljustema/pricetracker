@@ -26,7 +26,7 @@ export interface ScraperConfig {
   selectors?: {
     product: string;
     name: string;
-    price: string;
+    competitor_price: string; // Updated field name to match new pricing structure
     image?: string;
     sku?: string;
     brand?: string;
@@ -60,8 +60,8 @@ export interface ScrapedProduct {
   competitor_id: string;
   product_id?: string; // Optional, will be set during matching
   name: string;
-  price: number;
-  currency: string;
+  competitor_price: number; // Updated field name to match new pricing structure
+  currency_code: string; // Updated field name to match new pricing structure
   image_url?: string;
   sku?: string;
   brand?: string;
@@ -74,8 +74,8 @@ export interface ScrapedProduct {
 // Interface for scraped product data from Python scripts
 export interface ScrapedProductData {
   name: string;
-  price: number;
-  currency?: string;
+  competitor_price: number; // Updated field name to match new pricing structure
+  currency_code?: string; // Updated field name to match new pricing structure
   image_url?: string;
   sku?: string;
   brand?: string;

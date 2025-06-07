@@ -125,8 +125,8 @@ If using an API-based approach, also include a function to make the API request 
               // Extract product data
               return {
                 name: 'Test Product',
-                price: 19.99,
-                currency: 'USD',
+                competitor_price: 19.99,
+                currency_code: 'USD',
                 sku: 'SKU123',
                 brand: 'Test Brand',
                 url,
@@ -154,8 +154,8 @@ If using an API-based approach, also include a function to make the API request 
               // Extract product data
               return {
                 name: 'Test Product',
-                price: 19.99,
-                currency: 'USD',
+                competitor_price: 19.99,
+                currency_code: 'USD',
                 sku: 'SKU123',
                 brand: 'Test Brand',
                 url,
@@ -203,8 +203,8 @@ If using an API-based approach, also include a function to make the API request 
         products: [
           {
             name: 'Test Product 1',
-            price: 19.99,
-            currency: 'USD',
+            competitor_price: 19.99,
+            currency_code: 'USD',
             sku: 'SKU123',
             brand: 'Test Brand',
             url: 'https://example.com/product1',
@@ -212,8 +212,8 @@ If using an API-based approach, also include a function to make the API request 
           },
           {
             name: 'Test Product 2',
-            price: 29.99,
-            currency: 'USD',
+            competitor_price: 29.99,
+            currency_code: 'USD',
             sku: 'SKU456',
             brand: 'Test Brand',
             url: 'https://example.com/product2',
@@ -240,8 +240,8 @@ import { chromium } from 'playwright';
 interface ScrapedProductData {
   url: string;
   name: string;
-  price: number | null;
-  currency: string | null;
+  competitor_price: number | null; // Updated field name to match new pricing structure
+  currency_code: string | null; // Updated field name to match new pricing structure
   sku?: string | null;
   brand?: string | null;
   ean?: string | null;

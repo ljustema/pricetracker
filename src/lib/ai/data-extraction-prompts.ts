@@ -30,8 +30,8 @@ Focus on implementing the most appropriate data extraction strategy based on the
 
 Your code must extract these product fields:
 - name (string, required): The product name
-- price (number, required): The product price as a number
-- currency (string): The currency code (default to "SEK" if not found)
+- competitor_price (number, required): The product price as a number
+- currency_code (string): The currency code (default to "SEK" if not found)
 - url (string, required): The product URL
 - sku (string, optional): The product SKU/article number
 - brand (string, optional): The product brand/manufacturer
@@ -92,7 +92,7 @@ ${userFeedback ? `User feedback to incorporate: ${userFeedback}` : ''}
 Generate a TypeScript function called 'extractProductData' that takes a Playwright page object and a URL as parameters and returns a Promise resolving to a product data object.
 
 The function should:
-1. Extract all required product data fields (name, price, currency, SKU, brand, EAN, image URL, etc.)
+1. Extract all required product data fields (name, competitor_price, currency_code, SKU, brand, EAN, image URL, etc.)
 2. Handle different page layouts and variations
 3. Include error handling and logging
 4. Return a properly formatted product data object
@@ -109,8 +109,8 @@ async function extractProductData(page: any, url: string): Promise<ScrapedProduc
 interface ScrapedProductData {
   url: string;
   name: string;
-  price: number | null;
-  currency: string | null;
+  competitor_price: number | null; // Updated field name to match new pricing structure
+  currency_code: string | null; // Updated field name to match new pricing structure
   sku?: string | null;
   brand?: string | null;
   ean?: string | null;
