@@ -82,7 +82,7 @@ export async function GET(_request: NextRequest) {
 
         const totalProducts = products.length;
         const productIds = products.map(p => p.id);
-        const productPrices = products.reduce((acc, p) => {
+        const productPrices = products.reduce((acc: Record<string, number>, p) => {
           acc[p.id] = p.our_retail_price;
           return acc;
         }, {});
@@ -90,7 +90,7 @@ export async function GET(_request: NextRequest) {
         // Get latest price changes for these products
         // Process in chunks to avoid URL size limits
         const CHUNK_SIZE = 20;
-        let allPriceChanges = [];
+        let allPriceChanges: { product_id: string; competitor_id: string; new_competitor_price: number; changed_at: string }[] = [];
         let hasError = false;
 
         for (let i = 0; i < productIds.length; i += CHUNK_SIZE) {
@@ -115,7 +115,7 @@ export async function GET(_request: NextRequest) {
           }
 
           if (priceChangesChunk) {
-            allPriceChanges = [...allPriceChanges, ...priceChangesChunk];
+            allPriceChanges = [...allPriceChanges, ...(priceChangesChunk as unknown as { product_id: string; competitor_id: string; new_competitor_price: number; changed_at: string }[])];
           }
         }
 
@@ -132,7 +132,7 @@ export async function GET(_request: NextRequest) {
         }
 
         // Get the latest price for each product-competitor pair
-        const latestPrices = new Map();
+        const latestPrices = new Map<string, number>();
 
         allPriceChanges.forEach(pc => {
           const key = `${pc.product_id}_${pc.competitor_id}`;
@@ -153,7 +153,7 @@ export async function GET(_request: NextRequest) {
           if (!ourPrice) continue;
 
           // Find all competitor prices for this product
-          const competitorPrices = [];
+          const competitorPrices: number[] = [];
 
           for (const [key, price] of latestPrices.entries()) {
             if (key.startsWith(`${productId}_`)) {

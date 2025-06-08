@@ -89,7 +89,7 @@ export async function GET(_request: NextRequest) {
           // Get our prices for these products
           // Split into chunks to avoid URL size limits
           const CHUNK_SIZE = 20;
-          let allProducts = [];
+          let allProducts: { id: string; our_retail_price: number }[] = [];
           
           for (let i = 0; i < productIds.length; i += CHUNK_SIZE) {
             const chunk = productIds.slice(i, i + CHUNK_SIZE);
@@ -106,7 +106,7 @@ export async function GET(_request: NextRequest) {
             }
 
             if (productsChunk) {
-              allProducts = [...allProducts, ...productsChunk];
+              allProducts = [...allProducts, ...(productsChunk as unknown as { id: string; our_retail_price: number }[])];
             }
           }
 

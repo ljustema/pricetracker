@@ -27,7 +27,7 @@ export async function POST(
     // Verify conversation exists
     const { data: conversation, error: conversationError } = await supabase
       .from('support_conversations')
-      .select('id, user_id, status')
+      .select('id, user_id, status, subject')
       .eq('id', conversationId)
       .single();
 

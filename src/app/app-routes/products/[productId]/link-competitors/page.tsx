@@ -26,13 +26,7 @@ interface Product {
   brand?: string;
 }
 
-interface LinkCompetitorsPageProps {
-  params: {
-    productId: string;
-  };
-}
-
-export default function LinkCompetitorsPage({ params: _params }: LinkCompetitorsPageProps) {
+export default function LinkCompetitorsPage() {
   const router = useRouter();
   const { data: session } = useSession();
   const [isLoading, setIsLoading] = useState(false);

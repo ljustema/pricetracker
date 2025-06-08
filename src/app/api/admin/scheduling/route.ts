@@ -73,7 +73,7 @@ export async function GET(_request: NextRequest) {
     }
 
     // Get user profiles for recent jobs
-    const recentJobUserIds = recentJobsRaw?.map(job => job.scrapers.user_id) || [];
+    const recentJobUserIds = recentJobsRaw?.map(job => (job.scrapers as unknown as { user_id: string }).user_id) || [];
     const { data: recentJobUserProfiles, error: recentJobUsersError } = await supabase
       .from('user_profiles')
       .select('id, name, email')
@@ -92,7 +92,7 @@ export async function GET(_request: NextRequest) {
       ...job,
       scrapers: {
         ...job.scrapers,
-        user_profiles: recentJobUserProfiles?.find(u => u.id === job.scrapers.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
+        user_profiles: recentJobUserProfiles?.find(u => u.id === (job.scrapers as unknown as { user_id: string }).user_id) || { name: 'Unknown', email: 'unknown@example.com' }
       }
     }));
 
@@ -120,7 +120,7 @@ export async function GET(_request: NextRequest) {
     }
 
     // Get user profiles for recent integration runs
-    const integrationRunUserIds = recentIntegrationsRaw?.map(run => run.integrations.user_id) || [];
+    const integrationRunUserIds = recentIntegrationsRaw?.map(run => (run.integrations as unknown as { user_id: string }).user_id) || [];
     const { data: integrationRunUserProfiles, error: integrationRunUsersError } = await supabase
       .from('user_profiles')
       .select('id, name, email')
@@ -139,7 +139,7 @@ export async function GET(_request: NextRequest) {
       ...run,
       integrations: {
         ...run.integrations,
-        user_profiles: integrationRunUserProfiles?.find(u => u.id === run.integrations.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
+        user_profiles: integrationRunUserProfiles?.find(u => u.id === (run.integrations as unknown as { user_id: string }).user_id) || { name: 'Unknown', email: 'unknown@example.com' }
       }
     }));
 

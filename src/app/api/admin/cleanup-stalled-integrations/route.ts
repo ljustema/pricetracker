@@ -95,7 +95,7 @@ export async function GET(_req: NextRequest) {
       potentiallyStalledRuns: potentiallyStalled.length,
       runs: stalledRuns?.map(run => ({
         id: run.id,
-        integration_name: run.integrations?.name || 'Unknown',
+        integration_name: (run.integrations as unknown as { name: string } | null)?.name || 'Unknown',
         started_at: run.started_at,
         last_progress_update: run.last_progress_update,
         products_processed: run.products_processed,

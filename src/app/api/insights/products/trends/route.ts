@@ -62,9 +62,9 @@ export async function GET(request: NextRequest) {
     
     priceChanges.forEach(priceChange => {
       const productId = priceChange.product_id;
-      const productName = priceChange.products?.name || 'Unknown Product';
+      const productName = (priceChange.products as unknown as { name: string } | null)?.name || 'Unknown Product';
       const competitorId = priceChange.competitor_id;
-      const _competitorName = priceChange.competitors?.name || 'Unknown Competitor';
+      const _competitorName = (priceChange.competitors as unknown as { name: string } | null)?.name || 'Unknown Competitor';
       const priceChangePercentage = priceChange.price_change_percentage;
       const changedAt = new Date(priceChange.changed_at);
 

@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
         if (!line.trim()) continue;
 
         // Simple CSV parsing - handle quoted fields
-        const values = [];
+        const values: string[] = [];
         let currentValue = '';
         let inQuotes = false;
 

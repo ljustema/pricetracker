@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
     
     data.forEach(priceChange => {
       const competitorId = priceChange.competitor_id;
-      const competitorName = priceChange.competitors?.name || 'Unknown';
+      const competitorName = (priceChange.competitors as unknown as { name: string } | null)?.name || 'Unknown';
       const date = new Date(priceChange.changed_at);
       const dayOfWeek = date.getDay(); // 0 = Sunday, 1 = Monday, etc.
       
@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
     const processedData = Array.from(competitorDays.values()).map(item => ({
       competitor_id: item.competitor_id,
       competitor_name: item.competitor_name,
-      days: item.days.map((count, index) => ({
+      days: item.days.map((count: number, index: number) => ({
         day: dayNames[index],
         count
       }))

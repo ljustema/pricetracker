@@ -283,7 +283,7 @@ async function fetchAndProcessIntegrationJob() {
         job.user_id,
         job.integration_id,
         job.id,
-        supabase as { from: (table: string) => { update: (data: Record<string, unknown>) => { eq: (column: string, value: string) => Promise<{ error: unknown }> } }; select: (columns?: string) => { eq: (column: string, value: string) => { single: () => Promise<{ data: unknown; error: unknown }> } }; insert: (data: Record<string, unknown>[]) => { select: () => Promise<{ data: unknown[]; error: unknown }> } }; rpc: (fn: string, params?: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }> } // Type assertion to work around the unknown type
+        supabase as unknown // Type assertion to work around the unknown type
       );
 
       // Execute the sync process

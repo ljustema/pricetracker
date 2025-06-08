@@ -217,7 +217,7 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                         ? priceChange.new_our_retail_price
                         : priceChange.new_competitor_price;
 
-                      const priceDiff = product.our_retail_price
+                      const priceDiff = product.our_retail_price && currentPrice
                         ? ((currentPrice - product.our_retail_price) / product.our_retail_price) * 100
                         : 0;
 

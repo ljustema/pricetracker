@@ -59,7 +59,7 @@ export async function GET(_request: NextRequest) {
       .not('competitor_id', 'is', null);
 
     // Calculate unmatched products
-    const unmatchedProducts = totalProducts - matchedProducts;
+    const unmatchedProducts = (totalProducts || 0) - (matchedProducts || 0);
 
     // Get matching status by brand
     const { data: products, error: productsError } = await supabase
@@ -105,7 +105,7 @@ export async function GET(_request: NextRequest) {
       if (!product.brand_id) return;
       
       const brandId = product.brand_id;
-      const brandName = product.brands?.name || 'Unknown Brand';
+      const brandName = (product.brands as unknown as { name: string } | null)?.name || 'Unknown Brand';
       const isMatched = matchedProductIds.has(product.id);
       
       if (!brandMatchingStatus.has(brandId)) {
@@ -139,10 +139,10 @@ export async function GET(_request: NextRequest) {
 
     // Add cache headers to the response
     const response = NextResponse.json({
-      total_products: totalProducts,
-      matched_products: matchedProducts,
+      total_products: totalProducts || 0,
+      matched_products: matchedProducts || 0,
       unmatched_products: unmatchedProducts,
-      matching_percentage: totalProducts > 0 ? (matchedProducts / totalProducts) * 100 : 0,
+      matching_percentage: (totalProducts || 0) > 0 ? ((matchedProducts || 0) / (totalProducts || 0)) * 100 : 0,
       brand_matching: brandMatching
     });
     response.headers.set('Cache-Control', `public, max-age=${CACHE_MAX_AGE}`);

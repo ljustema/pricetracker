@@ -55,8 +55,8 @@ export async function GET(request: NextRequest) {
 
     priceChanges.forEach(priceChange => {
       const productId = priceChange.product_id;
-      const productName = priceChange.products?.name || 'Unknown Product';
-      const ourPrice = priceChange.products?.our_retail_price || null;
+      const productName = (priceChange.products as unknown as { name: string; our_retail_price: number } | null)?.name || 'Unknown Product';
+      const ourPrice = (priceChange.products as unknown as { name: string; our_retail_price: number } | null)?.our_retail_price || null;
 
       if (!productCounts.has(productId)) {
         productCounts.set(productId, {

@@ -122,13 +122,13 @@ export async function GET(request: NextRequest) {
       }
 
       // Count products by brand
-      const brandCounts = new Map();
+      const brandCounts = new Map<string, { brand_id: string; brand_name: string; product_count: number }>();
       
       products.forEach(product => {
         if (!product.brand_id) return;
         
         const brandId = product.brand_id;
-        const brandName = product.brands?.name || 'Unknown';
+        const brandName = (product.brands as unknown as { name: string } | null)?.name || 'Unknown';
         
         if (!brandCounts.has(brandId)) {
           brandCounts.set(brandId, {
@@ -138,7 +138,7 @@ export async function GET(request: NextRequest) {
           });
         }
         
-        brandCounts.get(brandId).product_count += 1;
+        brandCounts.get(brandId)!.product_count += 1;
       });
 
       // Convert to array, sort by count, and limit
@@ -191,7 +191,7 @@ export async function GET(request: NextRequest) {
 
           if (!functionError && functionData) {
             // Process the data to get top brand by product count
-            const brandCounts = new Map();
+            const brandCounts = new Map<string, { brand_id: string; brand_name: string; product_count: number }>();
             
             functionData.forEach((item: BrandForCompetitorItem) => {
               const brandId = item.brand_id;
@@ -205,7 +205,7 @@ export async function GET(request: NextRequest) {
                 });
               }
               
-              brandCounts.get(brandId).product_count += 1;
+              brandCounts.get(brandId)!.product_count += 1;
             });
 
             // Convert to array, sort by count, and get top brand
@@ -271,13 +271,13 @@ export async function GET(request: NextRequest) {
           }
 
           // Count products by brand
-          const brandCounts = new Map();
+          const brandCounts = new Map<string, { brand_id: string; brand_name: string; product_count: number }>();
           
           products.forEach(product => {
             if (!product.brand_id) return;
             
             const brandId = product.brand_id;
-            const brandName = product.brands?.name || 'Unknown';
+            const brandName = (product.brands as unknown as { name: string } | null)?.name || 'Unknown';
             
             if (!brandCounts.has(brandId)) {
               brandCounts.set(brandId, {
@@ -287,7 +287,7 @@ export async function GET(request: NextRequest) {
               });
             }
             
-            brandCounts.get(brandId).product_count += 1;
+            brandCounts.get(brandId)!.product_count += 1;
           });
 
           // Convert to array, sort by count, and get top brand

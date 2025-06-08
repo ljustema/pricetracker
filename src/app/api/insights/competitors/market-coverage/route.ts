@@ -76,7 +76,7 @@ export async function GET(_request: NextRequest) {
         }
 
         // Calculate coverage percentage
-        const coveragePercentage = totalProducts ? (productCount / totalProducts) * 100 : 0;
+        const coveragePercentage = totalProducts ? ((productCount || 0) / totalProducts) * 100 : 0;
 
         return {
           competitor_id: competitor.id,

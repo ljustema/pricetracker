@@ -102,7 +102,7 @@ export async function GET(
         .in('id', integrationIds as string[]);
 
       if (!integrationsError && integrationsData) {
-        integrations = integrationsData.reduce((acc, integration) => {
+        integrations = integrationsData.reduce((acc: Record<string, string>, integration) => {
           acc[integration.id] = integration.name;
           return acc;
         }, {});
@@ -116,9 +116,9 @@ export async function GET(
       product,
       priceChanges: priceChanges.map(pc => ({
         ...pc,
-        source_name: pc.integration_id 
-          ? (integrations[pc.integration_id] || 'Unknown Integration')
-          : (pc.competitors?.name || 'Unknown Competitor'),
+        source_name: pc.integration_id
+          ? ((integrations as Record<string, string>)[pc.integration_id] || 'Unknown Integration')
+          : ((pc.competitors as unknown as { name: string } | null)?.name || 'Unknown Competitor'),
         source_type: pc.integration_id ? 'integration' : 'competitor'
       }))
     });
