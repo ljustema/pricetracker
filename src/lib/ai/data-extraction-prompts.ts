@@ -78,7 +78,7 @@ ${analysisResult.productSelectors && Object.keys(analysisResult.productSelectors
 - List item: ${analysisResult.productSelectors.listItem || 'Not identified'}
 - Name: ${analysisResult.productSelectors.name || 'Not identified'}
 - Price: ${analysisResult.productSelectors.price || 'Not identified'}
-- Image: ${analysisResult.productSelectors.image || 'Not identified'}
+- Image: ${analysisResult.productSelectors.imageUrl || 'Not identified'}
 - Link: ${analysisResult.productSelectors.link || 'Not identified'}`
   : 'No product selectors identified.'}
 

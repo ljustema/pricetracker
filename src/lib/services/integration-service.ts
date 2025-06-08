@@ -183,7 +183,7 @@ export async function updateIntegration(
     dataToUpdate.api_key = integrationData.api_key;
   }
 
-  if (integrationData.status !== undefined) {
+  if (integrationData.status !== undefined && integrationData.status !== 'pending_test_run') {
     dataToUpdate.status = integrationData.status;
   }
 

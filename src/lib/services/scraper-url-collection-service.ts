@@ -45,14 +45,14 @@ Site structure information:
 - Sitemaps: ${analysisResult.sitemapUrls.length > 0 ? analysisResult.sitemapUrls.join(', ') : 'None found'}
 - Brand pages: ${analysisResult.brandPages.length > 0 ? analysisResult.brandPages.slice(0, 5).join(', ') + (analysisResult.brandPages.length > 5 ? '...' : '') : 'None found'}
 - Category pages: ${analysisResult.categoryPages.length > 0 ? analysisResult.categoryPages.slice(0, 5).join(', ') + (analysisResult.categoryPages.length > 5 ? '...' : '') : 'None found'}
-- Product listing pages: ${analysisResult.productListingPages.length > 0 ? analysisResult.productListingPages.slice(0, 5).join(', ') + (analysisResult.productListingPages.length > 5 ? '...' : '') : 'None found'}
+- Product listing pages: ${analysisResult.productPages.length > 0 ? analysisResult.productPages.slice(0, 5).join(', ') + (analysisResult.productPages.length > 5 ? '...' : '') : 'None found'}
 
 ${analysisResult.productSelectors && Object.keys(analysisResult.productSelectors).length > 0 ?
   `Product selectors:
 - List item: ${analysisResult.productSelectors.listItem || 'Not identified'}
 - Name: ${analysisResult.productSelectors.name || 'Not identified'}
 - Price: ${analysisResult.productSelectors.price || 'Not identified'}
-- Image: ${analysisResult.productSelectors.image || 'Not identified'}
+- Image: ${analysisResult.productSelectors.imageUrl || 'Not identified'}
 - Link: ${analysisResult.productSelectors.link || 'Not identified'}`
   : 'No product selectors identified.'}
 

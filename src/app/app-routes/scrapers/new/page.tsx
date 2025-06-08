@@ -285,8 +285,7 @@ export default function NewScraperPage() {
       case 'professional-service':
         return (
           <ProfessionalScraperForm
-            competitorId={targetType === 'competitor' ? selectedTargetId : undefined}
-            supplierId={targetType === 'supplier' ? selectedTargetId : undefined}
+            competitorId={targetType === 'competitor' ? selectedTargetId || '' : ''}
             onCancel={handleCancel}
           />
         );

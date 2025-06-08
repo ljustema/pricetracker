@@ -68,6 +68,10 @@ export default function ScraperRunProgress({
     }
   }, [progress]);
 
+  // Store the previous phase and batch info to prevent UI flickering
+  const [prevPhase, setPrevPhase] = useState<string>('');
+  const [maxBatchValues, setMaxBatchValues] = useState<{current: number, total: number | null}>({current: 0, total: null});
+
   // Determine the current phase of the scraper
   const determinePhase = useCallback((statusData = progress) => {
     if (!statusData) return { phase: 'initializing', phaseText: 'Initializing...' };
@@ -182,10 +186,6 @@ export default function ScraperRunProgress({
 
     return 0;
   }, [progress, simulatedProgress, determinePhase, maxBatchValues.total]);
-
-  // Store the previous phase and batch info to prevent UI flickering
-  const [prevPhase, setPrevPhase] = useState<string>('');
-  const [maxBatchValues, setMaxBatchValues] = useState<{current: number, total: number | null}>({current: 0, total: null});
 
   // Poll for status updates
   const fetchStatus = useCallback(async () => {

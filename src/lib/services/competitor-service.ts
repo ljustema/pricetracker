@@ -1,5 +1,5 @@
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import { ensureUUID } from "./product-service"; // Assuming ensureUUID is reusable
+import { ensureUUID } from "@/lib/utils/uuid";
 
 export interface Competitor {
   id: string;

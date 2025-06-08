@@ -29,7 +29,7 @@ export default function EditSupplierPage({ params }: EditSupplierPageProps) {
     api_url: "",
     login_url: "",
     price_file_url: "",
-    sync_frequency: "weekly" as const,
+    sync_frequency: "weekly" as "manual" | "daily" | "weekly" | "monthly",
     is_active: true,
   });
 

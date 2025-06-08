@@ -63,37 +63,6 @@ export default function AiScraperWizard({
     }
   }, [competitorId]);
 
-  // Fetch session data if sessionId is provided
-  useEffect(() => {
-    if (sessionId) {
-      fetchSession(sessionId);
-    } else {
-      setLoading(false);
-    }
-  }, [sessionId, fetchSession]);
-
-  // Fetch competitor data to get the website URL
-  const fetchCompetitorData = async (id: string) => {
-    try {
-      setFetchingCompetitor(true);
-      const response = await fetch(`/api/competitors/${id}`);
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch competitor data");
-      }
-
-      const data = await response.json();
-      if (data.website) {
-        // Set the URL state directly to the competitor's website
-        setUrl(data.website);
-      }
-      setFetchingCompetitor(false);
-    } catch (err) {
-      console.error("Error fetching competitor data:", err);
-      setFetchingCompetitor(false);
-    }
-  };
-
   // Fetch session data from the API
   const fetchSession = useCallback(async (id: string) => {
     try {
@@ -138,6 +107,37 @@ export default function AiScraperWizard({
       setLoading(false);
     }
   }, [currentPhase]);
+
+  // Fetch session data if sessionId is provided
+  useEffect(() => {
+    if (sessionId) {
+      fetchSession(sessionId);
+    } else {
+      setLoading(false);
+    }
+  }, [sessionId, fetchSession]);
+
+  // Fetch competitor data to get the website URL
+  const fetchCompetitorData = async (id: string) => {
+    try {
+      setFetchingCompetitor(true);
+      const response = await fetch(`/api/competitors/${id}`);
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch competitor data");
+      }
+
+      const data = await response.json();
+      if (data.website) {
+        // Set the URL state directly to the competitor's website
+        setUrl(data.website);
+      }
+      setFetchingCompetitor(false);
+    } catch (err) {
+      console.error("Error fetching competitor data:", err);
+      setFetchingCompetitor(false);
+    }
+  };
 
   // Create a new session
   const createSession = async (websiteUrl: string) => {
@@ -499,27 +499,7 @@ export default function AiScraperWizard({
           />
         );
 
-      // Legacy phases - handle for backward compatibility
-      case "url-collection" as const:
-        console.warn("Legacy phase 'url-collection' detected, redirecting to 'data-validation'");
-        setCurrentPhase("data-validation");
-        return (
-          <AiDataValidation
-            session={session}
-            onComplete={() => handlePhaseComplete("data-validation", "assembly")}
-            onBack={() => setCurrentPhase("analysis")}
-          />
-        );
-      case "data-extraction" as const:
-        console.warn("Legacy phase 'data-extraction' detected, redirecting to 'data-validation'");
-        setCurrentPhase("data-validation");
-        return (
-          <AiDataValidation
-            session={session}
-            onComplete={() => handlePhaseComplete("data-validation", "assembly")}
-            onBack={() => setCurrentPhase("analysis")}
-          />
-        );
+
       default:
         console.error("Unknown phase:", currentPhase);
         return <div>Unknown phase: {currentPhase}. <Button onClick={() => setCurrentPhase("analysis")}>Reset to Analysis Phase</Button></div>;

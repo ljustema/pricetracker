@@ -151,14 +151,14 @@ export class CustomFieldsClientService {
 
       case 'url':
         try {
-          new URL(value);
+          new URL(String(value));
         } catch {
           return { isValid: false, error: `${field.field_name} must be a valid URL` };
         }
         break;
 
       case 'date':
-        const dateValue = new Date(value);
+        const dateValue = new Date(String(value));
         if (isNaN(dateValue.getTime())) {
           return { isValid: false, error: `${field.field_name} must be a valid date` };
         }
@@ -172,16 +172,17 @@ export class CustomFieldsClientService {
     // Apply validation rules if they exist
     if (field.validation_rules) {
       const rules = field.validation_rules;
-      
-      if (rules.min_length && value.length < rules.min_length) {
+      const stringValue = String(value);
+
+      if (rules.min_length && stringValue.length < rules.min_length) {
         return { isValid: false, error: `${field.field_name} must be at least ${rules.min_length} characters long` };
       }
-      
-      if (rules.max_length && value.length > rules.max_length) {
+
+      if (rules.max_length && stringValue.length > rules.max_length) {
         return { isValid: false, error: `${field.field_name} must be no more than ${rules.max_length} characters long` };
       }
-      
-      if (rules.pattern && !new RegExp(rules.pattern).test(value)) {
+
+      if (rules.pattern && !new RegExp(rules.pattern).test(stringValue)) {
         return { isValid: false, error: `${field.field_name} format is invalid` };
       }
     }
@@ -203,13 +204,13 @@ export class CustomFieldsClientService {
       
       case 'date':
         try {
-          return new Date(value).toLocaleDateString();
+          return new Date(String(value)).toLocaleDateString();
         } catch {
           return String(value);
         }
-      
+
       case 'url':
-        return value;
+        return String(value);
       
       default:
         return String(value);

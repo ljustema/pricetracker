@@ -12,6 +12,38 @@ export default function PageTitle() {
   const { data: session } = useSession();
   const [pageTitle, setPageTitle] = useState('');
 
+  // Check if a string is a UUID
+  const isUUID = (str: string) => {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(str);
+  };
+
+  // Fetch product name for product detail pages
+  const fetchProductName = useCallback(async (productId: string) => {
+    if (!session?.user) {
+      setPageTitle('Product Details');
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/products/${productId}`);
+      if (response.ok) {
+        const product = await response.json();
+        if (product?.name) {
+          const title = product.brand ? `${product.name} - ${product.brand}` : product.name;
+          setPageTitle(title);
+        } else {
+          setPageTitle('Product Details');
+        }
+      } else {
+        setPageTitle('Product Details');
+      }
+    } catch (error) {
+      console.error('Error fetching product name for page title:', error);
+      setPageTitle('Product Details');
+    }
+  }, [session]);
+
   useEffect(() => {
     // Extract the page name from the pathname
     if (pathname) {
@@ -48,38 +80,6 @@ export default function PageTitle() {
       }
     }
   }, [pathname, session, fetchProductName]);
-
-  // Check if a string is a UUID
-  const isUUID = (str: string) => {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    return uuidRegex.test(str);
-  };
-
-  // Fetch product name for product detail pages
-  const fetchProductName = useCallback(async (productId: string) => {
-    if (!session?.user) {
-      setPageTitle('Product Details');
-      return;
-    }
-
-    try {
-      const response = await fetch(`/api/products/${productId}`);
-      if (response.ok) {
-        const product = await response.json();
-        if (product?.name) {
-          const title = product.brand ? `${product.name} - ${product.brand}` : product.name;
-          setPageTitle(title);
-        } else {
-          setPageTitle('Product Details');
-        }
-      } else {
-        setPageTitle('Product Details');
-      }
-    } catch (error) {
-      console.error('Error fetching product name for page title:', error);
-      setPageTitle('Product Details');
-    }
-  }, [session]);
 
   // Format the title to be more readable
   const formatTitle = (title: string) => {

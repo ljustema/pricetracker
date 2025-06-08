@@ -405,7 +405,8 @@ export class IntegrationSyncService {
 
       // Update integration status
       await updateIntegrationStatus(
-        this.supabase as { from: (table: string) => { update: (data: Record<string, unknown>) => { eq: (column: string, value: string) => Promise<{ error: unknown }> } } },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.supabase as any,
         this.integrationId,
         'active',
         'success'
@@ -423,7 +424,8 @@ export class IntegrationSyncService {
 
       // Update integration status
       await updateIntegrationStatus(
-        this.supabase as { from: (table: string) => { update: (data: Record<string, unknown>) => { eq: (column: string, value: string) => Promise<{ error: unknown }> } } },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.supabase as any,
         this.integrationId,
         'error',
         'failed'

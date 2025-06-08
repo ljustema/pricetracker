@@ -98,7 +98,7 @@ export default function ScraperManager({
     setStep('select-type');
   };
 
-  const handleScraperTypeSelect = (type: 'ai' | 'python' | 'typescript') => {
+  const handleScraperTypeSelect = (type: 'ai' | 'python' | 'typescript' | 'professional') => {
     switch (type) {
       case 'ai':
         setStep('create-ai');
@@ -109,8 +109,13 @@ export default function ScraperManager({
       case 'typescript':
         setStep('create-typescript');
         break;
+      case 'professional':
+        // Handle professional scraper type - this might redirect to a different flow
+        console.log('Professional scraper type selected - not implemented in this component');
+        setStep('list'); // For now, just go back to list
+        break;
     }
-  }; // Updated to support Python and TypeScript scraper types explicitly
+  }; // Updated to support Python, TypeScript, and Professional scraper types
 
   const handleCreateAIScraper = async (url: string) => {
     setIsLoading(true);

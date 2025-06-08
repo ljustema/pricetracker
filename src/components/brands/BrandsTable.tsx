@@ -199,7 +199,7 @@ const BrandsTable: React.FC<BrandsTableProps> = ({
                     <div className="absolute z-10 invisible group-hover:visible bg-black text-white text-xs rounded p-2 left-1/2 transform -translate-x-1/2 mt-1 w-max max-w-xs">
                       <div className="font-semibold mb-1">Competitors:</div>
                       <ul className="list-disc pl-4">
-                        {brand.competitor_names.map((name, index) => (
+                        {brand.competitor_names.map((name: string, index: number) => (
                           <li key={index}>{name}</li>
                         ))}
                       </ul>

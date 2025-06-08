@@ -287,7 +287,8 @@ export class ScraperAnalysisService {
    * @param $ The Cheerio instance for the website's HTML
    * @returns An array of brand page URLs
    */
-  private static async findBrandPages(url: string, $: cheerio.CheerioAPI): Promise<string[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private static async findBrandPages(url: string, $: any): Promise<string[]> {
     const brandPages: string[] = [];
     const baseUrl = getBaseUrl(url);
 
@@ -426,7 +427,8 @@ export class ScraperAnalysisService {
    * @param providedCategoryPageUrl Optional user-provided category page URL
    * @returns An array of category page URLs
    */
-  private static async findCategoryPages(url: string, $: cheerio.CheerioAPI, providedCategoryPageUrl?: string): Promise<string[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private static async findCategoryPages(url: string, $: any, providedCategoryPageUrl?: string): Promise<string[]> {
     const categoryPages: string[] = [];
     const baseUrl = getBaseUrl(url);
 
@@ -497,7 +499,8 @@ export class ScraperAnalysisService {
    * @param providedProductPageUrl Optional user-provided product page URL
    * @returns An array of product page URLs
    */
-  private static async findProductPages(url: string, $: cheerio.CheerioAPI, providedProductPageUrl?: string): Promise<string[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private static async findProductPages(url: string, $: any, providedProductPageUrl?: string): Promise<string[]> {
     const productPages: string[] = [];
     const baseUrl = getBaseUrl(url);
 

@@ -139,7 +139,7 @@ export function IntegrationCard({
           <div className="w-10 h-10 mr-3 flex items-center justify-center bg-gray-100 rounded-md">
             {(() => {
               const platformIcon = getPlatformIcon();
-              if (platformIcon.type === 'image') {
+              if (platformIcon.type === 'image' && platformIcon.src) {
                 return (
                   <Image
                     src={platformIcon.src}
@@ -160,7 +160,7 @@ export function IntegrationCard({
                   />
                 );
               } else {
-                return platformIcon.component;
+                return platformIcon.type === 'icon' ? platformIcon.component : <Store className="w-6 h-6 text-gray-600" />;
               }
             })()}
           </div>

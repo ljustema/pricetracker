@@ -121,7 +121,7 @@ ORIGINAL ANALYSIS:
 - Sitemaps: ${analysisResult.sitemapUrls.length > 0 ? analysisResult.sitemapUrls.join(', ') : 'None found'}
 - Brand pages: ${analysisResult.brandPages.length > 0 ? analysisResult.brandPages.slice(0, 5).join(', ') + (analysisResult.brandPages.length > 5 ? '...' : '') : 'None found'}
 - Category pages: ${analysisResult.categoryPages.length > 0 ? analysisResult.categoryPages.slice(0, 5).join(', ') + (analysisResult.categoryPages.length > 5 ? '...' : '') : 'None found'}
-- Product listing pages: ${analysisResult.productListingPages.length > 0 ? analysisResult.productListingPages.slice(0, 5).join(', ') + (analysisResult.productListingPages.length > 5 ? '...' : '') : 'None found'}
+- Product listing pages: ${analysisResult.productPages.length > 0 ? analysisResult.productPages.slice(0, 5).join(', ') + (analysisResult.productPages.length > 5 ? '...' : '') : 'None found'}
 ${analysisResult.apiEndpoints.length > 0 ?
   `- API endpoints: ${analysisResult.apiEndpoints.map(endpoint => `${endpoint.url} (${endpoint.method})`).join(', ')}`
   : '- No API endpoints identified.'}
