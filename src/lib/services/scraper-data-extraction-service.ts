@@ -62,7 +62,7 @@ ${analysisResult.productSelectors && Object.keys(analysisResult.productSelectors
 - List item: ${analysisResult.productSelectors.listItem || 'Not identified'}
 - Name: ${analysisResult.productSelectors.name || 'Not identified'}
 - Price: ${analysisResult.productSelectors.price || 'Not identified'}
-- Image: ${analysisResult.productSelectors.image || 'Not identified'}
+- Image: ${analysisResult.productSelectors.imageUrl || 'Not identified'}
 - Link: ${analysisResult.productSelectors.link || 'Not identified'}`
   : 'No product selectors identified.'}
 
@@ -93,8 +93,8 @@ async function extractProductData(page: any, url: string): Promise<ScrapedProduc
 interface ScrapedProductData {
   url: string;
   name: string;
-  price: number | null;
-  currency: string | null;
+  competitor_price: number | null;
+  currency_code: string | null;
   sku?: string | null;
   brand?: string | null;
   ean?: string | null;

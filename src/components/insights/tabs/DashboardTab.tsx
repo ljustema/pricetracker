@@ -225,7 +225,7 @@ const DashboardTab: React.FC = () => {
                           {priceChange.price_change_percentage > 0 ? '+' : ''}{priceChange.price_change_percentage.toFixed(2)}%
                         </div>
                         <div className="text-sm text-gray-500">
-                          {formatCurrency(priceChange.old_price)} → {formatCurrency(priceChange.new_price)}
+                          {formatCurrency(priceChange.old_competitor_price || 0)} → {formatCurrency(priceChange.new_competitor_price || 0)}
                         </div>
                       </div>
                     </div>

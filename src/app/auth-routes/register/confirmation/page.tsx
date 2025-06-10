@@ -13,16 +13,6 @@ export default function ConfirmationPage() {
   const [resendSuccess, setResendSuccess] = useState(false);
   const [error, setError] = useState("");
 
-  // Check if this is a confirmation link with token
-  useEffect(() => {
-    const token = searchParams?.get("token");
-    const type = searchParams?.get("type");
-    
-    if (token && type === "signup") {
-      handleConfirmation(token);
-    }
-  }, [searchParams, handleConfirmation]);
-
   // Handle email confirmation
   const handleConfirmation = useCallback(async (token: string) => {
     try {
@@ -47,6 +37,16 @@ export default function ConfirmationPage() {
       );
     }
   }, [router, setError]);
+
+  // Check if this is a confirmation link with token
+  useEffect(() => {
+    const token = searchParams?.get("token");
+    const type = searchParams?.get("type");
+
+    if (token && type === "signup") {
+      handleConfirmation(token);
+    }
+  }, [searchParams, handleConfirmation]);
 
   // Handle resend confirmation email
   const handleResendConfirmation = async (e: React.FormEvent) => {

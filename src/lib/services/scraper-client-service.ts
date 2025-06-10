@@ -202,11 +202,11 @@ export class ScraperClientService {
       competitor_id: competitorId,
       name: `AI Generated Scraper for ${new URL(url).hostname}`,
       url,
-      scraper_type: 'ai',
+      scraper_type: 'typescript',
       selectors: {
         product: '.product-item',
         name: '.product-name',
-        price: '.product-price',
+        competitor_price: '.product-price',
         image: '.product-image img',
         sku: '.product-sku',
         brand: '.product-brand',

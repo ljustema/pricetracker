@@ -35,13 +35,6 @@ export function IntegrationRunsDialog({ open, onOpenChange, integration }: Integ
   const [refreshing, setRefreshing] = useState(false);
   const { toast } = useToast();
 
-  // Fetch integration runs when the dialog opens
-  useEffect(() => {
-    if (open && integration) {
-      fetchRuns();
-    }
-  }, [open, integration, fetchRuns]);
-
   // Fetch integration runs
   const fetchRuns = useCallback(async () => {
     if (!integration) return;
@@ -66,6 +59,13 @@ export function IntegrationRunsDialog({ open, onOpenChange, integration }: Integ
       setLoading(false);
     }
   }, [integration, toast]);
+
+  // Fetch integration runs when the dialog opens
+  useEffect(() => {
+    if (open && integration) {
+      fetchRuns();
+    }
+  }, [open, integration, fetchRuns]);
 
   // Refresh integration runs
   const handleRefresh = async () => {

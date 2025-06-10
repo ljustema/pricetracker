@@ -71,11 +71,11 @@ export async function POST(_request: NextRequest) {
       return acc;
     }, {});
 
-    const duplicateGroups = Object.values(groupedDuplicates);
+    const duplicateGroups = Object.values(groupedDuplicates) as DuplicateGroup[];
 
     // Filter groups that are very likely the same product:
     // Same brand and SKU where one has EAN and the other doesn't
-    const automaticMergeGroups = duplicateGroups.filter(group => {
+    const automaticMergeGroups = duplicateGroups.filter((group) => {
       if (group.products.length !== 2) return false;
       
       const [product1, product2] = group.products;

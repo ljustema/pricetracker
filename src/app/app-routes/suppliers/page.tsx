@@ -3,19 +3,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { getSuppliers } from "@/lib/services/supplier-service";
+import { getSuppliers, Supplier } from "@/lib/services/supplier-service";
 import { Plus, Building2, Globe, Phone, Mail } from "lucide-react";
 
-interface Supplier {
-  id: string;
-  name: string;
-  website?: string;
-  contact_email?: string;
-  contact_phone?: string;
-  notes?: string;
-  is_active: boolean;
-  sync_frequency?: string;
-}
+
 
 export default async function SuppliersPage() {
   // Check if the user is authenticated
@@ -26,7 +17,7 @@ export default async function SuppliersPage() {
   }
 
   // Fetch suppliers for the current user
-  let suppliers;
+  let suppliers: Supplier[] = [];
   try {
     suppliers = await getSuppliers(session.user.id);
   } catch (error) {

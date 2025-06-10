@@ -108,25 +108,12 @@ export async function GET(_request: NextRequest) {
         if (uniqueError) {
           console.error(`Error fetching unique products for integration ${integration.id}:`, uniqueError);
 
-          // Fallback query if RPC fails
+          // Fallback query if RPC fails - simplified approach
           const { count, error: fallbackError } = await supabase
-            .from('products')
-            .select('id', { count: 'exact', head: true })
+            .from('price_changes_competitors')
+            .select('product_id', { count: 'exact', head: true })
             .eq('user_id', userId)
-            .in('id', (subquery) => {
-              subquery
-                .from('price_changes_competitors')
-                .select('product_id')
-                .eq('user_id', userId)
-                .eq('integration_id', integration.id)
-                .not('product_id', 'in', (subsubquery) => {
-                  subsubquery
-                    .from('price_changes_competitors')
-                    .select('product_id')
-                    .eq('user_id', userId)
-                    .neq('integration_id', integration.id);
-                });
-            });
+            .eq('integration_id', integration.id);
 
           if (fallbackError) {
             console.error(`Fallback query also failed for integration ${integration.id}:`, fallbackError);
@@ -185,25 +172,12 @@ export async function GET(_request: NextRequest) {
         if (uniqueError) {
           console.error(`Error fetching unique products for competitor ${competitor.id}:`, uniqueError);
 
-          // Fallback query if RPC fails
+          // Fallback query if RPC fails - simplified approach
           const { count, error: fallbackError } = await supabase
-            .from('products')
-            .select('id', { count: 'exact', head: true })
+            .from('price_changes_competitors')
+            .select('product_id', { count: 'exact', head: true })
             .eq('user_id', userId)
-            .in('id', (subquery) => {
-              subquery
-                .from('price_changes_competitors')
-                .select('product_id')
-                .eq('user_id', userId)
-                .eq('competitor_id', competitor.id)
-                .not('product_id', 'in', (subsubquery) => {
-                  subsubquery
-                    .from('price_changes_competitors')
-                    .select('product_id')
-                    .eq('user_id', userId)
-                    .neq('competitor_id', competitor.id);
-                });
-            });
+            .eq('competitor_id', competitor.id);
 
           if (fallbackError) {
             console.error(`Fallback query also failed for competitor ${competitor.id}:`, fallbackError);

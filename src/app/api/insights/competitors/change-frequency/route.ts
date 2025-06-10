@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
 
     priceChanges.forEach(priceChange => {
       const competitorId = priceChange.competitor_id;
-      const competitorName = priceChange.competitors?.name || 'Unknown';
+      const competitorName = (priceChange.competitors as unknown as { name: string } | null)?.name || 'Unknown';
 
       if (!competitorCounts.has(competitorId)) {
         competitorCounts.set(competitorId, {

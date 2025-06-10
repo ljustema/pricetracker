@@ -65,7 +65,7 @@ interface BrandFocusData {
 }
 
 // Custom tooltip for price comparison chart
-const PriceComparisonTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; avg_diff_percentage: number; total_products: number } }>; label?: string }) => {
+const PriceComparisonTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; avg_diff_percentage: number; total_products: number } }> }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -84,7 +84,7 @@ const PriceComparisonTooltip = ({ active, payload, _label }: { active?: boolean;
 };
 
 // Custom tooltip for change frequency chart
-const ChangeFrequencyTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; count: number } }>; label?: string }) => {
+const ChangeFrequencyTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; count: number } }> }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -100,7 +100,7 @@ const ChangeFrequencyTooltip = ({ active, payload, _label }: { active?: boolean;
 };
 
 // Custom tooltip for market coverage chart
-const MarketCoverageTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; coverage_percentage: number; product_count: number; total_products: number } }>; label?: string }) => {
+const MarketCoverageTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { competitor_name: string; coverage_percentage: number; product_count: number; total_products: number } }> }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -253,7 +253,7 @@ const CompetitorAnalysisTab: React.FC = () => {
                     <Bar
                       dataKey="avg_diff_percentage"
                       name="Avg. Price Difference (%)"
-                      fill={(data) => data.avg_diff_percentage > 0 ? '#ef4444' : '#10b981'}
+                      fill="#8884d8"
                     />
                   </BarChart>
                 </ResponsiveContainer>

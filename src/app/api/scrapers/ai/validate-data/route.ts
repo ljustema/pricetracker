@@ -50,9 +50,35 @@ export async function POST(request: NextRequest) {
     // 5. Generate URL collection code
     logger.info(routeContext, `Generating URL collection code for session ${sessionId}`);
 
+    // Create a proper SiteAnalysisResult object from session data
+    const siteAnalysisResult = {
+      url: session_data.url,
+      baseUrl: new URL(session_data.url).origin,
+      hostname: new URL(session_data.url).hostname,
+      title: session_data.url, // We don't have the title in the session data
+      sitemapUrls: session_data.analysisData?.sitemapUrls || [],
+      brandPages: session_data.analysisData?.brandPages || [],
+      categoryPages: session_data.analysisData?.categoryPages || [],
+      productPages: session_data.analysisData?.productListingPages || [],
+      apiEndpoints: (session_data.analysisData?.apiEndpoints || []).map(endpoint => ({
+        ...endpoint,
+        description: endpoint.description || 'API endpoint'
+      })),
+      proposedStrategy: session_data.analysisData?.proposedStrategy as 'api' | 'scraping' || 'scraping',
+      strategyDescription: session_data.analysisData?.strategyDescription || '',
+      htmlSample: '', // This is not needed for URL collection
+      productSelectors: {
+        listItem: '',
+        name: '',
+        price: '',
+        imageUrl: '',
+        link: ''
+      }
+    };
+
     // First, generate the code
     const generatedCode = await ScraperUrlCollectionService.generateUrlCollectionCode(
-      session_data.analysisData,
+      siteAnalysisResult,
       userFeedback
     );
 
@@ -65,8 +91,8 @@ export async function POST(request: NextRequest) {
     // 6. Update the session with URL collection data
     logger.info(routeContext, `Updating session ${sessionId} with URL collection data`);
 
-    // Generate a random ID if one doesn't exist
-    const collectionId = urlCollectionResult.id || `url-collection-${Math.random().toString(36).substring(2, 15)}`;
+    // Generate a random ID
+    const collectionId = `url-collection-${Math.random().toString(36).substring(2, 15)}`;
 
     await ScraperSessionService.updateUrlCollectionData(
       sessionId,
@@ -96,7 +122,7 @@ export async function POST(request: NextRequest) {
 
     // First, generate the code
     const extractionCode = await ScraperDataExtractionService.generateDataExtractionCode(
-      session_data.analysisData,
+      siteAnalysisResult,
       urlsToUse,
       userFeedback
     );
@@ -133,7 +159,7 @@ export async function POST(request: NextRequest) {
           },
           body: JSON.stringify({
             urls: urlsToUse,
-            selectors: session_data.analysisData.selectors || {}
+            selectors: {}
           }),
         });
 
@@ -143,7 +169,8 @@ export async function POST(request: NextRequest) {
             logger.info(routeContext, `Alternative extraction successful, got ${workerData.products.length} products`);
             dataExtractionResult = {
               generatedCode: extractionCode,
-              products: workerData.products
+              products: workerData.products,
+              executionLog: []
             };
           } else {
             throw new Error("Alternative extraction returned no products");
@@ -161,8 +188,8 @@ export async function POST(request: NextRequest) {
           products: [
             {
               name: "Extraction Failed - Please Review Code",
-              price: "0.00",
-              currency: "",
+              competitor_price: 0,
+              currency_code: "",
               raw_price: "Extraction failed",
               sku: "",
               brand: "",
@@ -171,7 +198,8 @@ export async function POST(request: NextRequest) {
               url: urlsToUse[0],
               image_url: ""
             }
-          ]
+          ],
+          executionLog: []
         };
 
         // Add a note to the generated code explaining the issue
@@ -182,8 +210,8 @@ export async function POST(request: NextRequest) {
     // 8. Update the session with data extraction data
     logger.info(routeContext, `Updating session ${sessionId} with data extraction data`);
 
-    // Generate a random ID if one doesn't exist
-    const extractionId = dataExtractionResult.id || `data-extraction-${Math.random().toString(36).substring(2, 15)}`;
+    // Generate a random ID
+    const extractionId = `data-extraction-${Math.random().toString(36).substring(2, 15)}`;
 
     await ScraperSessionService.updateDataExtractionData(
       sessionId,

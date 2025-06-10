@@ -538,7 +538,7 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
       // This needs to be customized based on the API's response format
       const pageProducts: ApiProduct[] = Array.isArray(data)
         ? data as ApiProduct[]
-        : ((data as Record<string, unknown>)?.products || (data as Record<string, unknown>)?.items || []);
+        : ((data as Record<string, unknown>)?.products || (data as Record<string, unknown>)?.items || []) as ApiProduct[];
 
       if (pageProducts.length > 0) {
         products.push(...pageProducts);

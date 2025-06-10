@@ -59,7 +59,7 @@ interface BrandChangeActivity {
 }
 
 // Custom tooltip for competition chart
-const CompetitionTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; competitor_count: number; total_products?: number } }>; label?: string }) => {
+const CompetitionTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; competitor_count: number; total_products?: number } }> }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -78,7 +78,7 @@ const CompetitionTooltip = ({ active, payload, _label }: { active?: boolean; pay
 };
 
 // Custom tooltip for uniqueness chart
-const UniquenessTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; uniqueness_percentage: number; unique_products: number; total_products: number } }>; label?: string }) => {
+const UniquenessTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; uniqueness_percentage: number; unique_products: number; total_products: number } }> }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -97,7 +97,7 @@ const UniquenessTooltip = ({ active, payload, _label }: { active?: boolean; payl
 };
 
 // Custom tooltip for price positioning chart
-const PricePositioningTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; avg_price_difference: number; cheaper_count: number; same_count: number; more_expensive_count: number } }>; label?: string }) => {
+const PricePositioningTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; avg_price_difference: number; cheaper_count: number; same_count: number; more_expensive_count: number } }> }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -124,7 +124,7 @@ const PricePositioningTooltip = ({ active, payload, _label }: { active?: boolean
 };
 
 // Custom tooltip for change activity chart
-const ChangeActivityTooltip = ({ active, payload, _label }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; changes_per_product: number; total_changes: number; total_products: number } }>; label?: string }) => {
+const ChangeActivityTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; changes_per_product: number; total_changes: number; total_products: number } }> }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -379,7 +379,7 @@ const BrandAnalysisTab: React.FC = () => {
                       <Bar
                         dataKey="avg_price_difference"
                         name="Avg. Price Difference (%)"
-                        fill={(data) => data.avg_price_difference > 0 ? '#ef4444' : '#10b981'}
+                        fill="#8884d8"
                       />
                     </BarChart>
                   </ResponsiveContainer>

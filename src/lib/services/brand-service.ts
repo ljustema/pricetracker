@@ -21,11 +21,7 @@ interface BrandWithAnalytics {
   competitor_count: number;
 }
 
-interface CompetitorData {
-  competitors: {
-    name: string;
-  };
-}
+
 
 export class BrandService {
   // Using the admin client to bypass RLS and session issues, aligning with product-service.ts.
@@ -1017,22 +1013,28 @@ export class BrandService {
 
                 // Fallback: try a direct query if RPC fails
                 try {
+                  // First get the product IDs for this brand
+                  const { data: productIds, error: productIdsError } = await supabase
+                    .from('products')
+                    .select('id')
+                    .eq('user_id', userId)
+                    .eq('brand_id', brand.id);
+
+                  if (productIdsError || !productIds || productIds.length === 0) {
+                    return;
+                  }
+
                   const { data: fallbackData, error: fallbackError } = await supabase
                     .from('price_changes_competitors')
                     .select(`
                       competitors!inner(name)
                     `)
                     .eq('user_id', userId)
-                    .in('product_id', (subquery) => {
-                      subquery
-                        .from('products')
-                        .select('id')
-                        .eq('user_id', userId)
-                        .eq('brand_id', brand.id);
-                    });
+                    .in('product_id', productIds.map(p => p.id));
 
                   if (!fallbackError && fallbackData) {
-                    const names = [...new Set(fallbackData.map((item: CompetitorData) => item.competitors.name))];
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const names = [...new Set(fallbackData.map((item: any) => item.competitors.name))];
                     competitorNamesMap.set(brand.id, names);
                   }
                 } catch (fallbackError) {

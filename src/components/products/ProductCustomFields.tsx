@@ -35,14 +35,10 @@ export default function ProductCustomFields({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    fetchData();
-  }, [productId, fetchData]);
-
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      
+
       // Fetch custom fields and values in parallel
       const [fieldsResponse, valuesResponse] = await Promise.all([
         CustomFieldsClientService.getCustomFields(),
@@ -61,6 +57,10 @@ export default function ProductCustomFields({
       setLoading(false);
     }
   }, [productId]);
+
+  useEffect(() => {
+    fetchData();
+  }, [productId, fetchData]);
 
   const getFieldValue = useCallback((fieldId: string): string => {
     const fieldValue = customFieldValues.find(cfv => cfv.custom_field_id === fieldId);

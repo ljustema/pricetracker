@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { getSupplier, getSupplierPriceChanges } from "@/lib/services/supplier-service";
+import { getSupplier, getSupplierPriceChanges, SupplierPriceChange } from "@/lib/services/supplier-service";
 import { ArrowLeft, Edit, Globe, Mail, Phone, Building2, Plus } from "lucide-react";
 
 interface SupplierDetailPageProps {
@@ -228,19 +228,7 @@ export default async function SupplierDetailPage({ params }: SupplierDetailPageP
   );
 }
 
-interface SupplierPriceChange {
-  id: string;
-  old_price?: number;
-  new_price: number;
-  currency_code: string;
-  price_change_percentage?: number;
-  changed_at: string;
-  change_source: string;
-  products?: {
-    name: string;
-    sku?: string;
-  };
-}
+
 
 interface SupplierPriceHistoryProps {
   priceChanges: SupplierPriceChange[];
@@ -284,17 +272,14 @@ function SupplierPriceHistory({ priceChanges }: SupplierPriceHistoryProps) {
               <tr key={change.id}>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="text-sm font-medium text-gray-900">
-                    {change.products?.name || 'Unknown Product'}
+                    Product {change.product_id}
                   </div>
-                  {change.products?.sku && (
-                    <div className="text-sm text-gray-500">SKU: {change.products.sku}</div>
-                  )}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="text-sm text-gray-900">
-                    {change.old_price ? (
+                    {change.old_supplier_price ? (
                       <>
-                        {change.old_price} → {change.new_price} {change.currency_code}
+                        {change.old_supplier_price} → {change.new_supplier_price} {change.currency_code}
                         {change.price_change_percentage && (
                           <span className={`ml-2 text-xs ${
                             change.price_change_percentage > 0 ? 'text-red-600' : 'text-green-600'
@@ -304,7 +289,7 @@ function SupplierPriceHistory({ priceChanges }: SupplierPriceHistoryProps) {
                         )}
                       </>
                     ) : (
-                      `${change.new_price} ${change.currency_code} (new)`
+                      `${change.new_supplier_price} ${change.currency_code} (new)`
                     )}
                   </div>
                 </td>

@@ -166,7 +166,7 @@ export async function POST(request: NextRequest) {
             customFieldMap.set(cfv.product_id, new Map());
           }
           // Handle the nested structure from the join
-          const fieldName = cfv.user_custom_fields?.field_name;
+          const fieldName = (cfv.user_custom_fields as unknown as { field_name: string } | null)?.field_name;
           if (fieldName) {
             customFieldMap.get(cfv.product_id).set(fieldName, cfv.value);
           }

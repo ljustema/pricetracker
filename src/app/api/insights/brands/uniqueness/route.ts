@@ -80,7 +80,7 @@ export async function GET(_request: NextRequest) {
         // Get all price changes for these products
         // Process in chunks to avoid URL size limits
         const CHUNK_SIZE = 20;
-        let allPriceChanges = [];
+        let allPriceChanges: { product_id: string; competitor_id: string }[] = [];
         let hasError = false;
 
         for (let i = 0; i < productIds.length; i += CHUNK_SIZE) {
@@ -102,7 +102,7 @@ export async function GET(_request: NextRequest) {
           }
 
           if (priceChangesChunk) {
-            allPriceChanges = [...allPriceChanges, ...priceChangesChunk];
+            allPriceChanges = [...allPriceChanges, ...(priceChangesChunk as unknown as { product_id: string; competitor_id: string }[])];
           }
         }
 
@@ -117,13 +117,13 @@ export async function GET(_request: NextRequest) {
         }
 
         // Count products with only one competitor
-        const productCompetitorCount = new Map();
+        const productCompetitorCount = new Map<string, Set<string>>();
 
         allPriceChanges.forEach(pc => {
           if (!productCompetitorCount.has(pc.product_id)) {
             productCompetitorCount.set(pc.product_id, new Set());
           }
-          productCompetitorCount.get(pc.product_id).add(pc.competitor_id);
+          productCompetitorCount.get(pc.product_id)!.add(pc.competitor_id);
         });
 
         // Count products with 0 or 1 competitors

@@ -390,7 +390,7 @@ export default async function DashboardPage() {
                     <PriceChangeDisplay
                       oldPrice={priceChange.old_competitor_price || 0}
                       newPrice={priceChange.new_competitor_price || 0}
-                      currencyCode={priceChange.currency_code || 'SEK'}
+                      currencyCode={'SEK'}
                       percentage={priceChange.price_change_percentage}
                     />
                   </div>

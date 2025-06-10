@@ -32,13 +32,7 @@ interface Product {
   brand?: string;
 }
 
-interface LinkScrapersPageProps {
-  params: Promise<{
-    productId: string;
-  }>;
-}
-
-export default function LinkScrapersPage({ params: _params }: LinkScrapersPageProps) {
+export default function LinkScrapersPage() {
   const router = useRouter();
   const { data: session } = useSession();
   const [isLoading, setIsLoading] = useState(false);

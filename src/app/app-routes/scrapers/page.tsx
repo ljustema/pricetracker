@@ -269,9 +269,9 @@ export default function ScrapersPage() {
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-4">
-                      {activeRuns[scraper.id] ? (
+                      {scraper.id && activeRuns[scraper.id] ? (
                         <Link
-                          href={`/app-routes/scrapers/${scraper.id}/run?runId=${activeRuns[scraper.id]}`}
+                          href={`/app-routes/scrapers/${scraper.id}/run?runId=${activeRuns[scraper.id!]}`}
                           className="inline-flex rounded-full px-2 text-xs font-semibold leading-5 bg-blue-100 text-blue-800 hover:bg-blue-200"
                         >
                           <span className="mr-1 inline-block h-2 w-2 rounded-full bg-blue-600 animate-pulse"></span>
@@ -337,11 +337,11 @@ export default function ScrapersPage() {
                             </DropdownMenuItem>
                             <DropdownMenuItem asChild>
                               <Link
-                                href={`/app-routes/scrapers/${scraper.id}/run${activeRuns[scraper.id] ? `?runId=${activeRuns[scraper.id]}` : ''}`}
+                                href={`/app-routes/scrapers/${scraper.id}/run${scraper.id && activeRuns[scraper.id] ? `?runId=${activeRuns[scraper.id]}` : ''}`}
                                 className="text-green-700 flex items-center justify-between w-full"
                               >
                                 Run Scraper
-                                {activeRuns[scraper.id] && (
+                                {scraper.id && activeRuns[scraper.id] && (
                                   <span className="ml-2 inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
                                     Running
                                   </span>

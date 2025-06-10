@@ -15,9 +15,7 @@
 
 // --- Dependencies ---
 // TODO: Install types: npm i --save-dev @types/yargs
-// @ts-expect-error - Suppress TS7016 error until types are installed
 import yargs from 'yargs'; // For command-line argument parsing
-// @ts-expect-error - Suppress TS7016 error until types are installed
 import { hideBin } from 'yargs/helpers';
 // import { promises as fs } from 'fs'; // Ensure this unused import is removed or commented
 // Add other necessary imports for your scraper here, e.g.:

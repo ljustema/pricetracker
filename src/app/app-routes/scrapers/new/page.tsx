@@ -262,8 +262,7 @@ export default function NewScraperPage() {
       case 'ai-wizard':
         return (
           <AiScraperWizard
-            competitorId={targetType === 'competitor' ? selectedTargetId : undefined}
-            supplierId={targetType === 'supplier' ? selectedTargetId : undefined}
+            competitorId={targetType === 'competitor' ? selectedTargetId || '' : ''}
             onComplete={() => router.push(`/app-routes/scrapers`)}
             onCancel={handleCancel}
           />
@@ -276,8 +275,7 @@ export default function NewScraperPage() {
         }
         return (
           <ScriptScraperForm
-            competitorId={targetType === 'competitor' ? selectedTargetId : undefined}
-            supplierId={targetType === 'supplier' ? selectedTargetId : undefined}
+            competitorId={targetType === 'competitor' ? selectedTargetId || '' : ''}
             scraperType={selectedScriptType}
             onSuccess={() => router.push(`/app-routes/scrapers`)}
             onCancel={handleCancel}
@@ -287,8 +285,7 @@ export default function NewScraperPage() {
       case 'professional-service':
         return (
           <ProfessionalScraperForm
-            competitorId={targetType === 'competitor' ? selectedTargetId : undefined}
-            supplierId={targetType === 'supplier' ? selectedTargetId : undefined}
+            competitorId={targetType === 'competitor' ? selectedTargetId || '' : ''}
             onCancel={handleCancel}
           />
         );

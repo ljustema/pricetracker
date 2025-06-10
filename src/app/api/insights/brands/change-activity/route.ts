@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Group products by brand
-    const productsByBrand = products.reduce((acc, product) => {
+    const productsByBrand = products.reduce((acc: Record<string, string[]>, product) => {
       if (!acc[product.brand_id]) {
         acc[product.brand_id] = [];
       }

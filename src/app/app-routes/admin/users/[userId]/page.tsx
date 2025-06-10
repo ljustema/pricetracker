@@ -102,7 +102,12 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
       scrapers: scraperCount || 0,
       integrations: integrationCount || 0
     },
-    recentActivity: recentActivity || [],
+    recentActivity: (recentActivity || []).map(activity => ({
+      ...activity,
+      products: {
+        name: (activity.products as unknown as { name: string }[])[0]?.name || 'Unknown Product'
+      }
+    })),
     communications: communications || []
   };
 

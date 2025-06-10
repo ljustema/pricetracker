@@ -37,8 +37,6 @@ export class ScraperAIService {
           time: '02:00', // Run at 2 AM
         },
         is_active: false, // Default to inactive until tested
-        filter_by_active_brands: true, // Default to filtering by active brands
-        scrape_only_own_products: false, // Default to not filtering by own products
       };
 
       // Create the scraper
