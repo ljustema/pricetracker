@@ -14,9 +14,7 @@ interface SupabaseError {
   [key: string]: unknown;
 }
 
-interface ProductStatus {
-  status: string;
-}
+
 
 interface DatabaseResponse<T = unknown> {
   data: T | null;
@@ -139,11 +137,7 @@ export class IntegrationSyncService {
 
     if (error) {
       console.error('Error updating run status:', error);
-<<<<<<< HEAD
-      const errorMessage = error && typeof error === 'object' && 'message' in error ? (error as SupabaseError).message : 'Unknown error';
-=======
       const errorMessage = error && typeof error === 'object' && 'message' in error ? (error as { message: string }).message : 'Unknown error';
->>>>>>> 1bc71d5f5e53ac8705b08eb9b9c72dd099ea4d94
       throw new Error(`Failed to update run status: ${errorMessage}`);
     }
   }
@@ -223,17 +217,10 @@ export class IntegrationSyncService {
       .eq('integration_run_id', this.runId);
 
     if (countError) {
-<<<<<<< HEAD
-      const errorMessage = countError && typeof countError === 'object' && 'message' in countError ? (countError as SupabaseError).message : 'Unknown error';
-      this.log('error', 'DB_COUNT_ERROR', `Error counting staged products: ${errorMessage}`);
-    } else {
-      const countArray = stagedCount as { id: string }[];
-=======
       const errorMessage = countError && typeof countError === 'object' && 'message' in countError ? (countError as { message: string }).message : 'Unknown error';
       this.log('error', 'DB_COUNT_ERROR', `Error counting staged products: ${errorMessage}`);
     } else {
       const countArray = stagedCount as unknown[];
->>>>>>> 1bc71d5f5e53ac8705b08eb9b9c72dd099ea4d94
       this.log('info', 'DB_COUNT', `Staged ${countArray?.length || 0} products for run ${this.runId}`);
 
       // Set the processed count to the number of staged products
@@ -248,11 +235,7 @@ export class IntegrationSyncService {
         .rpc('process_pending_integration_products', { run_id: this.runId });
 
       if (finalProcessError) {
-<<<<<<< HEAD
-        const errorMessage = finalProcessError && typeof finalProcessError === 'object' && 'message' in finalProcessError ? (finalProcessError as SupabaseError).message : 'Unknown error';
-=======
         const errorMessage = finalProcessError && typeof finalProcessError === 'object' && 'message' in finalProcessError ? (finalProcessError as { message: string }).message : 'Unknown error';
->>>>>>> 1bc71d5f5e53ac8705b08eb9b9c72dd099ea4d94
         this.log('error', 'FINAL_PROCESSING_ERROR', `Error in final processing: ${errorMessage}`);
       } else {
         this.log('info', 'FINAL_PROCESSING_COMPLETE', `Final processing complete: ${JSON.stringify(finalProcessResult)}`);
@@ -273,16 +256,6 @@ export class IntegrationSyncService {
         .eq('integration_run_id', this.runId);
 
       if (statsError) {
-<<<<<<< HEAD
-        const errorMessage = statsError && typeof statsError === 'object' && 'message' in statsError ? (statsError as SupabaseError).message : 'Unknown error';
-        this.log('error', 'DB_STATS_ERROR', `Error getting product statistics: ${errorMessage}`);
-      } else if (stats) {
-        // Count products by status
-        const statsArray = stats as ProductStatus[];
-        const processed = statsArray.filter((p: ProductStatus) => p.status === 'processed').length;
-        const errors = statsArray.filter((p: ProductStatus) => p.status === 'error').length;
-        const pending = statsArray.filter((p: ProductStatus) => p.status === 'pending').length;
-=======
         const errorMessage = statsError && typeof statsError === 'object' && 'message' in statsError ? (statsError as { message: string }).message : 'Unknown error';
         this.log('error', 'DB_STATS_ERROR', `Error getting product statistics: ${errorMessage}`);
       } else if (stats) {
@@ -291,7 +264,6 @@ export class IntegrationSyncService {
         const processed = statsArray.filter((p) => p.status === 'processed').length;
         const errors = statsArray.filter((p) => p.status === 'error').length;
         const pending = statsArray.filter((p) => p.status === 'pending').length;
->>>>>>> 1bc71d5f5e53ac8705b08eb9b9c72dd099ea4d94
 
         // Estimate created vs updated (we don't have this info directly)
         // For now, assume all processed products are created
@@ -368,20 +340,12 @@ export class IntegrationSyncService {
 
     console.log(`Insert response: ${insertError ? 'ERROR' : 'SUCCESS'}`);
     if (insertData) {
-<<<<<<< HEAD
-      const insertArray = insertData as Record<string, unknown>[];
-=======
       const insertArray = insertData as unknown[];
->>>>>>> 1bc71d5f5e53ac8705b08eb9b9c72dd099ea4d94
       console.log(`Inserted ${insertArray.length} rows`);
     }
 
     if (insertError) {
-<<<<<<< HEAD
-      const errorMessage = insertError && typeof insertError === 'object' && 'message' in insertError ? (insertError as SupabaseError).message : 'Unknown error';
-=======
       const errorMessage = insertError && typeof insertError === 'object' && 'message' in insertError ? (insertError as { message: string }).message : 'Unknown error';
->>>>>>> 1bc71d5f5e53ac8705b08eb9b9c72dd099ea4d94
       this.log('error', 'STAGING_ERROR', `Error staging batch ${batchNumber}: ${errorMessage}`);
       throw new Error(`Failed to stage products: ${errorMessage}`);
     }
@@ -397,11 +361,7 @@ export class IntegrationSyncService {
         .rpc('process_pending_integration_products', { run_id: this.runId });
 
       if (processError) {
-<<<<<<< HEAD
-        const errorMessage = processError && typeof processError === 'object' && 'message' in processError ? (processError as SupabaseError).message : 'Unknown error';
-=======
         const errorMessage = processError && typeof processError === 'object' && 'message' in processError ? (processError as { message: string }).message : 'Unknown error';
->>>>>>> 1bc71d5f5e53ac8705b08eb9b9c72dd099ea4d94
         this.log('error', 'BATCH_PROCESSING_ERROR', `Error processing batch ${batchNumber}: ${errorMessage}`);
       } else {
         this.log('info', 'BATCH_PROCESSED', `Processed batch ${batchNumber}/${totalBatches}: ${JSON.stringify(processResult)}`);
@@ -429,11 +389,7 @@ export class IntegrationSyncService {
         .single();
 
       if (integrationError || !integration) {
-<<<<<<< HEAD
-        const errorMessage = integrationError && typeof integrationError === 'object' && 'message' in integrationError ? (integrationError as SupabaseError).message : 'Integration not found';
-=======
         const errorMessage = integrationError && typeof integrationError === 'object' && 'message' in integrationError ? (integrationError as { message: string }).message : 'Integration not found';
->>>>>>> 1bc71d5f5e53ac8705b08eb9b9c72dd099ea4d94
         throw new Error(`Failed to fetch integration: ${errorMessage}`);
       }
 
@@ -461,12 +417,8 @@ export class IntegrationSyncService {
 
       // Update integration status
       await updateIntegrationStatus(
-<<<<<<< HEAD
-        this.supabase as SupabaseClient,
-=======
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.supabase as any,
->>>>>>> 1bc71d5f5e53ac8705b08eb9b9c72dd099ea4d94
         this.integrationId,
         'active',
         'success'
@@ -484,12 +436,8 @@ export class IntegrationSyncService {
 
       // Update integration status
       await updateIntegrationStatus(
-<<<<<<< HEAD
-        this.supabase as SupabaseClient,
-=======
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.supabase as any,
->>>>>>> 1bc71d5f5e53ac8705b08eb9b9c72dd099ea4d94
         this.integrationId,
         'error',
         'failed'
