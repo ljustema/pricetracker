@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-06-07 13:09:22
+-- Generated: 2025-06-10 16:11:30
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -1512,6 +1512,33 @@ _limit := p_page_size;
             WHERE user_id = p_user_id 
             AND competitor_id = ANY(p_competitor_ids)
         ))
+        -- Add price comparison filters - only apply if the filter is true
+        AND (
+            (p_price_lower_than_competitors IS NULL OR p_price_lower_than_competitors = false) AND
+            (p_price_higher_than_competitors IS NULL OR p_price_higher_than_competitors = false)
+            OR
+            (
+                p_price_lower_than_competitors = true AND p.our_retail_price IS NOT NULL AND p.id IN (
+                    SELECT DISTINCT pcc.product_id
+                    FROM price_changes_competitors pcc
+                    WHERE pcc.user_id = p_user_id
+                    AND pcc.product_id = p.id
+                    AND pcc.new_competitor_price IS NOT NULL
+                    AND p.our_retail_price < pcc.new_competitor_price
+                )
+            )
+            OR
+            (
+                p_price_higher_than_competitors = true AND p.our_retail_price IS NOT NULL AND p.id IN (
+                    SELECT DISTINCT pcc.product_id
+                    FROM price_changes_competitors pcc
+                    WHERE pcc.user_id = p_user_id
+                    AND pcc.product_id = p.id
+                    AND pcc.new_competitor_price IS NOT NULL
+                    AND p.our_retail_price > pcc.new_competitor_price
+                )
+            )
+        )
     )
     SELECT COUNT(*) INTO _total_count FROM filtered_products;
 
@@ -1536,6 +1563,33 @@ _limit := p_page_size;
             WHERE user_id = p_user_id 
             AND competitor_id = ANY(p_competitor_ids)
         ))
+        -- Add price comparison filters (same logic as count query)
+        AND (
+            (p_price_lower_than_competitors IS NULL OR p_price_lower_than_competitors = false) AND
+            (p_price_higher_than_competitors IS NULL OR p_price_higher_than_competitors = false)
+            OR
+            (
+                p_price_lower_than_competitors = true AND p.our_retail_price IS NOT NULL AND p.id IN (
+                    SELECT DISTINCT pcc.product_id
+                    FROM price_changes_competitors pcc
+                    WHERE pcc.user_id = p_user_id
+                    AND pcc.product_id = p.id
+                    AND pcc.new_competitor_price IS NOT NULL
+                    AND p.our_retail_price < pcc.new_competitor_price
+                )
+            )
+            OR
+            (
+                p_price_higher_than_competitors = true AND p.our_retail_price IS NOT NULL AND p.id IN (
+                    SELECT DISTINCT pcc.product_id
+                    FROM price_changes_competitors pcc
+                    WHERE pcc.user_id = p_user_id
+                    AND pcc.product_id = p.id
+                    AND pcc.new_competitor_price IS NOT NULL
+                    AND p.our_retail_price > pcc.new_competitor_price
+                )
+            )
+        )
         ORDER BY 
             CASE WHEN _safe_sort_by = 'name' AND _sort_direction = 'ASC' THEN p.name END ASC,
             CASE WHEN _safe_sort_by = 'name' AND _sort_direction = 'DESC' THEN p.name END DESC,

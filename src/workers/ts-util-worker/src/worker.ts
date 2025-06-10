@@ -5,6 +5,29 @@ import { promises as fsPromises } from 'fs';
 import * as dotenv from 'dotenv';
 import { IntegrationSyncService } from './integration-sync-service';
 
+// Type definitions for Supabase client
+interface SupabaseClient {
+  from: (table: string) => {
+    select: (columns?: string) => {
+      eq: (column: string, value: unknown) => {
+        single: () => Promise<{ data: unknown; error: unknown }>;
+        limit: (count: number) => Promise<{ data: unknown; error: unknown }>;
+      };
+      limit: (count: number) => Promise<{ data: unknown; error: unknown }>;
+    };
+    update: (data: Record<string, unknown>) => {
+      eq: (column: string, value: unknown) => Promise<{ data: unknown; error: unknown }>;
+    };
+  };
+}
+
+interface Product {
+  id: string;
+  name: string;
+  active: boolean;
+  [key: string]: unknown;
+}
+
 // Load environment variables from .env file
 dotenv.config();
 
@@ -189,7 +212,7 @@ async function fetchAndProcessIntegrationJob() {
         console.log('API connection successful');
 
         // Update run status to processing
-        const updateResult1 = await (supabase as any)
+        const updateResult1 = await (supabase as SupabaseClient)
           .from('integration_runs')
           .update({
             status: 'processing',
@@ -216,7 +239,7 @@ async function fetchAndProcessIntegrationJob() {
         });
 
         // Type assertion to ensure products is treated as an array
-        const products = productsResult as any[];
+        const products = productsResult as Product[];
 
         console.log(`Fetched ${products.length} products for test run`);
 
@@ -226,7 +249,7 @@ async function fetchAndProcessIntegrationJob() {
         });
 
         // Store the test products in the run
-        const updateResult2 = await (supabase as any)
+        const updateResult2 = await (supabase as SupabaseClient)
           .from('integration_runs')
           .update({
             status: 'completed',
@@ -253,7 +276,7 @@ async function fetchAndProcessIntegrationJob() {
         console.error('Test run failed:', error);
 
         // Update run status to failed
-        const updateResult3 = await (supabase as any)
+        const updateResult3 = await (supabase as SupabaseClient)
           .from('integration_runs')
           .update({
             status: 'failed',
@@ -283,7 +306,7 @@ async function fetchAndProcessIntegrationJob() {
         job.user_id,
         job.integration_id,
         job.id,
-        supabase as any // Type assertion to work around the unknown type
+        supabase as SupabaseClient // Type assertion to work around the unknown type
       );
 
       // Execute the sync process
@@ -304,7 +327,7 @@ async function fetchAndProcessIntegrationJob() {
     // Attempt to mark the job as failed if an error occurred after it was claimed
     if (job && job.id) { // Check if job was successfully fetched and potentially claimed
       try {
-        const updateResult4 = await (supabase as any)
+        const updateResult4 = await (supabase as SupabaseClient)
           .from('integration_runs')
           .update({
             status: 'failed',

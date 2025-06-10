@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-06-07 13:09:22
+-- Generated: 2025-06-10 16:11:30
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -1751,6 +1751,13 @@ ALTER TABLE ONLY public.user_custom_fields
 
 ALTER TABLE ONLY public.user_profiles
     ADD CONSTRAINT user_profiles_pkey PRIMARY KEY (id);
+
+--
+-- Name: user_settings user_settings_user_id_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_settings
+    ADD CONSTRAINT user_settings_user_id_unique UNIQUE (user_id);
 
 --
 -- Name: user_subscriptions user_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: -

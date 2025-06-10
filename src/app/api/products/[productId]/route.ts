@@ -261,7 +261,7 @@ export async function DELETE(
     const userId = ensureUUID(session.user.id);
 
     // Extract productId from params - await it as required by Next.js
-    const { productId } = await context.params;
+    const { productId } = await params;
 
     // Validate UUID format
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

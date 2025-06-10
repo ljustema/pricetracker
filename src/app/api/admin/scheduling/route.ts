@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 
+
+
 // GET /api/admin/scheduling - Get scheduling statistics and status
 export async function GET(_request: NextRequest) {
   try {
@@ -73,7 +75,10 @@ export async function GET(_request: NextRequest) {
     }
 
     // Get user profiles for recent jobs
-    const recentJobUserIds = recentJobsRaw?.map(job => job.scrapers.user_id) || [];
+    const recentJobUserIds = recentJobsRaw?.map((job: Record<string, unknown>) => {
+      const scrapers = job.scrapers as Record<string, unknown>;
+      return scrapers.user_id as string;
+    }) || [];
     const { data: recentJobUserProfiles, error: recentJobUsersError } = await supabase
       .from('user_profiles')
       .select('id, name, email')
@@ -88,13 +93,16 @@ export async function GET(_request: NextRequest) {
     }
 
     // Combine recent jobs with user profiles
-    const recentJobs = recentJobsRaw?.map(job => ({
-      ...job,
-      scrapers: {
-        ...job.scrapers,
-        user_profiles: recentJobUserProfiles?.find(u => u.id === job.scrapers.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
-      }
-    }));
+    const recentJobs = recentJobsRaw?.map((job: Record<string, unknown>) => {
+      const scrapers = job.scrapers as Record<string, unknown>;
+      return {
+        ...job,
+        scrapers: {
+          ...scrapers,
+          user_profiles: recentJobUserProfiles?.find(u => u.id === scrapers.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
+        }
+      };
+    });
 
     // Get recent integration runs
     const { data: recentIntegrationsRaw, error: integrationsError } = await supabase
@@ -120,7 +128,10 @@ export async function GET(_request: NextRequest) {
     }
 
     // Get user profiles for recent integration runs
-    const integrationRunUserIds = recentIntegrationsRaw?.map(run => run.integrations.user_id) || [];
+    const integrationRunUserIds = recentIntegrationsRaw?.map((run: Record<string, unknown>) => {
+      const integrations = run.integrations as Record<string, unknown>;
+      return integrations.user_id as string;
+    }) || [];
     const { data: integrationRunUserProfiles, error: integrationRunUsersError } = await supabase
       .from('user_profiles')
       .select('id, name, email')
@@ -135,13 +146,16 @@ export async function GET(_request: NextRequest) {
     }
 
     // Combine recent integration runs with user profiles
-    const recentIntegrations = recentIntegrationsRaw?.map(run => ({
-      ...run,
-      integrations: {
-        ...run.integrations,
-        user_profiles: integrationRunUserProfiles?.find(u => u.id === run.integrations.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
-      }
-    }));
+    const recentIntegrations = recentIntegrationsRaw?.map((run: Record<string, unknown>) => {
+      const integrations = run.integrations as Record<string, unknown>;
+      return {
+        ...run,
+        integrations: {
+          ...integrations,
+          user_profiles: integrationRunUserProfiles?.find(u => u.id === integrations.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
+        }
+      };
+    });
 
     // Get scheduled scrapers with their next run times and user information
     const { data: scheduledScrapersRaw, error: scheduledError } = await supabase
@@ -169,7 +183,7 @@ export async function GET(_request: NextRequest) {
     }
 
     // Get user profiles for scrapers
-    const scraperUserIds = scheduledScrapersRaw?.map(s => s.user_id) || [];
+    const scraperUserIds = scheduledScrapersRaw?.map((s: Record<string, unknown>) => s.user_id as string) || [];
     const { data: scraperUserProfiles, error: scraperUsersError } = await supabase
       .from('user_profiles')
       .select('id, name, email')
@@ -184,12 +198,12 @@ export async function GET(_request: NextRequest) {
     }
 
     // Combine scrapers with user profiles
-    const scheduledScrapers = scheduledScrapersRaw?.map(scraper => ({
+    const scheduledScrapers = scheduledScrapersRaw?.map((scraper: Record<string, unknown>) => ({
       ...scraper,
       user_profiles: scraperUserProfiles?.find(u => u.id === scraper.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
     }));
 
-    // Get scheduled integrations with their sync frequencies
+    // Get scheduled integrations with their sync frequencies and calculated next run times
     const { data: scheduledIntegrationsRaw, error: integrationsScheduledError } = await supabase
       .from('integrations')
       .select(`
@@ -228,11 +242,27 @@ export async function GET(_request: NextRequest) {
       );
     }
 
-    // Combine integrations with user profiles
-    const scheduledIntegrations = scheduledIntegrationsRaw?.map(integration => ({
-      ...integration,
-      user_profiles: integrationUserProfiles?.find(u => u.id === integration.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
-    }));
+    // Calculate next run times for integrations using database function
+    const scheduledIntegrations = await Promise.all(
+      (scheduledIntegrationsRaw || []).map(async (integration) => {
+        // Calculate next run time using the database function
+        const { data: nextRunData, error: nextRunError } = await supabase
+          .rpc('calculate_next_integration_run_time', {
+            sync_frequency: integration.sync_frequency,
+            last_sync_at: integration.last_sync_at
+          });
+
+        if (nextRunError) {
+          console.error('Error calculating next run time for integration:', integration.id, nextRunError);
+        }
+
+        return {
+          ...integration,
+          next_run_time: nextRunData || null,
+          user_profiles: integrationUserProfiles?.find(u => u.id === integration.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
+        };
+      })
+    );
 
     // Calculate due scrapers and integrations by checking pending jobs in database
     let dueScrapersCount = 0;

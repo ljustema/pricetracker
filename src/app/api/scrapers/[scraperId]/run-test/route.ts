@@ -11,7 +11,7 @@ type Params = {
   }>;
 };
 
-export async function POST(req: NextRequest, context: Params) {
+export async function POST(_req: NextRequest, context: Params) {
   const routeContext = 'API:scrapers/[scraperId]/run-test';
   logger.info(routeContext, 'Received scraper test run request');
   
@@ -29,8 +29,8 @@ export async function POST(req: NextRequest, context: Params) {
 
     // In Next.js App Router, we need to await the params
     logger.debug(routeContext, 'Awaiting params from context');
-    const params = await params;
-    const { scraperId } = await params;
+    const params = await context.params;
+    const { scraperId } = params;
     logger.info(routeContext, `Processing test run for scraper ID: ${scraperId}`);
     
     if (!scraperId) {
