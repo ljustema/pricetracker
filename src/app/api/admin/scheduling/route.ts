@@ -191,7 +191,7 @@ export async function GET(_request: NextRequest) {
       user_profiles: scraperUserProfiles?.find(u => u.id === scraper.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
     }));
 
-    // Get scheduled integrations with their sync frequencies and calculated next run times
+    // Get scheduled integrations with their sync frequencies and stored next run times
     const { data: scheduledIntegrationsRaw, error: integrationsScheduledError } = await supabase
       .from('integrations')
       .select(`
@@ -200,6 +200,7 @@ export async function GET(_request: NextRequest) {
         platform,
         sync_frequency,
         last_sync_at,
+        next_run_time,
         status,
         user_id
       `)
@@ -230,27 +231,11 @@ export async function GET(_request: NextRequest) {
       );
     }
 
-    // Calculate next run times for integrations using database function
-    const scheduledIntegrations = await Promise.all(
-      (scheduledIntegrationsRaw || []).map(async (integration) => {
-        // Calculate next run time using the database function
-        const { data: nextRunData, error: nextRunError } = await supabase
-          .rpc('calculate_next_integration_run_time', {
-            sync_frequency: integration.sync_frequency,
-            last_sync_at: integration.last_sync_at
-          });
-
-        if (nextRunError) {
-          console.error('Error calculating next run time for integration:', integration.id, nextRunError);
-        }
-
-        return {
-          ...integration,
-          next_run_time: nextRunData || null,
-          user_profiles: integrationUserProfiles?.find(u => u.id === integration.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
-        };
-      })
-    );
+    // Combine integrations with user profiles (next_run_time is already stored in database)
+    const scheduledIntegrations = (scheduledIntegrationsRaw || []).map((integration) => ({
+      ...integration,
+      user_profiles: integrationUserProfiles?.find(u => u.id === integration.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
+    }));
 
     // Calculate due scrapers and integrations by checking pending jobs in database
     let dueScrapersCount = 0;
@@ -268,16 +253,18 @@ export async function GET(_request: NextRequest) {
       dueScrapersCount = pendingScraperRuns?.length || 0;
     }
 
-    // Count pending integration runs
-    const { data: pendingIntegrationRuns, error: integrationRunsError } = await supabase
-      .from('integration_runs')
+    // Count integrations that are due to run (next_run_time <= now)
+    const { data: dueIntegrations, error: integrationRunsError } = await supabase
+      .from('integrations')
       .select('id')
-      .eq('status', 'pending');
+      .eq('status', 'active')
+      .not('next_run_time', 'is', null)
+      .lte('next_run_time', new Date().toISOString());
 
     if (integrationRunsError) {
-      console.error('Error fetching pending integration runs:', integrationRunsError);
+      console.error('Error fetching due integrations:', integrationRunsError);
     } else {
-      dueIntegrationsCount = pendingIntegrationRuns?.length || 0;
+      dueIntegrationsCount = dueIntegrations?.length || 0;
     }
 
 
