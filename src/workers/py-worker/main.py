@@ -508,18 +508,23 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
              log_event("WARN", "DB_INSERT_PREP", run_id, f"Skipping product with invalid price '{p.get('price')}': {p.get('name')}")
              continue
 
+        # Extract raw_data if present
+        raw_data = p.get('raw_data')
+        raw_data_json = json.dumps(raw_data) if raw_data else None
+
         products_to_insert.append((
             user_id,
             # run_id, # Removed: scraper_run_id column does not exist in temp_competitors_scraped_data
             competitor_id,
             p.get('name'),
             price,
-            (p.get('currency', 'SEK')).upper(), # Default currency, ensure uppercase for currency_code
+            (p.get('currency_code', p.get('currency', 'SEK'))).upper(), # Support both currency_code and currency, ensure uppercase
             p.get('url'),
             p.get('image_url'),
             p.get('sku'),
             p.get('brand'),
             p.get('ean'),
+            raw_data_json, # Include raw_data as JSON
             datetime.now(timezone.utc) # scraped_at timestamp
         ))
 
@@ -550,8 +555,8 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
                         # Use execute_values for efficient batch insertion
                         sql = """
                             INSERT INTO temp_competitors_scraped_data (
-                                user_id, competitor_id, name, price, currency_code,
-                                url, image_url, sku, brand, ean, scraped_at
+                                user_id, competitor_id, name, competitor_price, currency_code,
+                                url, image_url, sku, brand, ean, raw_data, scraped_at
                             ) VALUES %s
                         """
                         psycopg2.extras.execute_values(cur, sql, chunk, page_size=len(chunk))

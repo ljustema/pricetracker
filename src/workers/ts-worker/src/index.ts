@@ -79,6 +79,7 @@ interface _ScrapedProductData {
   brand?: string;
   ean?: string;
   competitor_id?: string; // Added competitor_id field
+  raw_data?: Record<string, string | number | boolean | null> | null; // Custom fields data
   // Add other fields as needed
 }
 
@@ -1268,6 +1269,7 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
         sku: p.sku,
         brand: p.brand,
         ean: p.ean,
+        raw_data: p.raw_data || null, // Include custom fields data
         scraped_at: new Date().toISOString(),
     }));
 

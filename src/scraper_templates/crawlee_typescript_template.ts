@@ -188,6 +188,7 @@ interface ScrapedProductData {
   is_available: boolean;
   description?: string | null;
   raw_price?: string | null;
+  raw_data?: Record<string, string | number | boolean | null> | null; // Custom fields data - any additional fields will be automatically processed as custom fields
 }
 
 interface ScriptMetadata {
@@ -598,6 +599,90 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
 }
 
 // ------------------------------------ //
+// ---- CUSTOM FIELDS EXTRACTION ------ //
+// ------------------------------------ //
+
+/**
+ * Helper function to extract custom fields from a specifications table
+ * This is useful for extracting product specifications, features, or other structured data
+ *
+ * @param $ - Cheerio instance
+ * @param tableSelector - CSS selector for the table containing specifications
+ * @param keySelector - CSS selector for the key/label cells (relative to each row)
+ * @param valueSelector - CSS selector for the value cells (relative to each row)
+ * @returns Object with custom field data
+ */
+function extractCustomFieldsFromTable(
+  $: cheerio.CheerioAPI,
+  tableSelector: string,
+  keySelector: string = 'td:first-child, th:first-child',
+  valueSelector: string = 'td:last-child, th:last-child'
+): Record<string, string | number | boolean | null> {
+  const customFields: Record<string, string | number | boolean | null> = {};
+
+  try {
+    const table = $(tableSelector);
+    if (table.length === 0) {
+      return customFields;
+    }
+
+    // Find all rows in the table
+    const rows = table.find('tr, tbody tr');
+
+    rows.each((_index: number, row: unknown) => {
+      const $row = $(row);
+      const keyElement = $row.find(keySelector);
+      const valueElement = $row.find(valueSelector);
+
+      if (keyElement.length > 0 && valueElement.length > 0) {
+        let key = keyElement.text().trim();
+        const value = valueElement.text().trim();
+
+        // Clean up the key - remove colons, convert to snake_case
+        key = key
+          .replace(/[:\s]+$/, '') // Remove trailing colons and spaces
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_') // Replace non-alphanumeric with underscores
+          .replace(/^_+|_+$/g, '') // Remove leading/trailing underscores
+          .replace(/_+/g, '_'); // Replace multiple underscores with single
+
+        // Skip empty keys or values
+        if (!key || !value) {
+          return;
+        }
+
+        // Try to convert value to appropriate type
+        let processedValue: string | number | boolean | null = value;
+
+        // Check for boolean values
+        if (value.toLowerCase() === 'yes' || value.toLowerCase() === 'ja' || value.toLowerCase() === 'true') {
+          processedValue = true;
+        } else if (value.toLowerCase() === 'no' || value.toLowerCase() === 'nej' || value.toLowerCase() === 'false') {
+          processedValue = false;
+        } else {
+          // Try to parse as number (but keep original if it contains units or text)
+          const numericValue = parseFloat(value.replace(/[^\d.,]/g, '').replace(',', '.'));
+          if (!isNaN(numericValue) && value.match(/^\s*[\d.,]+\s*[a-zA-Z]*\s*$/)) {
+            // Only convert to number if the value is primarily numeric
+            const hasUnits = value.match(/[a-zA-Z]/);
+            if (!hasUnits) {
+              processedValue = numericValue;
+            }
+          }
+        }
+
+        customFields[key] = processedValue;
+      }
+    });
+
+  } catch (error) {
+    logError('Error extracting custom fields from table', error);
+  }
+
+  return customFields;
+}
+
+// ------------------------------------ //
 // ---- PRODUCT DATA EXTRACTION ------- //
 // ------------------------------------ //
 
@@ -619,7 +704,8 @@ async function extractProductData($: cheerio.CheerioAPI, url: string): Promise<S
       image_url: null,
       is_available: true, // Default to true unless found otherwise
       description: null,
-      raw_price: null
+      raw_price: null,
+      raw_data: null
     };
 
     // --- 1. Try extracting from schema.org JSON-LD first ---
@@ -812,7 +898,22 @@ async function extractProductData($: cheerio.CheerioAPI, url: string): Promise<S
       }
     }
 
-    // --- 3. Validate the extracted data ---
+    // --- 3. Extract custom fields from specifications tables ---
+    // This is a generic example - customize the selectors for your specific site
+    // Common patterns: specifications tables, feature lists, product details tables
+    const customFields = extractCustomFieldsFromTable(
+      $,
+      '.product-specifications table, .product-features table, .product-details table', // Table selector
+      'td:first-child, th:first-child', // Key selector
+      'td:last-child, th:last-child'    // Value selector
+    );
+
+    // Add custom fields to raw_data if any were found
+    if (Object.keys(customFields).length > 0) {
+      productData.raw_data = customFields;
+    }
+
+    // --- 4. Validate the extracted data ---
     // Required field - if no name, the extraction failed
     if (!productData.name) {
       return null;

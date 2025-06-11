@@ -258,6 +258,7 @@ export async function POST(req: NextRequest) {
           url: row.url || null,
           image_url: row.image_url || null,
           currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
+          raw_data: row, // Include all CSV data as raw_data for custom fields processing
           scraped_at: now
         });
 
