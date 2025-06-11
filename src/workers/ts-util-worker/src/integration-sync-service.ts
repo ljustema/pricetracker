@@ -309,6 +309,10 @@ export class IntegrationSyncService {
       const productUrl = product.product_url && product.product_url !== '' ? product.product_url : null;
       const currencyCode = product.currency_code || 'SEK'; // Default to SEK if not provided
 
+      // Extract features for custom fields processing
+      // Only include features in raw_data, not the basic product fields
+      const featuresForCustomFields = product.features || {};
+
       return {
         integration_run_id: this.runId,
         integration_id: this.integrationId,
@@ -323,7 +327,7 @@ export class IntegrationSyncService {
         image_url: imageUrl,
         url: productUrl, // Add the product URL to the staged product
         currency_code: currencyCode, // Add the currency code
-        raw_data: product, // Store the raw product data for reference
+        raw_data: featuresForCustomFields, // Store only features for custom fields processing
         status: 'pending',
         created_at: new Date().toISOString()
       };

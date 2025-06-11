@@ -43,6 +43,9 @@ export interface PrestashopRawProduct {
     images?: {
       image?: Array<{ id?: unknown; [key: string]: unknown }> | { id?: unknown; [key: string]: unknown };
     };
+    product_features?: {
+      product_feature?: Array<{ name?: unknown; value?: unknown; feature_name?: unknown; feature_value?: unknown; [key: string]: unknown }> | { name?: unknown; value?: unknown; feature_name?: unknown; feature_value?: unknown; [key: string]: unknown };
+    } | Array<{ name?: unknown; value?: unknown; feature_name?: unknown; feature_value?: unknown; [key: string]: unknown }>;
   };
   $?: { id?: string };
   [key: string]: unknown;
@@ -61,6 +64,7 @@ export interface PrestashopProduct {
   active?: boolean;
   currency_code: string; // Added currency code field
   product_url: string; // URL to the product on the Prestashop site
+  features?: Record<string, string>; // Product features/specifications
   [key: string]: unknown; // Index signature for compatibility
 }
 
@@ -959,6 +963,57 @@ private async getDefaultCurrency(): Promise<string> {
   // Image URLs are now constructed directly in the parseProducts method
 
   /**
+   * Extract product features from the product associations
+   */
+  private extractProductFeatures(product: PrestashopRawProduct): Record<string, string> {
+    const features: Record<string, string> = {};
+
+    try {
+      // Check if product has associations and product_features
+      if (product.associations?.product_features) {
+        const productFeatures = product.associations.product_features;
+
+        // Handle both single feature and array of features
+        let featureArray: unknown[] = [];
+        if (Array.isArray(productFeatures)) {
+          featureArray = productFeatures;
+        } else if (productFeatures && typeof productFeatures === 'object') {
+          // Check if it has a 'product_feature' property
+          const featuresObj = productFeatures as Record<string, unknown>;
+          if (featuresObj.product_feature) {
+            if (Array.isArray(featuresObj.product_feature)) {
+              featureArray = featuresObj.product_feature;
+            } else {
+              featureArray = [featuresObj.product_feature];
+            }
+          }
+        }
+
+        // Process each feature
+        for (const feature of featureArray) {
+          if (feature && typeof feature === 'object') {
+            const featureObj = feature as Record<string, unknown>;
+
+            // Extract feature name and value
+            const featureName = this.getStringValue(featureObj.name || featureObj.feature_name);
+            const featureValue = this.getStringValue(featureObj.value || featureObj.feature_value);
+
+            if (featureName && featureValue) {
+              // Capitalize first letter of feature name for consistency
+              const capitalizedName = featureName.charAt(0).toUpperCase() + featureName.slice(1);
+              features[capitalizedName] = featureValue;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Error extracting product features:', error);
+    }
+
+    return features;
+  }
+
+  /**
    * Parse the products from the API response
    */
   private async parseProducts(response: PrestashopApiResponse | { prestashop: { products: { product: PrestashopProduct[] } } }): Promise<PrestashopProduct[]> {
@@ -1155,6 +1210,9 @@ private async getDefaultCurrency(): Promise<string> {
 
         console.log(`Product ${id}: Generated product URL: ${productUrl}`);
 
+        // Extract product features/specifications
+        const features = this.extractProductFeatures(product);
+
         // Create parsed product with the fields we want
         const parsedProduct: PrestashopProduct = {
           id,
@@ -1167,7 +1225,8 @@ private async getDefaultCurrency(): Promise<string> {
           image_url: imageUrl,
           active,
           currency_code: defaultCurrency, // Added currency_code
-          product_url: productUrl // Add the product URL
+          product_url: productUrl, // Add the product URL
+          features: Object.keys(features).length > 0 ? features : undefined // Add features if any exist
         };
 
         // In test mode, log detailed info; in full sync mode, be quiet
