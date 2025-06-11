@@ -62,6 +62,7 @@ interface ScheduledScraper {
     day?: number;
   };
   last_run: string | null;
+  next_run_time: string | null;
   is_active: boolean;
   scraper_type: string;
   user_id: string;
@@ -241,41 +242,11 @@ export default function SchedulingDashboard() {
     );
   };
 
-  const calculateNextRunTime = (schedule: ScheduledScraper['schedule'], lastRun: string | null): Date => {
-    const now = new Date();
-    const timeOfDay = schedule.time || '02:00';
-    const [hours, minutes] = timeOfDay.split(':').map(Number);
 
-    const nextRun = new Date();
-    nextRun.setHours(hours, minutes, 0, 0);
-
-    if (schedule.frequency === 'daily') {
-      // If last run was today, schedule for tomorrow
-      if (lastRun) {
-        const lastRunDate = new Date(lastRun);
-        if (lastRunDate.toDateString() === now.toDateString()) {
-          nextRun.setDate(nextRun.getDate() + 1);
-        } else if (nextRun <= now) {
-          // Time has passed today, schedule for tomorrow
-          nextRun.setDate(nextRun.getDate() + 1);
-        }
-      } else if (nextRun <= now) {
-        // Never run before and time has passed today
-        nextRun.setDate(nextRun.getDate() + 1);
-      }
-    } else if (schedule.frequency === 'weekly') {
-      const dayOfWeek = schedule.day || 1; // Default to Monday
-      const daysUntilNext = (dayOfWeek - now.getDay() + 7) % 7;
-      nextRun.setDate(now.getDate() + (daysUntilNext || 7));
-    } else if (schedule.frequency === 'monthly') {
-      nextRun.setMonth(nextRun.getMonth() + 1, 1);
-    }
-
-    return nextRun;
-  };
 
   const isScraperDue = (scraper: ScheduledScraper): boolean => {
-    const nextRun = calculateNextRunTime(scraper.schedule, scraper.last_run);
+    if (!scraper.next_run_time) return false;
+    const nextRun = new Date(scraper.next_run_time);
     return nextRun <= new Date();
   };
 
@@ -486,9 +457,9 @@ export default function SchedulingDashboard() {
             <CardContent>
               <div className="space-y-2">
                 {data?.scheduledScrapers.map((scraper) => {
-                  const nextRun = calculateNextRunTime(scraper.schedule, scraper.last_run);
                   const isDue = isScraperDue(scraper);
                   const lastRunDate = scraper.last_run ? new Date(scraper.last_run) : null;
+                  const nextRun = scraper.next_run_time ? new Date(scraper.next_run_time) : null;
 
                   return (
                     <div key={scraper.id} className="flex items-center justify-between p-3 border rounded">
@@ -508,10 +479,10 @@ export default function SchedulingDashboard() {
                         )}
                         <div className="text-right">
                           <div className="text-sm font-medium">
-                            Next: {nextRun.toLocaleDateString()} {nextRun.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            Next: {nextRun ? `${nextRun.toLocaleDateString()} ${nextRun.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Not scheduled'}
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            {isDue ? 'Overdue' : `In ${Math.ceil((nextRun.getTime() - Date.now()) / (1000 * 60 * 60))} hours`}
+                            {isDue ? 'Overdue' : nextRun ? `In ${Math.ceil((nextRun.getTime() - Date.now()) / (1000 * 60 * 60))} hours` : 'N/A'}
                           </div>
                         </div>
                       </div>

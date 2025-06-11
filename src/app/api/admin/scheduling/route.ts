@@ -145,7 +145,7 @@ export async function GET(_request: NextRequest) {
       }
     }));
 
-    // Get scheduled scrapers with their next run times and user information
+    // Get scheduled scrapers with their stored next run times and user information
     const { data: scheduledScrapersRaw, error: scheduledError } = await supabase
       .from('scrapers')
       .select(`
@@ -153,6 +153,7 @@ export async function GET(_request: NextRequest) {
         name,
         schedule,
         last_run,
+        next_run_time,
         is_active,
         scraper_type,
         user_id,
@@ -241,16 +242,18 @@ export async function GET(_request: NextRequest) {
     let dueScrapersCount = 0;
     let dueIntegrationsCount = 0;
 
-    // Count pending scraper runs
-    const { data: pendingScraperRuns, error: scraperRunsError } = await supabase
-      .from('scraper_runs')
+    // Count scrapers that are due to run (next_run_time <= now)
+    const { data: dueScrapers, error: scraperRunsError } = await supabase
+      .from('scrapers')
       .select('id')
-      .eq('status', 'pending');
+      .eq('is_active', true)
+      .not('next_run_time', 'is', null)
+      .lte('next_run_time', new Date().toISOString());
 
     if (scraperRunsError) {
-      console.error('Error fetching pending scraper runs:', scraperRunsError);
+      console.error('Error fetching due scrapers:', scraperRunsError);
     } else {
-      dueScrapersCount = pendingScraperRuns?.length || 0;
+      dueScrapersCount = dueScrapers?.length || 0;
     }
 
     // Count integrations that are due to run (next_run_time <= now)
@@ -470,6 +473,18 @@ export async function PUT(request: NextRequest) {
         );
       }
 
+      // Recalculate next_run_time for the updated scraper
+      const { error: nextRunError } = await supabase
+        .rpc('update_scraper_next_run_time', {
+          scraper_id: id,
+          completed_at: new Date().toISOString()
+        });
+
+      if (nextRunError) {
+        console.error('Error updating scraper next run time:', nextRunError);
+        // Don't fail the request, just log the error
+      }
+
       return NextResponse.json({
         success: true,
         message: 'Scraper schedule updated successfully'
@@ -492,6 +507,18 @@ export async function PUT(request: NextRequest) {
           { error: 'Failed to update integration schedule' },
           { status: 500 }
         );
+      }
+
+      // Recalculate next_run_time for the updated integration
+      const { error: nextRunError } = await supabase
+        .rpc('update_integration_next_run_time', {
+          integration_id: id,
+          completed_at: new Date().toISOString()
+        });
+
+      if (nextRunError) {
+        console.error('Error updating integration next run time:', nextRunError);
+        // Don't fail the request, just log the error
       }
 
       return NextResponse.json({
