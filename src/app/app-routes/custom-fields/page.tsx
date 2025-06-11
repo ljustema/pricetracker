@@ -29,12 +29,9 @@ export default function CustomFieldsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingField, setEditingField] = useState<CustomField | null>(null);
   const [deletingField, setDeletingField] = useState<string | null>(null);
-  const [autoCreateEnabled, setAutoCreateEnabled] = useState<boolean>(true);
-  const [autoCreateLoading, setAutoCreateLoading] = useState<boolean>(false);
 
   useEffect(() => {
     fetchCustomFields();
-    fetchAutoCreateSetting();
   }, []);
 
   const fetchCustomFields = async () => {
@@ -53,42 +50,7 @@ export default function CustomFieldsPage() {
     }
   };
 
-  const fetchAutoCreateSetting = async () => {
-    try {
-      const response = await fetch('/api/custom-fields/auto-create');
-      if (response.ok) {
-        const data = await response.json();
-        setAutoCreateEnabled(data.autoCreateEnabled);
-      }
-    } catch (error) {
-      console.error('Error fetching auto-create setting:', error);
-    }
-  };
 
-  const handleAutoCreateToggle = async (enabled: boolean) => {
-    setAutoCreateLoading(true);
-    try {
-      const response = await fetch('/api/custom-fields/auto-create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ enabled }),
-      });
-
-      if (response.ok) {
-        setAutoCreateEnabled(enabled);
-      } else {
-        const error = await response.json();
-        alert(`Failed to update setting: ${error.error}`);
-      }
-    } catch (error) {
-      console.error('Error updating auto-create setting:', error);
-      alert('Failed to update setting');
-    } finally {
-      setAutoCreateLoading(false);
-    }
-  };
 
   const handleCreateField = () => {
     setEditingField(null);
@@ -175,23 +137,8 @@ export default function CustomFieldsPage() {
           <h1 className="text-3xl font-bold text-gray-900">Custom Fields</h1>
           <p className="text-gray-600 mt-2">
             Define custom fields to capture additional product information beyond the standard fields.
+            Configure auto-creation and update settings in <a href="/app-routes/settings" className="text-indigo-600 hover:text-indigo-800 underline">Advanced Settings</a>.
           </p>
-          <div className="mt-4 flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
-            <input
-              type="checkbox"
-              id="auto-create"
-              checked={autoCreateEnabled}
-              onChange={(e) => handleAutoCreateToggle(e.target.checked)}
-              disabled={autoCreateLoading}
-              className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-            />
-            <label htmlFor="auto-create" className="text-sm font-medium text-gray-700">
-              Auto-create custom fields from scraped data
-            </label>
-            <span className="text-xs text-gray-500">
-              When enabled, scrapers can automatically create new custom fields for unknown data
-            </span>
-          </div>
         </div>
         <Button onClick={handleCreateField} className="flex items-center gap-2">
           <Plus className="h-4 w-4" />

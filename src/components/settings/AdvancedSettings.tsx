@@ -35,9 +35,15 @@ const dataCleanupSchema = z.object({
   include_temp_competitors_scraped_data: z.boolean(),
 });
 
+const customFieldsSchema = z.object({
+  auto_create_custom_fields: z.boolean(),
+  update_strategy: z.enum(['source_priority', 'always_update', 'never_update', 'manual_approval']),
+});
+
 type MatchingRulesValues = z.infer<typeof matchingRulesSchema>;
 type PriceThresholdsValues = z.infer<typeof priceThresholdsSchema>;
 type DataCleanupValues = z.infer<typeof dataCleanupSchema>;
+type CustomFieldsValues = z.infer<typeof customFieldsSchema>;
 
 interface AdvancedSettingsProps {
   userId?: string;
@@ -48,6 +54,7 @@ export default function AdvancedSettings({ userId }: AdvancedSettingsProps) {
   const [isLoadingThresholds, setIsLoadingThresholds] = useState(false);
   const [isLoadingCleanup, setIsLoadingCleanup] = useState(false);
   const [isLoadingExport, setIsLoadingExport] = useState(false);
+  const [isLoadingCustomFields, setIsLoadingCustomFields] = useState(false);
   const [isFetching, setIsFetching] = useState(true);
   const { toast } = useToast();
 
@@ -77,6 +84,14 @@ export default function AdvancedSettings({ userId }: AdvancedSettingsProps) {
       include_products: false,
       include_price_changes: true,
       include_temp_competitors_scraped_data: true,
+    },
+  });
+
+  const customFieldsForm = useForm<CustomFieldsValues>({
+    resolver: zodResolver(customFieldsSchema),
+    defaultValues: {
+      auto_create_custom_fields: true,
+      update_strategy: 'source_priority',
     },
   });
 
@@ -126,8 +141,27 @@ export default function AdvancedSettings({ userId }: AdvancedSettingsProps) {
       }
     };
 
+    const fetchCustomFieldsSettings = async () => {
+      if (!userId) return;
+
+      try {
+        const response = await fetch("/api/custom-fields/auto-create");
+
+        if (response.ok) {
+          const data = await response.json();
+          customFieldsForm.reset({
+            auto_create_custom_fields: data.autoCreateEnabled ?? true,
+            update_strategy: 'source_priority', // Default for now, will be fetched from user_settings later
+          });
+        }
+      } catch (error) {
+        console.error("Error fetching custom fields settings:", error);
+      }
+    };
+
     fetchCompanyData();
-  }, [userId, matchingRulesForm, priceThresholdsForm, toast]);
+    fetchCustomFieldsSettings();
+  }, [userId, matchingRulesForm, priceThresholdsForm, customFieldsForm, toast]);
 
   const onSubmitMatchingRules = async (data: MatchingRulesValues) => {
     setIsLoadingRules(true);
@@ -224,6 +258,38 @@ export default function AdvancedSettings({ userId }: AdvancedSettingsProps) {
       });
     } finally {
       setIsLoadingCleanup(false);
+    }
+  };
+
+  const onSubmitCustomFields = async (data: CustomFieldsValues) => {
+    setIsLoadingCustomFields(true);
+    try {
+      const response = await fetch("/api/custom-fields/auto-create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ enabled: data.auto_create_custom_fields }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to update custom fields settings");
+      }
+
+      toast({
+        title: "Custom fields settings updated",
+        description: "Your custom fields settings have been updated successfully.",
+      });
+    } catch (error) {
+      console.error("Error updating custom fields settings:", error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to update custom fields settings",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoadingCustomFields(false);
     }
   };
 
@@ -419,6 +485,87 @@ export default function AdvancedSettings({ userId }: AdvancedSettingsProps) {
             <Button type="submit" disabled={isLoadingThresholds}>
               {isLoadingThresholds && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save Price Thresholds
+            </Button>
+          </CardFooter>
+        </form>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Custom Fields Settings</CardTitle>
+          <CardDescription>
+            Configure how custom fields are created and managed from scraped data
+          </CardDescription>
+        </CardHeader>
+        <form onSubmit={customFieldsForm.handleSubmit(onSubmitCustomFields)}>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="auto_create_custom_fields">Auto-create custom fields from scraped data</Label>
+                <p className="text-sm text-gray-500">
+                  When enabled, scrapers can automatically create new custom fields for unknown data
+                </p>
+              </div>
+              <Switch
+                id="auto_create_custom_fields"
+                checked={customFieldsForm.watch("auto_create_custom_fields")}
+                onCheckedChange={(checked) =>
+                  customFieldsForm.setValue("auto_create_custom_fields", checked)
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="update_strategy">Update Strategy</Label>
+              <p className="text-sm text-gray-500 mb-2">
+                How to handle conflicts when the same custom field is found from different sources
+              </p>
+              <div className="grid grid-cols-1 gap-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="radio"
+                    id="source_priority"
+                    value="source_priority"
+                    checked={customFieldsForm.watch("update_strategy") === "source_priority"}
+                    onChange={() => customFieldsForm.setValue("update_strategy", "source_priority")}
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
+                  />
+                  <Label htmlFor="source_priority" className="text-sm font-normal">
+                    <span className="font-medium">Source Priority</span> - Only update if new source has higher priority (Manual > Integration > Supplier > Competitor)
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="radio"
+                    id="always_update"
+                    value="always_update"
+                    checked={customFieldsForm.watch("update_strategy") === "always_update"}
+                    onChange={() => customFieldsForm.setValue("update_strategy", "always_update")}
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
+                  />
+                  <Label htmlFor="always_update" className="text-sm font-normal">
+                    <span className="font-medium">Always Update</span> - Always update with the latest data from any source
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="radio"
+                    id="never_update"
+                    value="never_update"
+                    checked={customFieldsForm.watch("update_strategy") === "never_update"}
+                    onChange={() => customFieldsForm.setValue("update_strategy", "never_update")}
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
+                  />
+                  <Label htmlFor="never_update" className="text-sm font-normal">
+                    <span className="font-medium">Never Update</span> - Only set custom fields if they are empty, never overwrite existing values
+                  </Label>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+          <CardFooter className="flex justify-end">
+            <Button type="submit" disabled={isLoadingCustomFields}>
+              {isLoadingCustomFields && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save Custom Fields Settings
             </Button>
           </CardFooter>
         </form>

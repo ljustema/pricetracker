@@ -143,6 +143,7 @@ export async function POST(req: NextRequest) {
           lead_time_days: row.lead_time_days ? parseInt(row.lead_time_days) : null,
           product_description: row.description || null,
           category: row.category || null,
+          raw_data: row, // Include all CSV data as raw_data for custom fields processing
           scraped_at: now,
           processed: false
         });
