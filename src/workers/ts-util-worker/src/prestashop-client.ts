@@ -15,6 +15,14 @@ export interface PrestashopApiResponse {
       specific_price?: Record<string, unknown> | Record<string, unknown>[];
     };
     specific_price?: Record<string, unknown>;
+    product_feature?: {
+      name?: unknown;
+      [key: string]: unknown;
+    };
+    product_feature_value?: {
+      value?: unknown;
+      [key: string]: unknown;
+    };
     [key: string]: unknown;
   };
 }
@@ -964,8 +972,9 @@ private async getDefaultCurrency(): Promise<string> {
 
   /**
    * Extract product features from the product associations
+   * For Prestashop, features are stored as IDs that need to be resolved via additional API calls
    */
-  private extractProductFeatures(product: PrestashopRawProduct): Record<string, string> {
+  private async extractProductFeatures(product: PrestashopRawProduct): Promise<Record<string, string>> {
     const features: Record<string, string> = {};
 
     try {
@@ -989,19 +998,34 @@ private async getDefaultCurrency(): Promise<string> {
           }
         }
 
-        // Process each feature
-        for (const feature of featureArray) {
+        // Process each feature (limit to first 10 to avoid too many API calls)
+        const maxFeatures = Math.min(featureArray.length, 10);
+        for (let i = 0; i < maxFeatures; i++) {
+          const feature = featureArray[i];
           if (feature && typeof feature === 'object') {
             const featureObj = feature as Record<string, unknown>;
 
-            // Extract feature name and value
-            const featureName = this.getStringValue(featureObj.name || featureObj.feature_name);
-            const featureValue = this.getStringValue(featureObj.value || featureObj.feature_value);
+            // Extract feature ID and value ID
+            const featureId = this.getStringValue(featureObj.id);
+            const featureValueId = this.getStringValue(featureObj.id_feature_value);
 
-            if (featureName && featureValue) {
-              // Capitalize first letter of feature name for consistency
-              const capitalizedName = featureName.charAt(0).toUpperCase() + featureName.slice(1);
-              features[capitalizedName] = featureValue;
+            if (featureId && featureValueId) {
+              try {
+                // Get feature name and value in parallel
+                const [featureName, featureValue] = await Promise.all([
+                  this.getFeatureName(featureId),
+                  this.getFeatureValue(featureValueId)
+                ]);
+
+                if (featureName && featureValue) {
+                  // Capitalize first letter of feature name for consistency
+                  const capitalizedName = featureName.charAt(0).toUpperCase() + featureName.slice(1);
+                  features[capitalizedName] = featureValue;
+                }
+              } catch (error) {
+                console.warn(`Error fetching feature ${featureId} or value ${featureValueId}:`, error);
+                // Continue with next feature
+              }
             }
           }
         }
@@ -1011,6 +1035,85 @@ private async getDefaultCurrency(): Promise<string> {
     }
 
     return features;
+  }
+
+  /**
+   * Get feature name from Prestashop API
+   */
+  private async getFeatureName(featureId: string): Promise<string | null> {
+    try {
+      const response = await this.makeRequest(`product_features/${featureId}`, false);
+      if (response?.prestashop?.product_feature?.name) {
+        return this.extractLanguageValue(response.prestashop.product_feature.name);
+      }
+    } catch (error) {
+      console.warn(`Error fetching feature name for ID ${featureId}:`, error);
+    }
+    return null;
+  }
+
+  /**
+   * Get feature value from Prestashop API
+   */
+  private async getFeatureValue(featureValueId: string): Promise<string | null> {
+    try {
+      const response = await this.makeRequest(`product_feature_values/${featureValueId}`, false);
+      if (response?.prestashop?.product_feature_value?.value) {
+        return this.extractLanguageValue(response.prestashop.product_feature_value.value);
+      }
+    } catch (error) {
+      console.warn(`Error fetching feature value for ID ${featureValueId}:`, error);
+    }
+    return null;
+  }
+
+  /**
+   * Extract text value from language-wrapped content
+   * Handles both single language and multi-language structures
+   */
+  private extractLanguageValue(languageData: unknown): string | null {
+    if (!languageData) return null;
+
+    // Handle direct string value
+    if (typeof languageData === 'string') {
+      return languageData.trim();
+    }
+
+    // Handle language object structure
+    if (typeof languageData === 'object' && languageData !== null) {
+      const langObj = languageData as Record<string, unknown>;
+
+      // Handle array of language objects
+      if (langObj.language) {
+        if (Array.isArray(langObj.language) && langObj.language.length > 0) {
+          // Take the first language
+          const firstLang = langObj.language[0];
+          if (typeof firstLang === 'object' && firstLang !== null) {
+            const firstLangObj = firstLang as Record<string, unknown>;
+            if (firstLangObj['#text'] || firstLangObj._text) {
+              return this.getStringValue(firstLangObj['#text'] || firstLangObj._text);
+            }
+          }
+          // Fallback: try to get string value directly
+          return this.getStringValue(firstLang);
+        } else if (typeof langObj.language === 'object' && langObj.language !== null) {
+          // Single language object
+          const singleLangObj = langObj.language as Record<string, unknown>;
+          if (singleLangObj['#text'] || singleLangObj._text) {
+            return this.getStringValue(singleLangObj['#text'] || singleLangObj._text);
+          }
+          return this.getStringValue(langObj.language);
+        }
+      }
+
+      // Handle direct CDATA content
+      if (langObj['#text'] || langObj._text) {
+        return this.getStringValue(langObj['#text'] || langObj._text);
+      }
+    }
+
+    // Fallback: try to extract string value
+    return this.getStringValue(languageData);
   }
 
   /**
@@ -1211,7 +1314,14 @@ private async getDefaultCurrency(): Promise<string> {
         console.log(`Product ${id}: Generated product URL: ${productUrl}`);
 
         // Extract product features/specifications
-        const features = this.extractProductFeatures(product);
+        const features = await this.extractProductFeatures(product);
+
+        // Debug: Log the raw product data to see what's available
+        if (process.env.LOG_LEVEL === 'debug') {
+          console.log(`Product ${id} raw data:`, JSON.stringify(product, null, 2));
+          console.log(`Product ${id} associations:`, JSON.stringify(product.associations, null, 2));
+          console.log(`Product ${id} extracted features:`, JSON.stringify(features, null, 2));
+        }
 
         // Create parsed product with the fields we want
         const parsedProduct: PrestashopProduct = {
