@@ -7,11 +7,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { CustomField, CustomFieldsClientService } from "@/lib/services/custom-fields-client-service";
+import { SourceBadge } from "@/components/ui/source-badge";
 
 interface ProductCustomFieldValue {
   id: string;
   value: string;
   custom_field_id: string;
+  source_type?: string;
+  source_id?: string;
+  last_updated_by?: string;
+  confidence_score?: number;
+  created_by_source?: string;
+  created_at?: string;
+  updated_at?: string;
   user_custom_fields: CustomField;
 }
 
@@ -20,6 +28,7 @@ interface ProductCustomFieldsProps {
   isEditable?: boolean;
   alwaysEditable?: boolean; // New prop for always-on editing mode
   onValuesChange?: (values: Record<string, string>) => void; // Callback for value changes
+  showOnlyWithValues?: boolean; // Only show fields that have values
 }
 
 export default function ProductCustomFields({
@@ -27,6 +36,7 @@ export default function ProductCustomFields({
   isEditable = false,
   alwaysEditable = false,
   onValuesChange,
+  showOnlyWithValues = false,
 }: ProductCustomFieldsProps) {
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customFieldValues, setCustomFieldValues] = useState<ProductCustomFieldValue[]>([]);
@@ -66,6 +76,18 @@ export default function ProductCustomFields({
     const fieldValue = customFieldValues.find(cfv => cfv.custom_field_id === fieldId);
     return fieldValue?.value || '';
   }, [customFieldValues]);
+
+  const getFieldSource = useCallback((fieldId: string): ProductCustomFieldValue | undefined => {
+    return customFieldValues.find(cfv => cfv.custom_field_id === fieldId);
+  }, [customFieldValues]);
+
+  // Filter fields based on showOnlyWithValues prop
+  const fieldsToShow = showOnlyWithValues
+    ? customFields.filter(field => {
+        const value = getFieldValue(field.id);
+        return value && value.trim() !== '';
+      })
+    : customFields;
 
   const handleEdit = () => {
     // Initialize editing values with current values
@@ -213,6 +235,16 @@ export default function ProductCustomFields({
     );
   }
 
+  if (showOnlyWithValues && fieldsToShow.length === 0) {
+    return (
+      <Card className="p-4">
+        <div className="text-center text-gray-500">
+          <p>No custom field values available for this product.</p>
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <Card className="p-6">
       <div className="flex items-center justify-between mb-4">
@@ -248,23 +280,36 @@ export default function ProductCustomFields({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {customFields.map((field) => (
-          <div key={field.id}>
-            <Label htmlFor={`field-${field.id}`} className="flex items-center gap-1">
-              {field.field_name}
-              {field.is_required && <span className="text-red-500">*</span>}
-            </Label>
-            {(isEditing || alwaysEditable) ? (
-              <div className="mt-2">
-                {renderFieldInput(field)}
-              </div>
-            ) : (
-              <div className="mt-2 p-2 bg-gray-50 rounded-md text-sm">
-                {CustomFieldsClientService.formatFieldValue(field, getFieldValue(field.id))}
-              </div>
-            )}
-          </div>
-        ))}
+        {fieldsToShow.map((field) => {
+          const fieldSource = getFieldSource(field.id);
+          return (
+            <div key={field.id}>
+              <Label htmlFor={`field-${field.id}`} className="flex items-center gap-2 mb-2">
+                <span className="flex items-center gap-1">
+                  {field.field_name}
+                  {field.is_required && <span className="text-red-500">*</span>}
+                </span>
+                {fieldSource?.source_type && (
+                  <SourceBadge
+                    sourceType={fieldSource.source_type}
+                    confidenceScore={fieldSource.confidence_score}
+                    showIcon={true}
+                    showScore={false}
+                  />
+                )}
+              </Label>
+              {(isEditing || alwaysEditable) ? (
+                <div className="mt-2">
+                  {renderFieldInput(field)}
+                </div>
+              ) : (
+                <div className="mt-2 p-2 bg-gray-50 rounded-md text-sm">
+                  {CustomFieldsClientService.formatFieldValue(field, getFieldValue(field.id))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </Card>
   );

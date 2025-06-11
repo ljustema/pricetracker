@@ -159,7 +159,11 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
 
           {/* Custom Fields */}
           <div className="mt-8">
-            <ProductCustomFields productId={product.id} isEditable={false} />
+            <ProductCustomFields
+              productId={product.id}
+              isEditable={false}
+              showOnlyWithValues={true}
+            />
           </div>
         </div>
 

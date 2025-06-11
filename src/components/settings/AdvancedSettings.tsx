@@ -530,7 +530,7 @@ export default function AdvancedSettings({ userId }: AdvancedSettingsProps) {
                     className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
                   />
                   <Label htmlFor="source_priority" className="text-sm font-normal">
-                    <span className="font-medium">Source Priority</span> - Only update if new source has higher priority (Manual > Integration > Supplier > Competitor)
+                    <span className="font-medium">Source Priority</span> - Only update if new source has higher priority (Manual &gt; Integration &gt; Supplier &gt; Competitor)
                   </Label>
                 </div>
                 <div className="flex items-center space-x-2">

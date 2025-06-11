@@ -32,13 +32,20 @@ export async function GET(
       );
     }
 
-    // Get custom field values with field definitions
+    // Get custom field values with field definitions and source information
     const { data: customFieldValues, error } = await supabase
       .from('product_custom_field_values')
       .select(`
         id,
         value,
         custom_field_id,
+        source_type,
+        source_id,
+        last_updated_by,
+        confidence_score,
+        created_by_source,
+        created_at,
+        updated_at,
         user_custom_fields (
           id,
           field_name,
@@ -138,13 +145,18 @@ export async function PUT(
       );
     }
 
-    // Insert new custom field values (only non-empty values)
+    // Insert new custom field values (only non-empty values) with manual source tracking
     const valuesToInsert = customFieldValues
       .filter(cfv => cfv.value !== null && cfv.value !== undefined && cfv.value !== '')
       .map(cfv => ({
         product_id: productId,
         custom_field_id: cfv.custom_field_id,
         value: String(cfv.value),
+        source_type: 'manual',
+        source_id: session.user.id,
+        last_updated_by: 'manual',
+        confidence_score: 100,
+        created_by_source: 'manual'
       }));
 
     if (valuesToInsert.length > 0) {
