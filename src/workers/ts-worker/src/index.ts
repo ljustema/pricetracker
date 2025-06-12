@@ -301,6 +301,7 @@ async function fetchAndProcessJob() {
         // Compile the TypeScript script
         logStructured(job.id, 'info', 'TYPESCRIPT_COMPILATION', 'Compiling TypeScript script...');
         debugLog(`Compiling TypeScript script for job ${job.id}`);
+        debugLog('About to call compileTypeScriptScraper...');
 
         // Use the compilationResult variable declared at the higher scope
 
@@ -456,11 +457,23 @@ async function fetchAndProcessJob() {
             // Test 3: Check node_modules symlink
             const nodeModulesPath = path.join(path.dirname(tmpScriptPath), 'node_modules');
             const { fsSync } = await ensureFsModules();
+            debugLog(`Checking node_modules at: ${nodeModulesPath}`);
+
             if (fsSync.existsSync(nodeModulesPath)) {
                 const stats = fsSync.lstatSync(nodeModulesPath);
                 const linkInfo = stats.isSymbolicLink() ? 'symlink' : 'directory';
                 debugLog(`node_modules exists as ${linkInfo}`);
                 await logToDatabase(job.id, `node_modules exists as ${linkInfo}`);
+
+                // List contents of node_modules to see what's actually there
+                try {
+                    const contents = fsSync.readdirSync(nodeModulesPath);
+                    debugLog(`node_modules contents (${contents.length} items): ${contents.slice(0, 10).join(', ')}${contents.length > 10 ? '...' : ''}`);
+                    await logToDatabase(job.id, `node_modules contents: ${contents.slice(0, 5).join(', ')}${contents.length > 5 ? '...' : ''}`);
+                } catch (readError) {
+                    debugLog(`Failed to read node_modules contents: ${readError}`);
+                    await logToDatabase(job.id, `Failed to read node_modules contents: ${readError}`);
+                }
 
                 // Check if crawlee exists in node_modules
                 const crawleePath = path.join(nodeModulesPath, 'crawlee');
@@ -470,6 +483,16 @@ async function fetchAndProcessJob() {
                 } else {
                     debugLog('crawlee directory NOT found in node_modules');
                     await logToDatabase(job.id, 'crawlee directory NOT found in node_modules');
+
+                    // Check if @crawlee exists (scoped package)
+                    const scopedCrawleePath = path.join(nodeModulesPath, '@crawlee');
+                    if (fsSync.existsSync(scopedCrawleePath)) {
+                        debugLog('@crawlee scoped directory found in node_modules');
+                        await logToDatabase(job.id, '@crawlee scoped directory found in node_modules');
+                    } else {
+                        debugLog('@crawlee scoped directory NOT found in node_modules');
+                        await logToDatabase(job.id, '@crawlee scoped directory NOT found in node_modules');
+                    }
                 }
             } else {
                 debugLog('node_modules directory does not exist');
