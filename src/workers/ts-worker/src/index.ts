@@ -43,10 +43,64 @@ async function getSupabaseClient(): Promise<SupabaseClient<Database>> {
       throw new Error('Missing Supabase URL or Service Role Key environment variables.');
     }
 
-    supabaseClient = createClient(supabaseUrl, supabaseServiceRoleKey);
-    debugLog('Supabase client initialized');
+    // Create Supabase client with enhanced connection settings
+    supabaseClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+      db: {
+        schema: 'public',
+      },
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+      global: {
+        headers: {
+          'Connection': 'keep-alive',
+        },
+      },
+      // Add retry configuration
+      realtime: {
+        params: {
+          eventsPerSecond: 10,
+        },
+      },
+    });
+    debugLog('Supabase client initialized with enhanced connection settings');
   }
   return supabaseClient;
+}
+
+// Test Supabase connection with retry logic
+async function testSupabaseConnection(maxRetries: number = 5): Promise<boolean> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`Testing Supabase connection (attempt ${attempt}/${maxRetries})...`);
+      const supabase = await getSupabaseClient();
+
+      // Simple query to test connection
+      const { data, error } = await supabase
+        .from('scrapers')
+        .select('id')
+        .limit(1);
+
+      if (error) {
+        throw error;
+      }
+
+      console.log('✅ Supabase connection test successful');
+      return true;
+    } catch (error) {
+      console.error(`❌ Supabase connection test failed (attempt ${attempt}/${maxRetries}):`, error);
+
+      if (attempt < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000); // Exponential backoff, max 30s
+        console.log(`Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  console.error('🚨 All Supabase connection attempts failed');
+  return false;
 }
 
 // Type for the data returned by the claim_next_scraper_job RPC
@@ -174,16 +228,53 @@ async function fetchAndProcessJob() {
       lastPollMessageTime = currentTime;
     }
 
-    // 1. Atomically fetch and claim a pending job using RPC
+    // 1. Atomically fetch and claim a pending job using RPC with retry logic
     const supabase = await getSupabaseClient();
-    const { data: rpcData, error: rpcError } = await supabase.rpc(
-      'claim_next_scraper_job',
-      { worker_type_filter: WORKER_TYPE }
-    );
+    let rpcData: unknown = null;
+    let rpcError: unknown = null;
+
+    // Retry RPC call up to 3 times with exponential backoff
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const result = await supabase.rpc(
+          'claim_next_scraper_job',
+          { worker_type_filter: WORKER_TYPE }
+        );
+
+        rpcData = result.data;
+        rpcError = result.error;
+
+        if (!result.error) {
+          break; // Success, exit retry loop
+        }
+
+        // If this is a connection timeout or network error, retry
+        if (attempt < 3 && (
+          result.error.message?.includes('timeout') ||
+          result.error.message?.includes('Connection') ||
+          result.error.message?.includes('network') ||
+          result.error.code === 'PGRST301' // Connection timeout
+        )) {
+          const delay = 1000 * Math.pow(2, attempt - 1); // 1s, 2s, 4s
+          console.log(`RPC attempt ${attempt} failed with connection error, retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+
+        break; // Non-retryable error, exit loop
+      } catch (error) {
+        rpcError = error;
+        if (attempt < 3) {
+          const delay = 1000 * Math.pow(2, attempt - 1);
+          console.log(`RPC attempt ${attempt} threw exception, retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
 
     if (rpcError) {
-      console.error('Error calling claim_next_scraper_job RPC:', rpcError);
-      logStructured(null, 'error', 'RPC_CALL_ERROR', `Error calling claim_next_scraper_job: ${rpcError.message}`, { details: rpcError.details, hint: rpcError.hint });
+      console.error('Error calling claim_next_scraper_job RPC after retries:', rpcError);
+      logStructured(null, 'error', 'RPC_CALL_ERROR', `Error calling claim_next_scraper_job after retries: ${rpcError instanceof Error ? rpcError.message : String(rpcError)}`);
       return; // Wait for the next poll interval
     }
 
@@ -1521,4 +1612,23 @@ function startPolling() {
 } // End of startPolling function
 
 // --- Initialization ---
-startPolling(); // Start the worker polling loop;
+async function initializeWorker() {
+  console.log('🚀 Initializing TypeScript Worker...');
+
+  // Test Supabase connection before starting the main loop
+  const connectionOk = await testSupabaseConnection();
+
+  if (!connectionOk) {
+    console.error('❌ Failed to establish Supabase connection. Worker will not start.');
+    process.exit(1);
+  }
+
+  console.log('✅ Worker initialization complete. Starting polling loop...');
+  startPolling(); // Start the worker polling loop
+}
+
+// Start the worker
+initializeWorker().catch(error => {
+  console.error('💥 Worker initialization failed:', error);
+  process.exit(1);
+});
