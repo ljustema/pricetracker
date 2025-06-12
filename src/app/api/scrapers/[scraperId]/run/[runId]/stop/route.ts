@@ -26,14 +26,38 @@ export async function POST(
     const supabase = await createSupabaseServerClient();
 
     // First, check if the run exists and belongs to the user
+    console.log(`[Stop API] Looking for run ${runId} for user ${session.user.id}`);
+
     const { data: run, error: runError } = await supabase
       .from("scraper_runs")
       .select("id, scraper_id, user_id, status")
       .eq("id", runId)
       .single();
 
+    console.log(`[Stop API] Query result - run:`, run, `error:`, runError);
+
     if (runError || !run) {
       console.error(`[Stop API] Run not found: ${runError?.message}`);
+
+      // Additional debugging: check if run exists at all
+      const { data: anyRun, error: anyRunError } = await supabase
+        .from("scraper_runs")
+        .select("id, scraper_id, user_id, status")
+        .eq("id", runId)
+        .maybeSingle();
+
+      console.log(`[Stop API] Run exists check - anyRun:`, anyRun, `error:`, anyRunError);
+
+      return NextResponse.json(
+        { error: "Run not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    // Check if the run belongs to the current user
+    console.log(`[Stop API] Checking ownership - run.user_id: ${run.user_id}, session.user.id: ${session.user.id}`);
+    if (run.user_id !== session.user.id) {
+      console.error(`[Stop API] Run ${runId} does not belong to user ${session.user.id}`);
       return NextResponse.json(
         { error: "Run not found or access denied" },
         { status: 404 }
