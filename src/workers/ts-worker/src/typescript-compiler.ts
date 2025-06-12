@@ -497,86 +497,10 @@ export async function compileTypeScriptScraper(
     await fsPromises.writeFile(tsConfigPath, JSON.stringify(tsConfigContent, null, 2), 'utf-8');
     debugLog(`Created tsconfig.json at ${tsConfigPath}`);
 
-    // Compile using tsc from node_modules
-    debugLog('Compiling TypeScript using local tsc');
+    // Use Babel as the primary compiler (TypeScript compiler has never worked successfully)
+    debugLog('Compiling TypeScript using Babel (primary compiler)');
 
     try {
-      // Try to find the tsc executable
-      let tscPath = path.join(tempDir, 'node_modules', '.bin', 'tsc');
-      let tscCommand = process.platform === 'win32' ? `"${tscPath}"` : tscPath;
-
-      // Check if the tsc executable exists
-      try {
-        await fsPromises.access(tscPath);
-        debugLog(`Found tsc at ${tscPath}`);
-      } catch (_accessError) {
-        // If not found in .bin, try the typescript/bin directory
-        debugLog(`tsc not found at ${tscPath}, trying alternative location`);
-        tscPath = path.join(tempDir, 'node_modules', 'typescript', 'bin', 'tsc');
-        tscCommand = process.platform === 'win32' ? `"${tscPath}"` : tscPath;
-
-        try {
-          await fsPromises.access(tscPath);
-          debugLog(`Found tsc at ${tscPath}`);
-        } catch (_accessError2) {
-          // If still not found, try using npx
-          debugLog(`tsc not found at ${tscPath}, falling back to npx`);
-          tscCommand = 'npx tsc';
-        }
-      }
-
-      // Execute the TypeScript compiler
-      debugLog(`Executing: ${tscCommand}`);
-
-      // We need to specify the input file explicitly
-      // Note: TypeScript compiler doesn't have a --transpileOnly flag (that's a ts-node feature)
-      // Instead, we rely on the tsconfig.json settings to effectively skip type checking
-      const fullCommand = `${tscCommand} scraper.ts`;
-      debugLog(`Full command: ${fullCommand}`);
-
-      try {
-        // Execute the TypeScript compiler using execSync
-        debugLog(`Executing TypeScript compiler in ${tempDir}`);
-
-        // Run the TypeScript compiler
-        execSync(fullCommand, {
-          cwd: tempDir,
-          stdio: 'pipe',
-          timeout: TIMEOUT_MS / 2 // Use half the timeout for compilation
-        });
-
-        // Check if the compiled JavaScript file exists
-        const jsFilePath = path.join(tempDir, 'scraper.js');
-        if (!fs.existsSync(jsFilePath)) {
-          throw new Error('TypeScript compilation completed but output file not found');
-        }
-
-        debugLog(`TypeScript compilation successful, output file: ${jsFilePath}`);
-
-        // Return success with the JavaScript file path
-        return {
-          success: true,
-          outputPath: jsFilePath,
-          tempDir
-        };
-      } catch (tscError) {
-        const errorMessage = tscError instanceof Error ? tscError.message : String(tscError);
-        debugLog(`Error during TypeScript compilation: ${errorMessage}`);
-
-        // Check if the error has stderr property (from execSync)
-        if (tscError && typeof tscError === 'object' && 'stderr' in tscError && tscError.stderr) {
-          debugLog(`TypeScript compilation stderr: ${tscError.stderr}`);
-        }
-
-        // Check if the error has stdout property (from execSync)
-        if (tscError && typeof tscError === 'object' && 'stdout' in tscError && tscError.stdout) {
-          debugLog(`TypeScript compilation stdout: ${tscError.stdout}`);
-        }
-
-        // Try using Babel as a fallback
-        debugLog('TypeScript compilation failed, trying Babel as fallback');
-
-        try {
           // Create a babel.config.json file
           const babelConfig = {
             presets: [
@@ -633,38 +557,13 @@ export async function compileTypeScriptScraper(
             outputPath: jsFilePath,
             tempDir
           };
-        } catch (babelError) {
-          const babelErrorMessage = babelError instanceof Error ? babelError.message : String(babelError);
-          debugLog(`Babel compilation failed: ${babelErrorMessage}`);
-
-          // If both TypeScript and Babel fail, return the original TypeScript error
-          return {
-            success: false,
-            error: errorMessage,
-            tempDir
-          };
-        }
-      }
-    } catch (tscError: unknown) {
-      let errorMessage = tscError instanceof Error ? tscError.message : String(tscError);
-      let stderrOutput = '';
-
-      // Try to extract the stderr output
-      if (tscError && typeof tscError === 'object' && 'stderr' in tscError) {
-        stderrOutput = String(tscError.stderr).trim();
-        debugLog(`Compilation errors:\n${stderrOutput}`);
-        errorMessage = stderrOutput || errorMessage;
-      }
-
-      // If stderr is empty, just use the error message directly
-      if (!stderrOutput && tscError instanceof Error && tscError.message) {
-        errorMessage = tscError.message;
-        debugLog(`Error message: ${errorMessage}`);
-      }
+    } catch (babelError: unknown) {
+      const babelErrorMessage = babelError instanceof Error ? babelError.message : String(babelError);
+      debugLog(`Babel compilation failed: ${babelErrorMessage}`);
 
       return {
         success: false,
-        error: `TypeScript compilation failed: ${errorMessage}`,
+        error: `Babel compilation failed: ${babelErrorMessage}`,
         tempDir
       };
     }
