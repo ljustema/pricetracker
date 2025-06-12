@@ -177,16 +177,35 @@ async function initializeSharedDependencies(): Promise<void> {
     debugLog(`Using npm command: ${npmCommand}`);
 
     try {
-      execSync(`${npmCommand} install --no-package-lock --no-save --prefer-offline --no-audit --no-fund`, {
+      debugLog(`Executing: ${npmCommand} install --no-package-lock --no-save --prefer-offline --no-audit --no-fund`);
+      const result = execSync(`${npmCommand} install --no-package-lock --no-save --prefer-offline --no-audit --no-fund`, {
         cwd: SHARED_DEPS_DIR,
         stdio: 'pipe',
-        timeout: 600000 // 10 minutes timeout for comprehensive install
+        timeout: 600000, // 10 minutes timeout for comprehensive install
+        encoding: 'utf8'
       });
       debugLog('npm install completed successfully');
+      debugLog(`npm install output: ${result}`);
     } catch (npmError: unknown) {
       const npmErrorMessage = npmError instanceof Error ? npmError.message : String(npmError);
+      let stderrOutput = '';
+      let stdoutOutput = '';
+
+      // Extract stderr and stdout if available
+      if (npmError && typeof npmError === 'object') {
+        if ('stderr' in npmError && npmError.stderr) {
+          stderrOutput = String(npmError.stderr);
+        }
+        if ('stdout' in npmError && npmError.stdout) {
+          stdoutOutput = String(npmError.stdout);
+        }
+      }
+
       debugLog(`npm install failed: ${npmErrorMessage}`);
-      throw new Error(`npm install failed: ${npmErrorMessage}`);
+      if (stderrOutput) debugLog(`npm stderr: ${stderrOutput}`);
+      if (stdoutOutput) debugLog(`npm stdout: ${stdoutOutput}`);
+
+      throw new Error(`npm install failed: ${npmErrorMessage}${stderrOutput ? ` - stderr: ${stderrOutput}` : ''}`);
     }
 
     // Validate installation
@@ -287,13 +306,43 @@ export async function compileTypeScriptScraper(
         }
         debugLog('Symlink to shared dependencies created successfully');
 
-        // Verify the symlink works by checking if crawlee is accessible
+        // Verify the symlink works by checking if crawlee is accessible and working
         const crawleePath = path.join(tempNodeModules, 'crawlee');
         if (!fs.existsSync(crawleePath)) {
           debugLog('Symlink created but crawlee not accessible, falling back to copy');
           throw new Error('Symlink verification failed');
         }
-        debugLog('Shared dependencies setup completed successfully');
+
+        // Test that crawlee can actually be required from the symlinked location
+        try {
+          const testScript = `
+            const fs = require('fs');
+            const path = require('path');
+            try {
+              const crawlee = require('crawlee');
+              console.log('Crawlee test successful');
+              process.exit(0);
+            } catch (error) {
+              console.error('Crawlee module test failed:', error.message);
+              process.exit(1);
+            }
+          `;
+
+          const testPath = path.join(tempDir, 'crawlee-test.js');
+          await fsPromises.writeFile(testPath, testScript, 'utf-8');
+
+          execSync(`node "${testPath}"`, {
+            cwd: tempDir,
+            stdio: 'pipe',
+            timeout: 30000 // 30 seconds timeout for test
+          });
+
+          debugLog('Shared dependencies setup completed successfully - crawlee working');
+        } catch (testError: unknown) {
+          const testErrorMessage = testError instanceof Error ? testError.message : String(testError);
+          debugLog(`Crawlee test failed: ${testErrorMessage}`);
+          throw new Error('Symlink verification failed - crawlee not working');
+        }
       } catch (symlinkError: unknown) {
         const errorMessage = symlinkError instanceof Error ? symlinkError.message : String(symlinkError);
         debugLog(`Failed to create symlink: ${errorMessage}, falling back to copy`);
@@ -317,12 +366,42 @@ export async function compileTypeScriptScraper(
           }
           debugLog('Fallback copy of shared dependencies completed');
 
-          // Verify the copy worked
+          // Verify the copy worked and crawlee is functional
           const crawleePath = path.join(tempNodeModules, 'crawlee');
           if (!fs.existsSync(crawleePath)) {
             throw new Error('Copy verification failed - crawlee not found');
           }
-          debugLog('Copy verification successful - crawlee found');
+
+          // Test that crawlee can actually be required from the copied location
+          try {
+            const testScript = `
+              const fs = require('fs');
+              const path = require('path');
+              try {
+                const crawlee = require('crawlee');
+                console.log('Crawlee test successful');
+                process.exit(0);
+              } catch (error) {
+                console.error('Crawlee module test failed:', error.message);
+                process.exit(1);
+              }
+            `;
+
+            const testPath = path.join(tempDir, 'crawlee-test.js');
+            await fsPromises.writeFile(testPath, testScript, 'utf-8');
+
+            execSync(`node "${testPath}"`, {
+              cwd: tempDir,
+              stdio: 'pipe',
+              timeout: 30000 // 30 seconds timeout for test
+            });
+
+            debugLog('Copy verification successful - crawlee working');
+          } catch (testError: unknown) {
+            const testErrorMessage = testError instanceof Error ? testError.message : String(testError);
+            debugLog(`Crawlee test failed: ${testErrorMessage}`);
+            throw new Error('Copy verification failed - crawlee not working');
+          }
         } catch (copyError: unknown) {
           const copyErrorMessage = copyError instanceof Error ? copyError.message : String(copyError);
           debugLog(`Failed to copy shared dependencies: ${copyErrorMessage}`);
@@ -358,21 +437,75 @@ export async function compileTypeScriptScraper(
         // Install dependencies
         const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
         debugLog('Installing dependencies directly in temp directory...');
+        debugLog(`Executing: ${npmCommand} install --no-package-lock --no-save --prefer-offline --no-audit --no-fund`);
 
-        execSync(`${npmCommand} install --no-package-lock --no-save --prefer-offline --no-audit --no-fund`, {
-          cwd: tempDir,
-          stdio: 'pipe',
-          timeout: 300000 // 5 minutes timeout
-        });
+        try {
+          const result = execSync(`${npmCommand} install --no-package-lock --no-save --prefer-offline --no-audit --no-fund`, {
+            cwd: tempDir,
+            stdio: 'pipe',
+            timeout: 300000, // 5 minutes timeout
+            encoding: 'utf8'
+          });
+          debugLog('Fallback npm install completed successfully');
+          debugLog(`Fallback npm install output: ${result}`);
+        } catch (fallbackNpmError: unknown) {
+          const fallbackNpmErrorMessage = fallbackNpmError instanceof Error ? fallbackNpmError.message : String(fallbackNpmError);
+          let stderrOutput = '';
+          let stdoutOutput = '';
 
-        debugLog('Fallback npm install completed successfully');
+          // Extract stderr and stdout if available
+          if (fallbackNpmError && typeof fallbackNpmError === 'object') {
+            if ('stderr' in fallbackNpmError && fallbackNpmError.stderr) {
+              stderrOutput = String(fallbackNpmError.stderr);
+            }
+            if ('stdout' in fallbackNpmError && fallbackNpmError.stdout) {
+              stdoutOutput = String(fallbackNpmError.stdout);
+            }
+          }
 
-        // Verify crawlee is available
+          debugLog(`Fallback npm install failed: ${fallbackNpmErrorMessage}`);
+          if (stderrOutput) debugLog(`Fallback npm stderr: ${stderrOutput}`);
+          if (stdoutOutput) debugLog(`Fallback npm stdout: ${stdoutOutput}`);
+
+          throw new Error(`Fallback npm install failed: ${fallbackNpmErrorMessage}${stderrOutput ? ` - stderr: ${stderrOutput}` : ''}`);
+        }
+
+        // Verify crawlee is available and working
         const crawleePath = path.join(tempNodeModules, 'crawlee');
         if (!fs.existsSync(crawleePath)) {
           throw new Error('Fallback install verification failed - crawlee not found');
         }
-        debugLog('Fallback install verification successful - crawlee found');
+
+        // Test that crawlee can actually be required
+        try {
+          const testScript = `
+            const fs = require('fs');
+            const path = require('path');
+            try {
+              const crawlee = require('crawlee');
+              console.log('Crawlee test successful');
+              process.exit(0);
+            } catch (error) {
+              console.error('Crawlee module test failed:', error.message);
+              process.exit(1);
+            }
+          `;
+
+          const testPath = path.join(tempDir, 'crawlee-test.js');
+          await fsPromises.writeFile(testPath, testScript, 'utf-8');
+
+          execSync(`node "${testPath}"`, {
+            cwd: tempDir,
+            stdio: 'pipe',
+            timeout: 30000 // 30 seconds timeout for test
+          });
+
+          debugLog('Fallback install verification successful - crawlee working');
+        } catch (testError: unknown) {
+          const testErrorMessage = testError instanceof Error ? testError.message : String(testError);
+          debugLog(`Crawlee test failed: ${testErrorMessage}`);
+          throw new Error(`Crawlee functionality test failed: ${testErrorMessage}`);
+        }
       } catch (fallbackError: unknown) {
         const fallbackErrorMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
         debugLog(`Fallback npm install failed: ${fallbackErrorMessage}`);
