@@ -354,6 +354,28 @@ async function fetchAndProcessJob() {
         logStructured(job.id, 'info', 'SUBPROCESS_EXEC', `Executing compiled script: ${tmpScriptPath}`);
         debugLog(`Executing compiled script for job ${job.id}: ${tmpScriptPath}`);
 
+        // Debug: Check if the compiled file exists and log its size
+        try {
+            const { fsSync } = await ensureFsModules();
+            if (fsSync.existsSync(tmpScriptPath)) {
+                const stats = fsSync.statSync(tmpScriptPath);
+                debugLog(`Compiled script file size: ${stats.size} bytes`);
+                logToDatabase(job.id, `Compiled script file size: ${stats.size} bytes`);
+
+                // Read first few lines of the compiled script for debugging
+                const { fsPromises } = await ensureFsModules();
+                const scriptContent = await fsPromises.readFile(tmpScriptPath, 'utf-8');
+                const firstLines = scriptContent.split('\n').slice(0, 5).join('\n');
+                debugLog(`Compiled script preview:\n${firstLines}`);
+                logToDatabase(job.id, `Compiled script preview:\n${firstLines}`);
+            } else {
+                debugLog(`ERROR: Compiled script file does not exist: ${tmpScriptPath}`);
+                logToDatabase(job.id, `ERROR: Compiled script file does not exist: ${tmpScriptPath}`);
+            }
+        } catch (debugError) {
+            debugLog(`Error checking compiled script: ${debugError}`);
+        }
+
         // Lazy load child_process spawn to avoid loading it at startup
         debugLog('Loading child_process spawn...');
         const { spawn } = await import('child_process');
@@ -398,6 +420,7 @@ async function fetchAndProcessJob() {
         let stdoutData = '';
         let stderrData = '';
         const scriptErrors: string[] = [];
+        let lastOutputTime = Date.now(); // Track last activity time
 
         // Log that the process was spawned
         debugLog(`Process spawned with PID: ${childProcess.pid || 'unknown'}`);
@@ -432,6 +455,7 @@ async function fetchAndProcessJob() {
 
         // Handle stdout
         childProcess.stdout?.on('data', async (data: Buffer) => {
+            lastOutputTime = Date.now(); // Update activity timestamp
             stdoutData += data.toString();
             // Process line by line
             let newlineIndex;
@@ -508,6 +532,7 @@ async function fetchAndProcessJob() {
 
         // Handle stderr with improved error capture
         childProcess.stderr?.on('data', (data: Buffer) => {
+            lastOutputTime = Date.now(); // Update activity timestamp
             const lines = data.toString().split('\n');
             lines.forEach(async (line: string) => {
                 line = line.trim();
@@ -615,6 +640,8 @@ async function fetchAndProcessJob() {
 
         // Handle process exit and timeout
         await new Promise<void>((resolve, reject) => {
+            const INACTIVITY_TIMEOUT_MS = 300000; // 5 minutes of inactivity
+
             const timeout = setTimeout(() => {
                 if (job) {
                     logStructured(job.id, 'error', 'JOB_TIMEOUT', `Script execution timed out after ${SCRIPT_TIMEOUT_SECONDS} seconds.`);
@@ -634,8 +661,23 @@ async function fetchAndProcessJob() {
                 reject(new Error(`Script execution timed out after ${SCRIPT_TIMEOUT_SECONDS} seconds.`));
             }, SCRIPT_TIMEOUT_SECONDS * 1000);
 
+            // Add inactivity timeout check
+            const inactivityCheck = setInterval(() => {
+                const currentTime = Date.now();
+                if (currentTime - lastOutputTime > INACTIVITY_TIMEOUT_MS) {
+                    clearInterval(inactivityCheck);
+                    clearTimeout(timeout);
+                    if (job) {
+                        logStructured(job.id, 'error', 'INACTIVITY_TIMEOUT', `Process killed due to inactivity (no output for 5 minutes)`);
+                    }
+                    childProcess.kill();
+                    reject(new Error('Process killed due to inactivity (no output for 5 minutes)'));
+                }
+            }, 30000); // Check every 30 seconds
+
             childProcess.on('error', (err: Error) => {
                 clearTimeout(timeout);
+                clearInterval(inactivityCheck);
                 if (job) {
                     logStructured(job.id, 'error', 'SUBPROCESS_ERROR', `Failed to start subprocess: ${err.message}`);
                 }
@@ -644,6 +686,7 @@ async function fetchAndProcessJob() {
 
             childProcess.on('close', async (code: number | null) => {
                 clearTimeout(timeout);
+                clearInterval(inactivityCheck);
 
                 // Guard clause: if job is null, we can't proceed with job-specific operations
                 if (!job) {

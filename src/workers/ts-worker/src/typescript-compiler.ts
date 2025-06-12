@@ -276,14 +276,15 @@ export async function compileTypeScriptScraper(
     // Create a tsconfig.json file with very permissive settings to effectively skip type checking
     const tsConfigContent = {
       compilerOptions: {
-        target: "ES2020",
+        target: "ES2022", // Increase target to support newer regex flags and features
         module: "CommonJS",
         moduleResolution: "Node",
         esModuleInterop: true,
+        allowSyntheticDefaultImports: true,
         skipLibCheck: true, // Skip type checking of declaration files
+        skipDefaultLibCheck: true, // Skip checking .d.ts files included with TypeScript
         resolveJsonModule: true,
         outDir: ".",
-        allowSyntheticDefaultImports: true,
         noImplicitAny: false,
         strictNullChecks: false,
         allowJs: true,
@@ -302,12 +303,12 @@ export async function compileTypeScriptScraper(
         noFallthroughCasesInSwitch: false, // Don't report fallthrough cases in switch
         allowUnreachableCode: true, // Allow unreachable code
         allowUnusedLabels: true, // Allow unused labels
-        skipDefaultLibCheck: true, // Skip checking .d.ts files included with TypeScript
         incremental: false, // Disable incremental compilation for faster one-time builds
         composite: false, // Disable composite project features
         declaration: false, // Don't generate declaration files
         declarationMap: false, // Don't generate declaration source maps
-        sourceMap: false // Don't generate source maps for faster compilation
+        sourceMap: false, // Don't generate source maps for faster compilation
+        lib: ["ES2022", "DOM"] // Include necessary libraries
       },
       include: ["scraper.ts"],
       exclude: ["node_modules"]

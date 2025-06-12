@@ -272,9 +272,9 @@ export default function ScrapersPage() {
                       {scraper.id && activeRuns[scraper.id] ? (
                         <Link
                           href={`/app-routes/scrapers/${scraper.id}/run?runId=${activeRuns[scraper.id!]}`}
-                          className="inline-flex rounded-full px-2 text-xs font-semibold leading-5 bg-blue-100 text-blue-800 hover:bg-blue-200"
+                          className="inline-flex items-center rounded-full px-2 text-xs font-semibold leading-5 bg-blue-100 text-blue-800 hover:bg-blue-200"
                         >
-                          <span className="mr-1 inline-block h-2 w-2 rounded-full bg-blue-600 animate-pulse"></span>
+                          <span className="mr-1 h-2 w-2 rounded-full bg-blue-600 animate-pulse"></span>
                           running
                         </Link>
                       ) : (
@@ -295,7 +295,7 @@ export default function ScrapersPage() {
                     </td>
                     <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
                       {scraper.last_run
-                        ? new Date(scraper.last_run).toLocaleDateString()
+                        ? new Date(scraper.last_run).toLocaleString()
                         : "Never"}
                     </td>
                     <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
