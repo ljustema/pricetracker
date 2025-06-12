@@ -38,20 +38,26 @@ export interface CompilerResult {
  */
 async function validateSharedDependencies(): Promise<boolean> {
   try {
+    debugLog(`Validating shared dependencies in: ${SHARED_DEPS_DIR}`);
     const nodeModulesPath = path.join(SHARED_DEPS_DIR, 'node_modules');
     const packageJsonPath = path.join(SHARED_DEPS_DIR, 'package.json');
 
+    debugLog(`Checking paths: ${nodeModulesPath}, ${packageJsonPath}`);
+
     // Check if basic structure exists
     if (!fs.existsSync(nodeModulesPath) || !fs.existsSync(packageJsonPath)) {
-      debugLog('Shared dependencies structure missing');
+      debugLog(`Shared dependencies structure missing - nodeModules: ${fs.existsSync(nodeModulesPath)}, packageJson: ${fs.existsSync(packageJsonPath)}`);
       return false;
     }
 
     // Check for critical dependencies
     const criticalDeps = ['typescript', 'yargs', 'fast-xml-parser', 'crawlee', 'playwright', '@supabase'];
+    debugLog(`Checking critical dependencies: ${criticalDeps.join(', ')}`);
     for (const dep of criticalDeps) {
       const depPath = path.join(nodeModulesPath, dep);
-      if (!fs.existsSync(depPath)) {
+      const exists = fs.existsSync(depPath);
+      debugLog(`Dependency ${dep}: ${exists ? 'found' : 'missing'} at ${depPath}`);
+      if (!exists) {
         debugLog(`Critical dependency missing: ${dep}`);
         return false;
       }
@@ -217,6 +223,7 @@ export async function compileTypeScriptScraper(
   const TIMEOUT_MS = options.timeout || 60000; // Default to 60 seconds
 
   // Try to initialize shared dependencies, but don't fail if it doesn't work
+  debugLog('Starting shared dependencies initialization...');
   try {
     await initializeSharedDependencies();
     debugLog('Shared dependencies initialized successfully');
@@ -224,6 +231,8 @@ export async function compileTypeScriptScraper(
     const errorMessage = sharedDepsError instanceof Error ? sharedDepsError.message : String(sharedDepsError);
     debugLog(`Shared dependencies initialization failed: ${errorMessage}`);
     debugLog('Will attempt to use fallback dependency installation method');
+    // Reset the flag so fallback will be used
+    sharedDepsInitialized = false;
   }
 
   // Create a unique temporary directory
@@ -261,7 +270,11 @@ export async function compileTypeScriptScraper(
     const sharedNodeModules = path.join(SHARED_DEPS_DIR, 'node_modules');
 
     // Try to use shared dependencies first
-    if (sharedDepsInitialized && await validateSharedDependencies()) {
+    debugLog(`Checking shared dependencies: initialized=${sharedDepsInitialized}`);
+    const sharedDepsValid = sharedDepsInitialized && await validateSharedDependencies();
+    debugLog(`Shared dependencies validation result: ${sharedDepsValid}`);
+
+    if (sharedDepsValid) {
       debugLog('Using shared dependencies...');
 
       try {
