@@ -158,11 +158,7 @@ export async function GET(
     const maxRetries = 5;
     const retryDelayMs = 500;
 
-    // Reduced logging to minimize overhead
-    // Only log on first attempt to reduce noise
-    if (retries === 0) {
-      console.log(`[Status API] Querying database for run ${runId}`);
-    }
+    // Minimal logging to reduce overhead - only log errors and status changes
 
     while (retries < maxRetries) {
       // Only select the fields we actually need to reduce data transfer
@@ -188,12 +184,14 @@ export async function GET(
       runData = res.data;
       error = res.error;
 
-      // Only log errors or final success to reduce noise
+      // Only log errors or status changes to reduce noise
       if (error && retries === maxRetries - 1) {
         console.log(`[Status API] Final query attempt failed: ${error.message}`);
       } else if (runData) {
-        // Only log basic info on success
-        console.log(`[Status API] Found run ${runId}: status=${runData.status}`);
+        // Only log when status changes or for failed/completed runs
+        if (runData.status === 'failed' || runData.status === 'completed' || runData.status === 'success') {
+          console.log(`[Status API] Run ${runId} status: ${runData.status}`);
+        }
         break;
       }
       await new Promise(res => setTimeout(res, retryDelayMs));

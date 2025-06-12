@@ -90,7 +90,7 @@ export function TestRunDialog({ open, onOpenChange, integration, onStartFullSync
         console.error('Error polling test run status:', error);
         // Don't clear the interval on error, keep trying
       }
-    }, 2000); // Poll every 2 seconds
+    }, 30000); // Poll every 30 seconds
 
     return () => clearInterval(pollInterval);
   }, [testRunId]);

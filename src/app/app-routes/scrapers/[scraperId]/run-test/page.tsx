@@ -199,7 +199,7 @@ export default function RunTestScraperPage() {
           console.error(`[RunTestPage] Error polling status:`, statusError);
           // Don't clear the interval on polling errors, just try again
         }
-      }, 2000); // Poll every 2 seconds
+      }, 30000); // Poll every 30 seconds
 
       // Clean up interval on component unmount
       return () => clearInterval(statusInterval);

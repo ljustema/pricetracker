@@ -37,7 +37,7 @@ export default function ScraperRunProgress({
   } | null>(null);
 
   const [error, setError] = useState<string | null>(null);
-  const [pollingInterval, setPollingInterval] = useState<number>(5000); // 5 seconds - reduced frequency to lower database load
+  const [pollingInterval, setPollingInterval] = useState<number>(30000); // 30 seconds - reduced frequency to lower database load
   const [consecutiveErrors, setConsecutiveErrors] = useState<number>(0);
   const [_stoppedPollingOnError, _setStoppedPollingOnError] = useState<boolean>(false); // Track if polling stopped due to errors
   const [isStopping, setIsStopping] = useState<boolean>(false); // Track if we're in the process of stopping
@@ -297,8 +297,8 @@ export default function ScraperRunProgress({
       const MAX_ERRORS = 12; // Increase tolerance for long-running jobs
       if (consecutiveErrors >= MAX_ERRORS) {
         console.error(`Reached ${MAX_ERRORS} consecutive errors, slowing down polling.`);
-        // Slow down polling to once every 15 seconds instead of stopping completely
-        setPollingInterval(15000);
+        // Slow down polling to once every 60 seconds instead of stopping completely
+        setPollingInterval(60000);
 
         // Don't mark as stopped - we want to keep trying
         // Don't call onComplete - the job might still be running
@@ -311,9 +311,9 @@ export default function ScraperRunProgress({
       // Increase polling interval on error to avoid hammering the server
       // For connection issues, increase more slowly
       if (isConnectionIssue) {
-        setPollingInterval(prev => Math.min(prev * 1.2, 8000));
+        setPollingInterval(prev => Math.min(prev * 1.2, 60000));
       } else {
-        setPollingInterval(prev => Math.min(prev * 1.5, 10000));
+        setPollingInterval(prev => Math.min(prev * 1.5, 60000));
       }
     }
   }, [scraperId, runId, onComplete, consecutiveErrors, determinePhase, maxBatchValues, prevPhase]);
@@ -350,7 +350,7 @@ export default function ScraperRunProgress({
     console.log("Manual retry requested by user");
     setError(null); // Clear any existing error
     setConsecutiveErrors(0); // Reset error counter
-    setPollingInterval(3000); // Reset polling interval
+    setPollingInterval(30000); // Reset polling interval
 
     // Immediately try to fetch status
     fetchStatus();

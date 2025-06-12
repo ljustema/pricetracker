@@ -405,6 +405,30 @@ async function fetchAndProcessJob() {
         debugLog(`Executing command: ${command} ${args.join(' ')}`);
         await logToDatabase(job.id, `Executing command: ${command} ${args.join(' ')}`);
 
+        // Test if Node.js can execute a simple script in the same environment
+        debugLog('Testing Node.js execution in the target directory...');
+        try {
+            const { execSync } = await import('child_process');
+            const testScript = `console.log('Node.js test successful'); process.exit(0);`;
+            const testScriptPath = path.join(path.dirname(tmpScriptPath), 'test.js');
+            const { fsPromises } = await ensureFsModules();
+            await fsPromises.writeFile(testScriptPath, testScript, 'utf-8');
+
+            const testResult = execSync(`node "${testScriptPath}"`, {
+                cwd: path.dirname(tmpScriptPath),
+                encoding: 'utf-8',
+                timeout: 10000
+            });
+            debugLog(`Node.js test result: ${testResult.trim()}`);
+            await logToDatabase(job.id, `Node.js test successful: ${testResult.trim()}`);
+
+            // Clean up test script
+            await fsPromises.unlink(testScriptPath);
+        } catch (testError) {
+            debugLog(`Node.js test failed: ${testError}`);
+            await logToDatabase(job.id, `Node.js test failed: ${testError}`);
+        }
+
         // Add a small delay before spawning the process to ensure everything is ready
         await new Promise(resolve => setTimeout(resolve, 500));
 
