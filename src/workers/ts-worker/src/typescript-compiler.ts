@@ -585,9 +585,9 @@ export async function compileTypeScriptScraper(
             ]
           };
 
-          // Install Babel dependencies if not already in package.json
-          debugLog('Installing Babel dependencies');
-          execSync('npm install --no-package-lock --no-save @babel/cli @babel/core @babel/preset-env @babel/preset-typescript', {
+          // Install Babel dependencies AND runtime dependencies if not already in package.json
+          debugLog('Installing Babel dependencies and runtime dependencies');
+          execSync('npm install --no-package-lock --no-save @babel/cli @babel/core @babel/preset-env @babel/preset-typescript crawlee playwright yargs fast-xml-parser node-fetch jsdom @supabase/supabase-js', {
             cwd: tempDir,
             stdio: 'pipe',
             timeout: TIMEOUT_MS / 2
@@ -617,6 +617,14 @@ export async function compileTypeScriptScraper(
           const jsFilePath = path.join(tempDir, 'scraper.js');
           if (!fs.existsSync(jsFilePath)) {
             throw new Error('Babel compilation completed but output file not found');
+          }
+
+          // Verify crawlee is available after Babel compilation
+          const crawleePath = path.join(tempNodeModules, 'crawlee');
+          if (!fs.existsSync(crawleePath)) {
+            debugLog('Warning: crawlee not found after Babel compilation, but proceeding anyway');
+          } else {
+            debugLog('Babel compilation verification: crawlee found');
           }
 
           // Return success with the JavaScript file path
