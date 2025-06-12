@@ -551,7 +551,7 @@ export async function compileTypeScriptScraper(
             debugLog('Babel compilation verification: crawlee found');
           }
 
-          // Return success with the JavaScript file path
+          // Return success with the JavaScript file path.
           return {
             success: true,
             outputPath: jsFilePath,
