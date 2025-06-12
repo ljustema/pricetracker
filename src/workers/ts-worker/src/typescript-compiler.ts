@@ -509,9 +509,9 @@ export async function compileTypeScriptScraper(
             ]
           };
 
-          // Install Babel dependencies AND runtime dependencies if not already in package.json
+          // Install Babel dependencies AND runtime dependencies (using node-fetch@2 for CommonJS compatibility)
           debugLog('Installing Babel dependencies and runtime dependencies');
-          execSync('npm install --no-package-lock --no-save @babel/cli @babel/core @babel/preset-env @babel/preset-typescript crawlee playwright yargs fast-xml-parser node-fetch jsdom @supabase/supabase-js', {
+          execSync('npm install --no-package-lock --no-save @babel/cli @babel/core @babel/preset-env @babel/preset-typescript crawlee playwright yargs fast-xml-parser node-fetch@2 jsdom @supabase/supabase-js', {
             cwd: tempDir,
             stdio: 'pipe',
             timeout: TIMEOUT_MS / 2
