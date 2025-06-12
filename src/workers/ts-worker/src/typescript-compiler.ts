@@ -120,6 +120,7 @@ async function initializeSharedDependencies(): Promise<void> {
       await cleanupSharedDependencies();
       sharedDepsInitialized = false;
     } else {
+      debugLog('Shared dependencies already initialized and valid');
       return;
     }
   }
@@ -127,9 +128,11 @@ async function initializeSharedDependencies(): Promise<void> {
   isInitializing = true;
   try {
     debugLog('Initializing comprehensive shared dependencies cache...');
+    debugLog(`Shared dependencies directory: ${SHARED_DEPS_DIR}`);
 
     // Create shared dependencies directory
     await fsPromises.mkdir(SHARED_DEPS_DIR, { recursive: true });
+    debugLog('Shared dependencies directory created');
 
     // Create package.json for shared dependencies with ALL required packages
     const packageJson = {
@@ -160,18 +163,28 @@ async function initializeSharedDependencies(): Promise<void> {
 
     const packageJsonPath = path.join(SHARED_DEPS_DIR, 'package.json');
     await fsPromises.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf-8');
+    debugLog('Package.json created for shared dependencies');
 
     // Install dependencies once with optimized settings
     const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
     debugLog('Installing comprehensive shared dependencies (one-time setup)...');
+    debugLog(`Using npm command: ${npmCommand}`);
 
-    execSync(`${npmCommand} install --no-package-lock --no-save --prefer-offline --no-audit --no-fund`, {
-      cwd: SHARED_DEPS_DIR,
-      stdio: 'pipe',
-      timeout: 600000 // 10 minutes timeout for comprehensive install
-    });
+    try {
+      execSync(`${npmCommand} install --no-package-lock --no-save --prefer-offline --no-audit --no-fund`, {
+        cwd: SHARED_DEPS_DIR,
+        stdio: 'pipe',
+        timeout: 600000 // 10 minutes timeout for comprehensive install
+      });
+      debugLog('npm install completed successfully');
+    } catch (npmError: unknown) {
+      const npmErrorMessage = npmError instanceof Error ? npmError.message : String(npmError);
+      debugLog(`npm install failed: ${npmErrorMessage}`);
+      throw new Error(`npm install failed: ${npmErrorMessage}`);
+    }
 
     // Validate installation
+    debugLog('Validating shared dependencies installation...');
     const isValid = await validateSharedDependencies();
     if (!isValid) {
       throw new Error('Shared dependencies validation failed after installation');
@@ -185,6 +198,7 @@ async function initializeSharedDependencies(): Promise<void> {
     // Clean up failed installation
     await cleanupSharedDependencies();
     sharedDepsInitialized = false;
+    throw error; // Re-throw to let caller know initialization failed
   } finally {
     isInitializing = false;
   }
@@ -202,8 +216,15 @@ export async function compileTypeScriptScraper(
 ): Promise<CompilerResult> {
   const TIMEOUT_MS = options.timeout || 60000; // Default to 60 seconds
 
-  // Initialize shared dependencies first
-  await initializeSharedDependencies();
+  // Try to initialize shared dependencies, but don't fail if it doesn't work
+  try {
+    await initializeSharedDependencies();
+    debugLog('Shared dependencies initialized successfully');
+  } catch (sharedDepsError: unknown) {
+    const errorMessage = sharedDepsError instanceof Error ? sharedDepsError.message : String(sharedDepsError);
+    debugLog(`Shared dependencies initialization failed: ${errorMessage}`);
+    debugLog('Will attempt to use fallback dependency installation method');
+  }
 
   // Create a unique temporary directory
   const uuid = randomUUID();
@@ -239,8 +260,9 @@ export async function compileTypeScriptScraper(
     const tempNodeModules = path.join(tempDir, 'node_modules');
     const sharedNodeModules = path.join(SHARED_DEPS_DIR, 'node_modules');
 
+    // Try to use shared dependencies first
     if (sharedDepsInitialized && await validateSharedDependencies()) {
-      debugLog('Creating symlink to shared dependencies...');
+      debugLog('Using shared dependencies...');
 
       try {
         if (process.platform === 'win32') {
@@ -258,6 +280,7 @@ export async function compileTypeScriptScraper(
           debugLog('Symlink created but crawlee not accessible, falling back to copy');
           throw new Error('Symlink verification failed');
         }
+        debugLog('Shared dependencies setup completed successfully');
       } catch (symlinkError: unknown) {
         const errorMessage = symlinkError instanceof Error ? symlinkError.message : String(symlinkError);
         debugLog(`Failed to create symlink: ${errorMessage}, falling back to copy`);
@@ -290,11 +313,58 @@ export async function compileTypeScriptScraper(
         } catch (copyError: unknown) {
           const copyErrorMessage = copyError instanceof Error ? copyError.message : String(copyError);
           debugLog(`Failed to copy shared dependencies: ${copyErrorMessage}`);
-          throw new Error(`Failed to set up dependencies: ${copyErrorMessage}`);
+          debugLog('Falling back to fresh npm install...');
+          throw new Error('Shared dependencies copy failed');
         }
       }
     } else {
-      throw new Error('Shared dependencies not available or invalid');
+      debugLog('Shared dependencies not available, using fallback npm install...');
+
+      // Fallback: Install dependencies directly in temp directory
+      try {
+        const fallbackPackageJson = {
+          name: "temp-scraper",
+          version: "1.0.0",
+          private: true,
+          dependencies: {
+            "typescript": "^5.0.0",
+            "crawlee": "^3.13.3",
+            "playwright": "^1.40.0",
+            "yargs": "^17.6.2",
+            "fast-xml-parser": "^5.2.0",
+            "node-fetch": "^2.6.7",
+            "jsdom": "^21.1.0",
+            "@supabase/supabase-js": "^2.0.0"
+          }
+        };
+
+        // Overwrite the minimal package.json with full dependencies
+        await fsPromises.writeFile(packageJsonPath, JSON.stringify(fallbackPackageJson, null, 2), 'utf-8');
+        debugLog('Created fallback package.json with full dependencies');
+
+        // Install dependencies
+        const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+        debugLog('Installing dependencies directly in temp directory...');
+
+        execSync(`${npmCommand} install --no-package-lock --no-save --prefer-offline --no-audit --no-fund`, {
+          cwd: tempDir,
+          stdio: 'pipe',
+          timeout: 300000 // 5 minutes timeout
+        });
+
+        debugLog('Fallback npm install completed successfully');
+
+        // Verify crawlee is available
+        const crawleePath = path.join(tempNodeModules, 'crawlee');
+        if (!fs.existsSync(crawleePath)) {
+          throw new Error('Fallback install verification failed - crawlee not found');
+        }
+        debugLog('Fallback install verification successful - crawlee found');
+      } catch (fallbackError: unknown) {
+        const fallbackErrorMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        debugLog(`Fallback npm install failed: ${fallbackErrorMessage}`);
+        throw new Error(`Failed to set up dependencies: ${fallbackErrorMessage}`);
+      }
     }
 
     // Create a tsconfig.json file with very permissive settings to effectively skip type checking
