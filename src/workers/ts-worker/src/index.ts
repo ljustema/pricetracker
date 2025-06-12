@@ -43,7 +43,7 @@ async function getSupabaseClient(): Promise<SupabaseClient<Database>> {
       throw new Error('Missing Supabase URL or Service Role Key environment variables.');
     }
 
-    supabaseClient = createClient<Database>(supabaseUrl, supabaseServiceRoleKey);
+    supabaseClient = createClient(supabaseUrl, supabaseServiceRoleKey);
     debugLog('Supabase client initialized');
   }
   return supabaseClient;
@@ -250,8 +250,8 @@ async function fetchAndProcessJob() {
         if (brandError) {
             logStructured(job.id, 'warn', 'SETUP', `Failed to fetch active brands: ${brandError.message}. Proceeding without brand filter.`);
         } else if (brands) {
-            activeBrandNames = brands.map((b) => String(b.name));
-            activeBrandIds = brands.map((b) => String(b.id));
+            activeBrandNames = brands.map((b: { name: unknown }) => String(b.name));
+            activeBrandIds = brands.map((b: { id: unknown }) => String(b.id));
             logStructured(job.id, 'info', 'SETUP', `Fetched ${activeBrandNames.length} active brands.`);
         }
     }
@@ -267,10 +267,10 @@ async function fetchAndProcessJob() {
         if (productError) {
             logStructured(job.id, 'warn', 'SETUP', `Failed to fetch own products: ${productError.message}. Proceeding without own product filter.`);
         } else if (products) {
-            ownProductEans = products.map((p) => p.ean).filter((ean): ean is string => typeof ean === 'string' && !!ean);
+            ownProductEans = products.map((p: { ean: unknown }) => p.ean).filter((ean: unknown): ean is string => typeof ean === 'string' && !!ean);
             ownProductSkuBrands = products
-                .filter((p) => p.sku && (p.brand || p.brand_id))
-                .map((p) => ({
+                .filter((p: { sku: unknown; brand: unknown; brand_id: unknown }) => p.sku && (p.brand || p.brand_id))
+                .map((p: { sku: unknown; brand: unknown; brand_id: unknown }) => ({
                     sku: String(p.sku),
                     brand: String(p.brand || ''),
                     brand_id: String(p.brand_id || '')

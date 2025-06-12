@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import { createClient } from '@supabase/supabase-js';
 
 // Create logs directory if it doesn't exist
 const logsDir = path.join(process.cwd(), 'logs');
@@ -41,22 +40,30 @@ export function debugLog(message: string): void {
   console.log(`[DEBUG] ${message}`);
 }
 
-// Initialize Supabase client for direct database access
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// Lazy-loaded Supabase client for direct database access
+let supabase: ReturnType<typeof import('@supabase/supabase-js').createClient> | null = null;
 
-let supabase: ReturnType<typeof createClient> | null = null;
+async function getSupabaseClient() {
+  if (!supabase) {
+    const { createClient } = await import('@supabase/supabase-js');
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (supabaseUrl && supabaseServiceRoleKey) {
-  supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
-  debugLog('Supabase client initialized for direct database access');
-} else {
-  debugLog('Missing Supabase credentials, direct database access not available');
+    if (supabaseUrl && supabaseServiceRoleKey) {
+      supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+      debugLog('Supabase client initialized for direct database access');
+    } else {
+      debugLog('Missing Supabase credentials, direct database access not available');
+      return null;
+    }
+  }
+  return supabase;
 }
 
 // Function to directly log to the database
 export async function logToDatabase(runId: string, message: string, data: unknown = null): Promise<void> {
-  if (!supabase) {
+  const supabaseClient = await getSupabaseClient();
+  if (!supabaseClient) {
     debugLog(`Cannot log to database: Supabase client not initialized`);
     return;
   }
@@ -76,7 +83,7 @@ export async function logToDatabase(runId: string, message: string, data: unknow
     // Convert to string for storage in TEXT column
     const logEntryString = JSON.stringify(logEntry);
 
-    const { error: updateError } = await supabase
+    const { error: updateError } = await supabaseClient
       .from('scraper_runs')
       .update({
         error_details: logEntryString // Store as string in TEXT column
