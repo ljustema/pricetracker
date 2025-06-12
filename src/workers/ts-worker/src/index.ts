@@ -1,9 +1,8 @@
 import 'dotenv/config'; // Load environment variables
 import { debugLog, logToDatabase } from './debug-logger'; // Import our debug logger
-import { logMemoryUsage, forceMemoryCleanup, getMemoryStatus, resetRestartAttempts } from './memory-manager';
 
-// Log that the worker has started with optimized memory management
-debugLog('TypeScript worker started with optimized memory management');
+// Log that the worker has started
+debugLog('TypeScript worker started (simplified version)');
 
 // Import Database type for type safety
 import type { Database } from './database.types';
@@ -168,16 +167,16 @@ const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 
 console.log(`Starting TypeScript Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
 
-// Enhanced memory monitoring with status reporting
-function logMemoryStatus(context: string) {
-  const status = getMemoryStatus();
-  logMemoryUsage(context);
-
-  if (status.status === 'critical' || status.status === 'restart') {
-    debugLog(`Memory status: ${status.status}, trending ${status.trending}, average: ${status.average}MB`);
-  }
-
-  return status;
+// Simple memory logging
+function logMemoryUsage(context: string) {
+  const memUsage = process.memoryUsage();
+  const memMB = {
+    rss: Math.round(memUsage.rss / 1024 / 1024),
+    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+    heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+    external: Math.round(memUsage.external / 1024 / 1024)
+  };
+  console.log(`[MEMORY] ${context}: RSS=${memMB.rss}MB, Heap=${memMB.heapUsed}/${memMB.heapTotal}MB, External=${memMB.external}MB`);
 }
 
 // Log initial memory usage
@@ -208,16 +207,8 @@ async function fetchAndProcessJob() {
       const inactivityDuration = (currentTime - lastJobTime) / 1000; // Convert to seconds
       console.log(`Worker health check: ${inactivityDuration.toFixed(1)} seconds since last job processed. Worker is still running.`);
 
-      // Enhanced memory monitoring during health checks
-      const memoryStatus = logMemoryStatus('Health check');
-
-      // Force memory cleanup during health checks to prevent memory leaks
-      forceMemoryCleanup('Health check');
-
-      // Reset restart attempts if memory is back to normal
-      if (memoryStatus.status === 'normal') {
-        resetRestartAttempts();
-      }
+      // Simple memory monitoring during health checks
+      logMemoryUsage('Health check');
 
       lastHealthCheckTime = currentTime;
     }
@@ -1268,17 +1259,9 @@ async function fetchAndProcessJob() {
     isProcessingJob = false;
     currentJobId = null;
 
-    // Enhanced memory cleanup after job completion
+    // Simple memory logging after job completion
     if (job && job.id) {
-      const memoryStatus = logMemoryStatus(`Job ${job.id} complete`);
-
-      // Force aggressive cleanup after job completion
-      forceMemoryCleanup('Job completion');
-
-      // Check if memory is still high after cleanup
-      if (memoryStatus.status === 'critical' || memoryStatus.status === 'restart') {
-        debugLog(`Memory still high after job completion: ${memoryStatus.current.rss}MB`);
-      }
+      logMemoryUsage(`Job ${job.id} complete`);
     }
 
     // Clean up log batch for this job to prevent memory leaks
@@ -1298,9 +1281,6 @@ async function fetchAndProcessJob() {
       }
       delete LOG_BATCHES[job.id];
     }
-
-    // Force memory cleanup after job completion
-    forceMemoryCleanup('Job completion');
   }
 }
 
