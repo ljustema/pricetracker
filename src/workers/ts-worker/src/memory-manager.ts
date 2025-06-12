@@ -6,7 +6,7 @@ const MEMORY_CRITICAL_THRESHOLD = 1200;
 const MEMORY_RESTART_THRESHOLD = 1400;
 
 // Track memory usage over time
-let memoryHistory: number[] = [];
+const memoryHistory: number[] = [];
 const MEMORY_HISTORY_SIZE = 10;
 
 // Track restart attempts
