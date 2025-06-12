@@ -1,20 +1,34 @@
 import 'dotenv/config'; // Load environment variables
-import { spawn } from 'child_process'; // Added for subprocess execution
-import fsPromises from 'fs/promises'; // Use fs/promises for async file operations
-import fsSync from 'fs'; // Use fs for synchronous operations like existsSync/mkdirSync
-import path from 'path'; // Added for path manipulation
-import _os from 'os'; // Added for temp directory
-import _util from 'util'; // Added for promisify (if needed later)
 import { debugLog, logToDatabase } from './debug-logger'; // Import our debug logger
+import { logMemoryUsage, forceMemoryCleanup, getMemoryStatus, resetRestartAttempts } from './memory-manager';
 
-// Log that the worker has started with our changes
-debugLog('TypeScript worker started with debug logging enabled');
+// Log that the worker has started with optimized memory management
+debugLog('TypeScript worker started with optimized memory management');
 
 // Import Database type for type safety
 import type { Database } from './database.types';
 
-// Import Supabase types
+// Import Supabase types (type-only import)
 import type { SupabaseClient } from '@supabase/supabase-js';
+
+// Lazy-loaded modules (will be imported when needed)
+let fsPromises: typeof import('fs/promises') | null = null;
+let fsSync: typeof import('fs') | null = null;
+let path: typeof import('path') | null = null;
+
+// Helper function to ensure fs modules are loaded
+async function ensureFsModules() {
+  if (!fsPromises) {
+    fsPromises = await import('fs/promises');
+  }
+  if (!fsSync) {
+    fsSync = await import('fs');
+  }
+  if (!path) {
+    path = await import('path');
+  }
+  return { fsPromises, fsSync, path };
+}
 
 // Lazy loading functions for heavy dependencies
 let supabaseClient: SupabaseClient<Database> | null = null;
@@ -100,35 +114,16 @@ const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 
 console.log(`Starting TypeScript Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
 
-// Memory monitoring and management
-function logMemoryUsage(context: string) {
-  const memUsage = process.memoryUsage();
-  const memMB = {
-    rss: Math.round(memUsage.rss / 1024 / 1024),
-    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
-    heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
-    external: Math.round(memUsage.external / 1024 / 1024)
-  };
-  console.log(`[MEMORY] ${context}: RSS=${memMB.rss}MB, Heap=${memMB.heapUsed}/${memMB.heapTotal}MB, External=${memMB.external}MB`);
+// Enhanced memory monitoring with status reporting
+function logMemoryStatus(context: string) {
+  const status = getMemoryStatus();
+  logMemoryUsage(context);
 
-  // Log warning if memory usage is high
-  if (memMB.rss > 1000) {
-    console.warn(`[MEMORY WARNING] High memory usage detected: ${memMB.rss}MB RSS`);
-  }
-}
-
-// Force garbage collection and memory cleanup
-function forceMemoryCleanup(context: string) {
-  debugLog(`Forcing memory cleanup: ${context}`);
-
-  // Force garbage collection if available
-  if (global.gc) {
-    global.gc();
-    debugLog('Garbage collection triggered');
+  if (status.status === 'critical' || status.status === 'restart') {
+    debugLog(`Memory status: ${status.status}, trending ${status.trending}, average: ${status.average}MB`);
   }
 
-  // Log memory usage after cleanup
-  logMemoryUsage(`After cleanup - ${context}`);
+  return status;
 }
 
 // Log initial memory usage
@@ -158,10 +153,17 @@ async function fetchAndProcessJob() {
     if (currentTime - lastHealthCheckTime > HEALTH_CHECK_INTERVAL_MS) {
       const inactivityDuration = (currentTime - lastJobTime) / 1000; // Convert to seconds
       console.log(`Worker health check: ${inactivityDuration.toFixed(1)} seconds since last job processed. Worker is still running.`);
-      logMemoryUsage('Health check');
+
+      // Enhanced memory monitoring during health checks
+      const memoryStatus = logMemoryStatus('Health check');
 
       // Force memory cleanup during health checks to prevent memory leaks
       forceMemoryCleanup('Health check');
+
+      // Reset restart attempts if memory is back to normal
+      if (memoryStatus.status === 'normal') {
+        resetRestartAttempts();
+      }
 
       lastHealthCheckTime = currentTime;
     }
@@ -351,6 +353,11 @@ async function fetchAndProcessJob() {
         tmpScriptPath = compilationResult.outputPath;
         logStructured(job.id, 'info', 'SUBPROCESS_EXEC', `Executing compiled script: ${tmpScriptPath}`);
         debugLog(`Executing compiled script for job ${job.id}: ${tmpScriptPath}`);
+
+        // Lazy load child_process spawn to avoid loading it at startup
+        debugLog('Loading child_process spawn...');
+        const { spawn } = await import('child_process');
+        const path = await import('path');
 
         // Spawn subprocess - simplified approach
         const command = 'node';
@@ -876,12 +883,13 @@ async function fetchAndProcessJob() {
                 } else {
                     // Fall back to the original cleanup logic for non-compiled scripts
                     try {
-                        await fsPromises.unlink(tmpScriptPath);
+                        const { fsPromises: fs, fsSync, path } = await ensureFsModules();
+                        await fs.unlink(tmpScriptPath);
                         // Only try to remove the directory if it exists
                         const dirPath = path.dirname(tmpScriptPath);
                         if (fsSync.existsSync(dirPath)) {
                             // Use recursive removal instead of rmdir
-                            await fsPromises.rm(dirPath, { recursive: true, force: true });
+                            await fs.rm(dirPath, { recursive: true, force: true });
                         }
                         if (job) {
                             logStructured(job.id, 'debug', 'CLEANUP', `Removed temporary script and directory: ${tmpScriptPath}`);
@@ -1024,9 +1032,17 @@ async function fetchAndProcessJob() {
     isProcessingJob = false;
     currentJobId = null;
 
-    // Log memory usage after job completion
+    // Enhanced memory cleanup after job completion
     if (job && job.id) {
-      logMemoryUsage(`Job ${job.id} complete`);
+      const memoryStatus = logMemoryStatus(`Job ${job.id} complete`);
+
+      // Force aggressive cleanup after job completion
+      forceMemoryCleanup('Job completion');
+
+      // Check if memory is still high after cleanup
+      if (memoryStatus.status === 'critical' || memoryStatus.status === 'restart') {
+        debugLog(`Memory still high after job completion: ${memoryStatus.current.rss}MB`);
+      }
     }
 
     // Clean up log batch for this job to prevent memory leaks
@@ -1055,16 +1071,24 @@ async function fetchAndProcessJob() {
 // --- Helper Function for Structured Logging ---
 // Note: fsSync and path are already imported at the top
 
-// Ensure logs directory exists at startup
-const logsDir = path.join(process.cwd(), 'logs');
-try {
-    if (!fsSync.existsSync(logsDir)) {
+// Lazy initialization of logs directory
+let logsDir: string | null = null;
+
+async function ensureLogsDir(): Promise<string> {
+  if (!logsDir) {
+    const { fsSync, path } = await ensureFsModules();
+    logsDir = path.join(process.cwd(), 'logs');
+    try {
+      if (!fsSync.existsSync(logsDir)) {
         fsSync.mkdirSync(logsDir, { recursive: true });
         console.log(`Created logs directory: ${logsDir}`);
+      }
+    } catch (err) {
+      console.error(`Failed to create logs directory ${logsDir}:`, err);
+      // Decide if worker should exit if logging to file is critical
     }
-} catch (err) {
-    console.error(`Failed to create logs directory ${logsDir}:`, err);
-    // Decide if worker should exit if logging to file is critical
+  }
+  return logsDir;
 }
 
 // Message batching system to reduce database load
@@ -1175,13 +1199,20 @@ function logStructured(jobId: string | null, level: string, phase: string, messa
   console.log(`${logPrefix} [${level.toUpperCase()}] [${phase}] ${message}`, data ? JSON.stringify(data) : '');
 
   // Log to file asynchronously
-  const dateStr = timestamp.toISOString().split('T')[0]; // YYYY-MM-DD
-  const logFile = path.join(logsDir, `ts-worker-${dateStr}.log`);
-  const logLine = JSON.stringify(logEntry) + '\n';
+  ensureLogsDir().then(async (logsDirPath) => {
+    try {
+      const { fsPromises, path } = await ensureFsModules();
+      const dateStr = timestamp.toISOString().split('T')[0]; // YYYY-MM-DD
+      const logFile = path.join(logsDirPath, `ts-worker-${dateStr}.log`);
+      const logLine = JSON.stringify(logEntry) + '\n';
 
-  fsPromises.appendFile(logFile, logLine).catch(err => {
+      await fsPromises.appendFile(logFile, logLine);
+    } catch (err) {
       // Log failure to write file only to console to avoid loops
-      console.error(`${logPrefix} Failed to write to log file ${logFile}: ${err}`);
+      console.error(`${logPrefix} Failed to write to log file: ${err}`);
+    }
+  }).catch(err => {
+    console.error(`${logPrefix} Failed to ensure logs directory: ${err}`);
   });
 
   // Only log to database if we have a job ID

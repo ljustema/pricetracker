@@ -9,6 +9,7 @@ import { debugLog } from './debug-logger';
 // Cache for shared dependencies to reduce memory usage
 const SHARED_DEPS_DIR = path.join(os.tmpdir(), 'ts-worker-shared-deps');
 let sharedDepsInitialized = false;
+let isInitializing = false; // Prevent concurrent initialization
 
 /**
  * Force cleanup of shared dependencies (for immediate use)
@@ -47,7 +48,7 @@ async function validateSharedDependencies(): Promise<boolean> {
     }
 
     // Check for critical dependencies
-    const criticalDeps = ['typescript', 'yargs', 'fast-xml-parser'];
+    const criticalDeps = ['typescript', 'yargs', 'fast-xml-parser', 'crawlee', 'playwright', '@supabase'];
     for (const dep of criticalDeps) {
       const depPath = path.join(nodeModulesPath, dep);
       if (!fs.existsSync(depPath)) {
@@ -101,6 +102,16 @@ async function cleanupSharedDependencies(): Promise<void> {
  * Initialize shared dependencies to reduce memory usage
  */
 async function initializeSharedDependencies(): Promise<void> {
+  // Prevent concurrent initialization
+  if (isInitializing) {
+    debugLog('Shared dependencies initialization already in progress, waiting...');
+    // Wait for initialization to complete
+    while (isInitializing) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    return;
+  }
+
   if (sharedDepsInitialized) {
     // Validate existing cache
     const isValid = await validateSharedDependencies();
@@ -113,40 +124,51 @@ async function initializeSharedDependencies(): Promise<void> {
     }
   }
 
+  isInitializing = true;
   try {
-    debugLog('Initializing shared dependencies cache...');
+    debugLog('Initializing comprehensive shared dependencies cache...');
 
     // Create shared dependencies directory
     await fsPromises.mkdir(SHARED_DEPS_DIR, { recursive: true });
 
-    // Create package.json for shared dependencies with more conservative versions
+    // Create package.json for shared dependencies with ALL required packages
     const packageJson = {
       name: "ts-worker-shared-deps",
       version: "1.0.0",
       private: true,
       dependencies: {
-        // Use more stable versions to avoid type definition issues
+        // Core compilation tools
         "typescript": "^5.0.0",
         "@types/node": "^18.15.0",
+
+        // Scraper dependencies - install once and reuse
+        "crawlee": "^3.13.3",
+        "playwright": "^1.40.0",
         "yargs": "^17.6.2",
         "fast-xml-parser": "^5.2.0",
         "node-fetch": "^2.6.7",
-        "jsdom": "^21.1.0"
-        // Note: Crawlee and Playwright will be installed per-compilation to avoid type issues
+        "jsdom": "^21.1.0",
+        "@supabase/supabase-js": "^2.0.0",
+
+        // Babel fallback tools
+        "@babel/cli": "^7.21.0",
+        "@babel/core": "^7.21.0",
+        "@babel/preset-env": "^7.21.0",
+        "@babel/preset-typescript": "^7.21.0"
       }
     };
 
     const packageJsonPath = path.join(SHARED_DEPS_DIR, 'package.json');
     await fsPromises.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf-8');
 
-    // Install dependencies once
+    // Install dependencies once with optimized settings
     const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-    debugLog('Installing shared dependencies (one-time setup)...');
+    debugLog('Installing comprehensive shared dependencies (one-time setup)...');
 
-    execSync(`${npmCommand} install --no-package-lock --no-save`, {
+    execSync(`${npmCommand} install --no-package-lock --no-save --prefer-offline --no-audit --no-fund`, {
       cwd: SHARED_DEPS_DIR,
       stdio: 'pipe',
-      timeout: 300000 // 5 minutes timeout
+      timeout: 600000 // 10 minutes timeout for comprehensive install
     });
 
     // Validate installation
@@ -156,13 +178,15 @@ async function initializeSharedDependencies(): Promise<void> {
     }
 
     sharedDepsInitialized = true;
-    debugLog('Shared dependencies cache initialized successfully');
+    debugLog('Comprehensive shared dependencies cache initialized successfully');
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     debugLog(`Failed to initialize shared dependencies: ${errorMessage}`);
     // Clean up failed installation
     await cleanupSharedDependencies();
     sharedDepsInitialized = false;
+  } finally {
+    isInitializing = false;
   }
 }
 
@@ -196,78 +220,57 @@ export async function compileTypeScriptScraper(
     await fsPromises.writeFile(tempTsFilePath, scriptContent, 'utf-8');
     debugLog(`Temporary TypeScript script written to ${tempTsFilePath}`);
 
-    // Create a hybrid approach: use shared dependencies for stable packages, install problematic ones individually
-    debugLog('Setting up dependencies with hybrid approach...');
+    // Use symlinks to shared dependencies instead of copying/installing
+    debugLog('Setting up symlinks to shared dependencies...');
 
-    // Create package.json for this compilation
+    // Create package.json for this compilation (minimal, just for TypeScript)
     const packageJson = {
       name: "temp-scraper-execution",
       version: "1.0.0",
       private: true,
-      dependencies: {
-        "crawlee": "^3.13.3",
-        "playwright": "^1.30.0",
-        "node-fetch": "^2.6.7",
-        "jsdom": "^21.1.0",
-        "yargs": "^17.6.2",
-        "typescript": "^5.0.0",
-        "@types/node": "^18.15.0",
-        "fast-xml-parser": "^5.2.0"
-      }
+      dependencies: {}
     };
 
     const packageJsonPath = path.join(tempDir, 'package.json');
     await fsPromises.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf-8');
-    debugLog(`Created package.json at ${packageJsonPath}`);
+    debugLog(`Created minimal package.json at ${packageJsonPath}`);
 
-    // Try to use shared dependencies for stable packages
+    // Create symlink to shared node_modules
     const tempNodeModules = path.join(tempDir, 'node_modules');
-    await fsPromises.mkdir(tempNodeModules, { recursive: true });
+    const sharedNodeModules = path.join(SHARED_DEPS_DIR, 'node_modules');
 
     if (sharedDepsInitialized && await validateSharedDependencies()) {
-      debugLog('Using shared dependencies for stable packages...');
+      debugLog('Creating symlink to shared dependencies...');
 
-      const sharedNodeModules = path.join(SHARED_DEPS_DIR, 'node_modules');
-      const stablePackages = ['typescript', 'yargs', 'fast-xml-parser', 'node-fetch', 'jsdom', '@types'];
+      try {
+        if (process.platform === 'win32') {
+          // On Windows, use junction (directory symlink)
+          execSync(`mklink /J "${tempNodeModules}" "${sharedNodeModules}"`, { stdio: 'pipe' });
+        } else {
+          // On Unix-like systems, use symlink
+          await fsPromises.symlink(sharedNodeModules, tempNodeModules);
+        }
+        debugLog('Symlink to shared dependencies created successfully');
+      } catch (symlinkError: unknown) {
+        const errorMessage = symlinkError instanceof Error ? symlinkError.message : String(symlinkError);
+        debugLog(`Failed to create symlink: ${errorMessage}, falling back to copy`);
 
-      // Copy stable packages from shared cache
-      for (const pkg of stablePackages) {
-        const sharedPkgPath = path.join(sharedNodeModules, pkg);
-        const tempPkgPath = path.join(tempNodeModules, pkg);
-
-        if (fs.existsSync(sharedPkgPath)) {
-          try {
-            if (process.platform === 'win32') {
-              // On Windows, use robocopy for better performance
-              execSync(`robocopy "${sharedPkgPath}" "${tempPkgPath}" /E /NFL /NDL /NJH /NJS /NC /NS`, { stdio: 'pipe' });
-            } else {
-              // On Unix-like systems, use cp
-              execSync(`cp -r "${sharedPkgPath}" "${tempPkgPath}"`, { stdio: 'pipe' });
-            }
-            debugLog(`Copied shared package: ${pkg}`);
-          } catch (copyError: unknown) {
-            const errorMessage = copyError instanceof Error ? copyError.message : String(copyError);
-            debugLog(`Failed to copy shared package ${pkg}: ${errorMessage}`);
+        // Fallback: copy the entire node_modules directory
+        try {
+          if (process.platform === 'win32') {
+            execSync(`robocopy "${sharedNodeModules}" "${tempNodeModules}" /E /NFL /NDL /NJH /NJS /NC /NS`, { stdio: 'pipe' });
+          } else {
+            execSync(`cp -r "${sharedNodeModules}" "${tempNodeModules}"`, { stdio: 'pipe' });
           }
+          debugLog('Fallback copy of shared dependencies completed');
+        } catch (copyError: unknown) {
+          const copyErrorMessage = copyError instanceof Error ? copyError.message : String(copyError);
+          debugLog(`Failed to copy shared dependencies: ${copyErrorMessage}`);
+          throw new Error(`Failed to set up dependencies: ${copyErrorMessage}`);
         }
       }
-    }
-
-    // Install all dependencies (will use existing ones where available)
-    debugLog('Installing remaining dependencies...');
-    const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-
-    try {
-      execSync(`${npmCommand} install --no-package-lock --no-save`, {
-        cwd: tempDir,
-        stdio: 'pipe',
-        timeout: 300000 // 5 minutes timeout for npm install
-      });
-      debugLog('Dependencies installed successfully');
-    } catch (installError: unknown) {
-      const errorMessage = installError instanceof Error ? installError.message : String(installError);
-      debugLog(`npm install failed: ${errorMessage}`);
-      throw new Error(`Failed to install dependencies: ${errorMessage}`);
+    } else {
+      throw new Error('Shared dependencies not available or invalid');
     }
 
     // Create a tsconfig.json file with very permissive settings to effectively skip type checking

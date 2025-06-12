@@ -6,32 +6,18 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsc -w & nodemon dist/index.js"
+    "start": "node --expose-gc dist/index.js",
+    "dev": "tsc -w & nodemon --expose-gc dist/index.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@supabase/supabase-js": "^2.0.0",
-    "crawlee": "^3.13.3",
-    "dotenv": "^16.3.1",
-    "fast-xml-parser": "^5.2.0",
-    "jsdom": "^22.1.0",
-    "node-fetch": "^3.3.2",
-    "playwright": "^1.40.0",
-    "yargs": "^17.7.2"
+    "dotenv": "^16.3.1"
   },
   "devDependencies": {
-    "@babel/cli": "^7.21.0",
-    "@babel/core": "^7.21.0",
-    "@babel/preset-env": "^7.21.0",
-    "@babel/preset-typescript": "^7.21.0",
     "@types/node": "^18.0.0",
-    "@types/uuid": "^10.0.0",
-    "@types/yargs": "^17.0.32",
     "nodemon": "^2.0.22",
-    "typescript": "^5.0.0",
-    "uuid": "^11.1.0"
+    "typescript": "^5.0.0"
   }
 }
