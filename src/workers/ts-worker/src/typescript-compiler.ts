@@ -294,36 +294,25 @@ export async function compileTypeScriptScraper(
     debugLog(`Shared dependencies validation result: ${sharedDepsValid}`);
 
     if (sharedDepsValid) {
-      debugLog('Using shared dependencies...');
+      debugLog('Using shared dependencies with copy method (Railway-compatible)...');
 
-      // Check if we're running on Railway or other containerized environments
-      const isRailway = process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID;
-      const isContainer = process.env.CONTAINER || process.env.DOCKER_CONTAINER;
-
-      if (isRailway || isContainer) {
-        debugLog('Detected containerized environment (Railway/Docker), skipping symlink and using copy method');
-        throw new Error('Containerized environment detected - using copy method for better compatibility');
-      }
-
+      // Copy the entire node_modules directory (no symlinks for Railway compatibility)
       try {
+        debugLog('Copying shared dependencies to temp directory...');
         if (process.platform === 'win32') {
-          // On Windows, use junction (directory symlink)
-          execSync(`mklink /J "${tempNodeModules}" "${sharedNodeModules}"`, { stdio: 'pipe' });
+          execSync(`robocopy "${sharedNodeModules}" "${tempNodeModules}" /E /NFL /NDL /NJH /NJS /NC /NS`, { stdio: 'pipe' });
         } else {
-          // On Unix-like systems, use symlink
-          await fsPromises.symlink(sharedNodeModules, tempNodeModules);
+          execSync(`cp -r "${sharedNodeModules}" "${tempNodeModules}"`, { stdio: 'pipe' });
         }
-        debugLog('Symlink to shared dependencies created successfully');
+        debugLog('Copy of shared dependencies completed');
 
-        // Verify the symlink works by checking if crawlee is accessible and working
+        // Verify the copy worked and crawlee is functional
         const crawleePath = path.join(tempNodeModules, 'crawlee');
         if (!fs.existsSync(crawleePath)) {
-          debugLog('Symlink created but crawlee not accessible, falling back to copy');
-          throw new Error('Symlink verification failed');
+          throw new Error('Copy verification failed - crawlee not found');
         }
 
-        // Test that crawlee can actually be required from the symlinked location
-        // This is the critical test that must pass for the script to work
+        // Test that crawlee can actually be required from the copied location
         try {
           const testScript = `
             const fs = require('fs');
@@ -334,7 +323,6 @@ export async function compileTypeScriptScraper(
               process.exit(0);
             } catch (error) {
               console.error('Crawlee module test failed:', error.message);
-              console.error('Module search paths:', require.resolve.paths('crawlee'));
               process.exit(1);
             }
           `;
@@ -342,97 +330,23 @@ export async function compileTypeScriptScraper(
           const testPath = path.join(tempDir, 'crawlee-test.js');
           await fsPromises.writeFile(testPath, testScript, 'utf-8');
 
-          const testResult = execSync(`node "${testPath}"`, {
+          execSync(`node "${testPath}"`, {
             cwd: tempDir,
             stdio: 'pipe',
-            timeout: 30000, // 30 seconds timeout for test
-            encoding: 'utf8'
+            timeout: 30000 // 30 seconds timeout for test
           });
 
-          debugLog(`Symlink test output: ${testResult}`);
           debugLog('Shared dependencies setup completed successfully - crawlee working');
         } catch (testError: unknown) {
           const testErrorMessage = testError instanceof Error ? testError.message : String(testError);
-          let stderrOutput = '';
-
-          // Extract stderr if available
-          if (testError && typeof testError === 'object' && 'stderr' in testError && testError.stderr) {
-            stderrOutput = String(testError.stderr);
-          }
-
           debugLog(`Crawlee test failed: ${testErrorMessage}`);
-          if (stderrOutput) debugLog(`Crawlee test stderr: ${stderrOutput}`);
-          debugLog('Symlink verification failed, falling back to copy method');
-          throw new Error('Symlink verification failed - crawlee not working');
+          throw new Error('Copy verification failed - crawlee not working');
         }
-      } catch (symlinkError: unknown) {
-        const errorMessage = symlinkError instanceof Error ? symlinkError.message : String(symlinkError);
-        debugLog(`Failed to create symlink or symlink verification failed: ${errorMessage}`);
-        debugLog('This is common on Railway and other containerized environments');
-        debugLog('Falling back to copy method which is more reliable');
-
-        // Remove failed symlink if it exists
-        if (fs.existsSync(tempNodeModules)) {
-          try {
-            await fsPromises.rm(tempNodeModules, { recursive: true, force: true });
-            debugLog('Removed failed symlink directory');
-          } catch (removeError) {
-            debugLog(`Failed to remove failed symlink: ${removeError}`);
-          }
-        }
-
-        // Fallback: copy the entire node_modules directory
-        try {
-          debugLog('Starting fallback copy of shared dependencies...');
-          if (process.platform === 'win32') {
-            execSync(`robocopy "${sharedNodeModules}" "${tempNodeModules}" /E /NFL /NDL /NJH /NJS /NC /NS`, { stdio: 'pipe' });
-          } else {
-            execSync(`cp -r "${sharedNodeModules}" "${tempNodeModules}"`, { stdio: 'pipe' });
-          }
-          debugLog('Fallback copy of shared dependencies completed');
-
-          // Verify the copy worked and crawlee is functional
-          const crawleePath = path.join(tempNodeModules, 'crawlee');
-          if (!fs.existsSync(crawleePath)) {
-            throw new Error('Copy verification failed - crawlee not found');
-          }
-
-          // Test that crawlee can actually be required from the copied location
-          try {
-            const testScript = `
-              const fs = require('fs');
-              const path = require('path');
-              try {
-                const crawlee = require('crawlee');
-                console.log('Crawlee test successful');
-                process.exit(0);
-              } catch (error) {
-                console.error('Crawlee module test failed:', error.message);
-                process.exit(1);
-              }
-            `;
-
-            const testPath = path.join(tempDir, 'crawlee-test.js');
-            await fsPromises.writeFile(testPath, testScript, 'utf-8');
-
-            execSync(`node "${testPath}"`, {
-              cwd: tempDir,
-              stdio: 'pipe',
-              timeout: 30000 // 30 seconds timeout for test
-            });
-
-            debugLog('Copy verification successful - crawlee working');
-          } catch (testError: unknown) {
-            const testErrorMessage = testError instanceof Error ? testError.message : String(testError);
-            debugLog(`Crawlee test failed: ${testErrorMessage}`);
-            throw new Error('Copy verification failed - crawlee not working');
-          }
-        } catch (copyError: unknown) {
-          const copyErrorMessage = copyError instanceof Error ? copyError.message : String(copyError);
-          debugLog(`Failed to copy shared dependencies: ${copyErrorMessage}`);
-          debugLog('Falling back to fresh npm install...');
-          throw new Error('Shared dependencies copy failed');
-        }
+      } catch (copyError: unknown) {
+        const copyErrorMessage = copyError instanceof Error ? copyError.message : String(copyError);
+        debugLog(`Failed to copy shared dependencies: ${copyErrorMessage}`);
+        debugLog('Falling back to fresh npm install...');
+        throw new Error('Shared dependencies copy failed');
       }
     } else {
       debugLog('Shared dependencies not available, using fallback npm install...');
