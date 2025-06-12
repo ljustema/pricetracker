@@ -443,14 +443,14 @@ async function fetchAndProcessJob() {
             if (fsSync.existsSync(tmpScriptPath)) {
                 const stats = fsSync.statSync(tmpScriptPath);
                 debugLog(`Compiled script file size: ${stats.size} bytes`);
-                logToDatabase(job.id, `Compiled script file size: ${stats.size} bytes`);
+                // Removed excessive database logging
 
                 // Read first few lines of the compiled script for debugging
                 const { fsPromises } = await ensureFsModules();
                 const scriptContent = await fsPromises.readFile(tmpScriptPath, 'utf-8');
                 const firstLines = scriptContent.split('\n').slice(0, 5).join('\n');
                 debugLog(`Compiled script preview:\n${firstLines}`);
-                logToDatabase(job.id, `Compiled script preview:\n${firstLines}`);
+                // Removed excessive database logging
             } else {
                 debugLog(`ERROR: Compiled script file does not exist: ${tmpScriptPath}`);
                 logToDatabase(job.id, `ERROR: Compiled script file does not exist: ${tmpScriptPath}`);
@@ -486,7 +486,7 @@ async function fetchAndProcessJob() {
         const args = [tmpScriptPath, 'scrape', '--context', base64ContextString];
         // Log the command we're about to execute
         debugLog(`Executing command: ${command} ${args.join(' ')}`);
-        await logToDatabase(job.id, `Executing command: ${command} ${args.join(' ')}`);
+        // Removed excessive database logging
 
         // Test if Node.js can execute a simple script and check dependencies
         debugLog('Testing Node.js execution and dependencies in the target directory...');
@@ -505,7 +505,7 @@ async function fetchAndProcessJob() {
                 timeout: 10000
             });
             debugLog(`Node.js test result: ${testResult.trim()}`);
-            await logToDatabase(job.id, `Node.js test successful: ${testResult.trim()}`);
+            // Removed excessive database logging
 
             // Test 2: Check if crawlee module is accessible
             const crawleeTestScript = `
@@ -530,9 +530,10 @@ async function fetchAndProcessJob() {
                     timeout: 10000
                 });
                 debugLog(`Crawlee test result: ${crawleeResult.trim()}`);
-                await logToDatabase(job.id, `Crawlee test successful: ${crawleeResult.trim()}`);
+                // Removed excessive database logging
             } catch (crawleeError) {
                 debugLog(`Crawlee test failed: ${crawleeError}`);
+                // Only log errors to database, not all test results
                 await logToDatabase(job.id, `Crawlee test failed: ${crawleeError}`);
             }
 
@@ -545,13 +546,13 @@ async function fetchAndProcessJob() {
                 const stats = fsSync.lstatSync(nodeModulesPath);
                 const linkInfo = stats.isSymbolicLink() ? 'symlink' : 'directory';
                 debugLog(`node_modules exists as ${linkInfo}`);
-                await logToDatabase(job.id, `node_modules exists as ${linkInfo}`);
+                // Removed excessive database logging
 
                 // List contents of node_modules to see what's actually there
                 try {
                     const contents = fsSync.readdirSync(nodeModulesPath);
                     debugLog(`node_modules contents (${contents.length} items): ${contents.slice(0, 10).join(', ')}${contents.length > 10 ? '...' : ''}`);
-                    await logToDatabase(job.id, `node_modules contents: ${contents.slice(0, 5).join(', ')}${contents.length > 5 ? '...' : ''}`);
+                    // Removed excessive database logging
                 } catch (readError) {
                     debugLog(`Failed to read node_modules contents: ${readError}`);
                     await logToDatabase(job.id, `Failed to read node_modules contents: ${readError}`);
@@ -561,16 +562,17 @@ async function fetchAndProcessJob() {
                 const crawleePath = path.join(nodeModulesPath, 'crawlee');
                 if (fsSync.existsSync(crawleePath)) {
                     debugLog('crawlee directory found in node_modules');
-                    await logToDatabase(job.id, 'crawlee directory found in node_modules');
+                    // Removed excessive database logging
                 } else {
                     debugLog('crawlee directory NOT found in node_modules');
+                    // Only log missing dependencies to database
                     await logToDatabase(job.id, 'crawlee directory NOT found in node_modules');
 
                     // Check if @crawlee exists (scoped package)
                     const scopedCrawleePath = path.join(nodeModulesPath, '@crawlee');
                     if (fsSync.existsSync(scopedCrawleePath)) {
                         debugLog('@crawlee scoped directory found in node_modules');
-                        await logToDatabase(job.id, '@crawlee scoped directory found in node_modules');
+                        // Removed excessive database logging
                     } else {
                         debugLog('@crawlee scoped directory NOT found in node_modules');
                         await logToDatabase(job.id, '@crawlee scoped directory NOT found in node_modules');
@@ -608,7 +610,7 @@ async function fetchAndProcessJob() {
 
         // Log that the process was spawned
         debugLog(`Process spawned with PID: ${childProcess.pid || 'unknown'}`);
-        await logToDatabase(job.id, `Process spawned with PID: ${childProcess.pid || 'unknown'}`);
+        // Removed excessive database logging
 
         // Add error handler for the spawn itself
         childProcess.on('error', (err: Error) => {
@@ -726,10 +728,7 @@ async function fetchAndProcessJob() {
                 // Log all stderr output to the debug log for better debugging
                 debugLog(`STDERR: ${line}`);
 
-                // Also log to database for better visibility
-                if (job) {
-                    logToDatabase(job.id, `STDERR: ${line}`);
-                }
+                // Removed excessive database logging for STDERR to prevent database overload
 
                 if (line.startsWith("PROGRESS:") && job) {
                     const progressMessage = line.substring(9).trim();
@@ -1315,10 +1314,10 @@ interface LogBatch {
 }
 
 const LOG_BATCHES: Record<string, LogBatch> = {};
-const BATCH_FLUSH_INTERVAL_MS = 30000; // Flush every 30 seconds (reduced frequency)
-const BATCH_SIZE_THRESHOLD = 20; // Or flush when we have 20+ messages (increased threshold)
-const MAX_PROGRESS_MESSAGES = 100; // Maximum progress messages to keep (prevent memory leaks)
-const IMPORTANT_PHASES = ['ERROR', 'ERROR_DETAILS', 'COMPLETION', 'JOB_CLAIMED', 'PHASE_UPDATE']; // These phases get flushed immediately
+const BATCH_FLUSH_INTERVAL_MS = 60000; // Flush every 60 seconds (much less frequent)
+const BATCH_SIZE_THRESHOLD = 50; // Or flush when we have 50+ messages (much larger batches)
+const MAX_PROGRESS_MESSAGES = 200; // Maximum progress messages to keep (prevent memory leaks)
+const IMPORTANT_PHASES = ['ERROR', 'ERROR_DETAILS', 'COMPLETION', 'JOB_CLAIMED']; // Removed PHASE_UPDATE to reduce frequency
 
 // Function to flush a batch of log messages to the database
 async function flushLogBatch(jobId: string, supabaseClient?: ReturnType<typeof import('@supabase/supabase-js').createClient>) {
