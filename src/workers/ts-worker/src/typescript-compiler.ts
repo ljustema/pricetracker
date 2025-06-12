@@ -296,6 +296,15 @@ export async function compileTypeScriptScraper(
     if (sharedDepsValid) {
       debugLog('Using shared dependencies...');
 
+      // Check if we're running on Railway or other containerized environments
+      const isRailway = process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID;
+      const isContainer = process.env.CONTAINER || process.env.DOCKER_CONTAINER;
+
+      if (isRailway || isContainer) {
+        debugLog('Detected containerized environment (Railway/Docker), skipping symlink and using copy method');
+        throw new Error('Containerized environment detected - using copy method for better compatibility');
+      }
+
       try {
         if (process.platform === 'win32') {
           // On Windows, use junction (directory symlink)
@@ -314,6 +323,7 @@ export async function compileTypeScriptScraper(
         }
 
         // Test that crawlee can actually be required from the symlinked location
+        // This is the critical test that must pass for the script to work
         try {
           const testScript = `
             const fs = require('fs');
@@ -324,6 +334,7 @@ export async function compileTypeScriptScraper(
               process.exit(0);
             } catch (error) {
               console.error('Crawlee module test failed:', error.message);
+              console.error('Module search paths:', require.resolve.paths('crawlee'));
               process.exit(1);
             }
           `;
@@ -331,26 +342,40 @@ export async function compileTypeScriptScraper(
           const testPath = path.join(tempDir, 'crawlee-test.js');
           await fsPromises.writeFile(testPath, testScript, 'utf-8');
 
-          execSync(`node "${testPath}"`, {
+          const testResult = execSync(`node "${testPath}"`, {
             cwd: tempDir,
             stdio: 'pipe',
-            timeout: 30000 // 30 seconds timeout for test
+            timeout: 30000, // 30 seconds timeout for test
+            encoding: 'utf8'
           });
 
+          debugLog(`Symlink test output: ${testResult}`);
           debugLog('Shared dependencies setup completed successfully - crawlee working');
         } catch (testError: unknown) {
           const testErrorMessage = testError instanceof Error ? testError.message : String(testError);
+          let stderrOutput = '';
+
+          // Extract stderr if available
+          if (testError && typeof testError === 'object' && 'stderr' in testError && testError.stderr) {
+            stderrOutput = String(testError.stderr);
+          }
+
           debugLog(`Crawlee test failed: ${testErrorMessage}`);
+          if (stderrOutput) debugLog(`Crawlee test stderr: ${stderrOutput}`);
+          debugLog('Symlink verification failed, falling back to copy method');
           throw new Error('Symlink verification failed - crawlee not working');
         }
       } catch (symlinkError: unknown) {
         const errorMessage = symlinkError instanceof Error ? symlinkError.message : String(symlinkError);
-        debugLog(`Failed to create symlink: ${errorMessage}, falling back to copy`);
+        debugLog(`Failed to create symlink or symlink verification failed: ${errorMessage}`);
+        debugLog('This is common on Railway and other containerized environments');
+        debugLog('Falling back to copy method which is more reliable');
 
         // Remove failed symlink if it exists
         if (fs.existsSync(tempNodeModules)) {
           try {
             await fsPromises.rm(tempNodeModules, { recursive: true, force: true });
+            debugLog('Removed failed symlink directory');
           } catch (removeError) {
             debugLog(`Failed to remove failed symlink: ${removeError}`);
           }
