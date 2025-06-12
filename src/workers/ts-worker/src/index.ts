@@ -76,7 +76,7 @@ async function testSupabaseConnection(maxRetries: number = 5): Promise<boolean> 
       const supabase = await getSupabaseClient();
 
       // Simple query to test connection
-      const { data, error } = await supabase
+      const { data: _data, error } = await supabase
         .from('scrapers')
         .select('id')
         .limit(1);
@@ -758,31 +758,53 @@ async function fetchAndProcessJob() {
                         }
                     }
 
-                    // Extract batch information from progress message
-                    const batchMatch = progressMessage.match(/(\d+)\/(\d+)/);
-                    if (batchMatch && batchMatch[1] && batchMatch[2]) {
-                        const currentBatch = parseInt(batchMatch[1], 10);
-                        const totalBatches = parseInt(batchMatch[2], 10);
-                        if (!isNaN(currentBatch) && !isNaN(totalBatches)) {
-                            // Update the batch information in the database
-                            try {
-                                const updateResult = await supabase
-                                    .from('scraper_runs')
-                                    .update({
-                                        current_batch: currentBatch,
-                                        total_batches: totalBatches
-                                    })
-                                    .eq('id', job.id);
+                    // Extract progress information from different message formats
+                    let currentProgress = 0;
+                    let totalProgress = 0;
 
-                                if (updateResult.error) {
-                                    logStructured(job.id, 'error', 'BATCH_UPDATE', `Failed to update batch progress: ${updateResult.error.message}`);
-                                } else {
-                                    logStructured(job.id, 'info', 'BATCH_UPDATE', `Updated batch progress to ${currentBatch}/${totalBatches}`);
-                                }
-                            } catch (err: unknown) {
-                                const errorMessage = err instanceof Error ? err.message : String(err);
-                                logStructured(job.id, 'error', 'BATCH_UPDATE', `Error updating batch progress: ${errorMessage}`);
+                    // Try to match "Processed X/Y products" format
+                    const productMatch = progressMessage.match(/Processed (\d+)\/(\d+) products/);
+                    if (productMatch && productMatch[1] && productMatch[2]) {
+                        currentProgress = parseInt(productMatch[1], 10);
+                        totalProgress = parseInt(productMatch[2], 10);
+                    } else {
+                        // Try to match "Processing products: X/Y" format
+                        const processingMatch = progressMessage.match(/Processing products: (\d+)\/(\d+)/);
+                        if (processingMatch && processingMatch[1] && processingMatch[2]) {
+                            currentProgress = parseInt(processingMatch[1], 10);
+                            totalProgress = parseInt(processingMatch[2], 10);
+                        } else {
+                            // Try generic "X/Y" format as fallback
+                            const genericMatch = progressMessage.match(/(\d+)\/(\d+)/);
+                            if (genericMatch && genericMatch[1] && genericMatch[2]) {
+                                currentProgress = parseInt(genericMatch[1], 10);
+                                totalProgress = parseInt(genericMatch[2], 10);
                             }
+                        }
+                    }
+
+                    if (currentProgress > 0 && totalProgress > 0) {
+                        // Update the progress information in the database
+                        // Use product count fields consistently instead of mixing batch/product counts
+                        try {
+                            const updateResult = await supabase
+                                .from('scraper_runs')
+                                .update({
+                                    current_batch: currentProgress,
+                                    total_batches: totalProgress,
+                                    // Also update product_count to match current progress for consistency
+                                    product_count: currentProgress
+                                })
+                                .eq('id', job.id);
+
+                            if (updateResult.error) {
+                                logStructured(job.id, 'error', 'PROGRESS_UPDATE', `Failed to update progress: ${updateResult.error.message}`);
+                            } else {
+                                logStructured(job.id, 'info', 'PROGRESS_UPDATE', `Updated progress to ${currentProgress}/${totalProgress} products`);
+                            }
+                        } catch (err: unknown) {
+                            const errorMessage = err instanceof Error ? err.message : String(err);
+                            logStructured(job.id, 'error', 'PROGRESS_UPDATE', `Error updating progress: ${errorMessage}`);
                         }
                     }
                 } else if (line.startsWith("ERROR:") && job) {

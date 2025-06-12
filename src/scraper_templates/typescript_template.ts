@@ -52,7 +52,7 @@ interface ScriptMetadata {
     description: string;
     target_url: string; // Base URL or main entry point
     required_libraries?: string[]; // e.g., ['cheerio', 'node-fetch'] - Informational
-    batch_size?: number; // Recommended batch size
+    batch_size?: number; // Number of products to process before outputting a batch
     // Add other relevant metadata as needed
 }
 

@@ -120,7 +120,7 @@ const CONFIG = {
   // Performance settings
   PERFORMANCE: {
     MAX_CONCURRENCY: 10, // Maximum number of concurrent requests, max is 10.
-    BATCH_SIZE: 500, // Number of products to process before writing a batch
+    BATCH_SIZE: 500, // Number of products to collect before outputting to PriceTracker (affects memory usage)
     REQUEST_TIMEOUT: 60, // Timeout in seconds for each request
     MAX_RETRIES: 3, // Maximum number of retries for failed requests
     REQUEST_DELAY: 100, // Delay between requests in milliseconds (0 for no delay)
@@ -197,7 +197,7 @@ interface ScriptMetadata {
   description: string;
   target_url: string;
   required_libraries: string[];
-  batch_size?: number;
+  batch_size?: number; // Number of products to process before outputting a batch
   max_concurrency?: number;
   collection_strategy: 'api' | 'scraping';
 }
@@ -1080,7 +1080,7 @@ async function scrape(context: ScriptContext): Promise<void> {
 
     // Set up progress reporting
     const progressInterval = setInterval(() => {
-      logProgress(`Phase 2: Processing products: ${processedCount}/${totalUrls} (Batch: ${batchCount})`, 2);
+      logProgress(`Processing products: ${processedCount}/${totalUrls} (Batch: ${batchCount})`, 2);
     }, 5000);
 
     // Calculate optimal concurrency based on system resources

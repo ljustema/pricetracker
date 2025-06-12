@@ -68,9 +68,8 @@ export default function ScraperRunProgress({
     }
   }, [progress]);
 
-  // Store the previous phase and batch info to prevent UI flickering
+  // Store the previous phase to prevent UI flickering
   const [prevPhase, setPrevPhase] = useState<string>('');
-  const [maxBatchValues, setMaxBatchValues] = useState<{current: number, total: number | null}>({current: 0, total: null});
 
   // Determine the current phase of the scraper
   const determinePhase = useCallback((statusData = progress) => {
@@ -141,16 +140,13 @@ export default function ScraperRunProgress({
       const baseProgress = 30;
 
       // If we have actual progress information, use it for the remaining 70%
-      if (progress.totalBatches && progress.currentBatch > 0) {
-        // For significant product counts, always use product count as the primary metric
-        if (progress.productCount > 20) {
-          // Use product count as a better indicator of progress
-          // Estimate total based on the largest total we've seen or a reasonable default
-          const estimatedTotal = maxBatchValues.total && maxBatchValues.total > 3
-            ? maxBatchValues.total
-            : Math.max(1000, progress.productCount * 2);
+      if (progress.totalBatches && progress.productCount > 0) {
+        // Use product count as the primary metric (totalBatches now represents total products)
+        const totalProducts = progress.totalBatches;
+        const currentProducts = progress.productCount;
 
-          const processingProgress = Math.round((progress.productCount / estimatedTotal) * 70);
+        if (totalProducts > 0) {
+          const processingProgress = Math.round((currentProducts / totalProducts) * 70);
           return Math.min(100, baseProgress + processingProgress);
         }
 
@@ -185,7 +181,7 @@ export default function ScraperRunProgress({
     }
 
     return 0;
-  }, [progress, simulatedProgress, determinePhase, maxBatchValues.total]);
+  }, [progress, simulatedProgress, determinePhase]);
 
   // Poll for status updates
   const fetchStatus = useCallback(async () => {
@@ -200,46 +196,8 @@ export default function ScraperRunProgress({
 
       // Stabilize batch values - use a consistent approach to prevent flickering
 
-      // First, determine if we should use the product count as our primary metric
-      const useProductCount = status.productCount > 20;
-
-      // Store the largest total we've seen for consistency
-      if (status.totalBatches && status.totalBatches > 3) {
-        if (!maxBatchValues.total || status.totalBatches > maxBatchValues.total) {
-          setMaxBatchValues(prev => ({ ...prev, total: status.totalBatches }));
-        }
-      }
-
-      // Now apply the appropriate stabilization strategy
-      if (useProductCount) {
-        // For significant product counts, use product count as the primary metric
-
-        // If we have a stored max value, use it
-        if (maxBatchValues.total && maxBatchValues.total > 3) {
-          stabilizedStatus.totalBatches = maxBatchValues.total;
-          stabilizedStatus.currentBatch = status.productCount;
-        }
-        // If we have a large totalBatches value in the current status, use it
-        else if (status.totalBatches && status.totalBatches > 3) {
-          // Keep the current totalBatches
-          stabilizedStatus.currentBatch = status.productCount;
-        }
-        // If we have a small totalBatches or none, estimate based on product count
-        else {
-          stabilizedStatus.totalBatches = Math.max(1000, status.productCount * 2);
-          stabilizedStatus.currentBatch = status.productCount;
-        }
-      } else {
-        // For small product counts, use the batch information if available
-        if (maxBatchValues.total && maxBatchValues.total > 3) {
-          stabilizedStatus.totalBatches = maxBatchValues.total;
-        }
-      }
-
-      // Track the highest current batch we've seen
-      if (status.currentBatch > maxBatchValues.current) {
-        setMaxBatchValues(prev => ({ ...prev, current: status.currentBatch }));
-      }
+      // Simplified: Just use the status as-is since we're now consistent with product counts
+      // No complex batch tracking needed
 
       // Only update the phase if it's a meaningful change
       // This prevents flickering between phases
@@ -316,7 +274,7 @@ export default function ScraperRunProgress({
         setPollingInterval(prev => Math.min(prev * 1.5, 60000));
       }
     }
-  }, [scraperId, runId, onComplete, consecutiveErrors, determinePhase, maxBatchValues, prevPhase]);
+  }, [scraperId, runId, onComplete, consecutiveErrors, determinePhase, prevPhase]);
 
   // Set up polling
   useEffect(() => {
@@ -505,49 +463,16 @@ export default function ScraperRunProgress({
           <span className="text-gray-500">Products found:</span>
           <span className="ml-2 font-medium">{progress.productCount}</span>
         </div>
-        {/* Only show URLs processed during product processing phase */}
+        {/* Show products processed during product processing phase */}
         {determinePhase().phase !== 'collecting-urls' && (
           <div>
-            <span className="text-gray-500">URLs processed:</span>
+            <span className="text-gray-500">Products processed:</span>
             <span className="ml-2 font-medium">
-              {/* Always use the most stable batch values */}
-              {(() => {
-                // Case 1: We have a stored max value - use it
-                if (maxBatchValues.total && maxBatchValues.total > 3) {
-                  return (
-                    <>
-                      {progress.productCount} of {maxBatchValues.total}
-                    </>
-                  );
-                }
-                // Case 2: We have a large totalBatches value - use it
-                else if (progress.totalBatches && progress.totalBatches > 3) {
-                  return (
-                    <>
-                      {progress.currentBatch} of {progress.totalBatches}
-                    </>
-                  );
-                }
-                // Case 3: We have a small totalBatches but many products - use product count
-                else if (progress.totalBatches && progress.totalBatches <= 3 && progress.productCount > 20) {
-                  // Estimate total as 2x current product count
-                  const estimatedTotal = Math.max(1000, progress.productCount * 2);
-                  return (
-                    <>
-                      {progress.productCount} of ~{estimatedTotal}
-                    </>
-                  );
-                }
-                // Case 4: Default case - use whatever we have
-                else {
-                  return (
-                    <>
-                      {progress.currentBatch}
-                      {progress.totalBatches ? ` of ${progress.totalBatches}` : ''}
-                    </>
-                  );
-                }
-              })()} {/* IIFE to execute the logic */}
+              {/* Use consistent product count display */}
+              {progress.totalBatches && progress.totalBatches > 0
+                ? `${progress.productCount} of ${progress.totalBatches}`
+                : progress.productCount
+              }
             </span>
           </div>
         )}
