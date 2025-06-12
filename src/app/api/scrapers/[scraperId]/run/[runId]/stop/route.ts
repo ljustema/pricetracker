@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { ensureUUID } from "@/lib/utils/uuid";
 
 export const dynamic = 'force-dynamic';
 
@@ -22,11 +23,12 @@ export async function POST(
 
     console.log(`[Stop API] Attempting to stop run ${runId} for scraper ${scraperId}`);
 
-    // Get the database client
-    const supabase = await createSupabaseServerClient();
+    // Get the database client (use admin client to bypass RLS like other endpoints)
+    const supabase = createSupabaseAdminClient();
+    const userId = ensureUUID(session.user.id);
 
     // First, check if the run exists and belongs to the user
-    console.log(`[Stop API] Looking for run ${runId} for user ${session.user.id}`);
+    console.log(`[Stop API] Looking for run ${runId} for user ${userId}`);
 
     const { data: run, error: runError } = await supabase
       .from("scraper_runs")
@@ -55,9 +57,9 @@ export async function POST(
     }
 
     // Check if the run belongs to the current user
-    console.log(`[Stop API] Checking ownership - run.user_id: ${run.user_id}, session.user.id: ${session.user.id}`);
-    if (run.user_id !== session.user.id) {
-      console.error(`[Stop API] Run ${runId} does not belong to user ${session.user.id}`);
+    console.log(`[Stop API] Checking ownership - run.user_id: ${run.user_id}, userId: ${userId}`);
+    if (run.user_id !== userId) {
+      console.error(`[Stop API] Run ${runId} does not belong to user ${userId}`);
       return NextResponse.json(
         { error: "Run not found or access denied" },
         { status: 404 }
