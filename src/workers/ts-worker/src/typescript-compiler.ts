@@ -251,18 +251,42 @@ export async function compileTypeScriptScraper(
           await fsPromises.symlink(sharedNodeModules, tempNodeModules);
         }
         debugLog('Symlink to shared dependencies created successfully');
+
+        // Verify the symlink works by checking if crawlee is accessible
+        const crawleePath = path.join(tempNodeModules, 'crawlee');
+        if (!fs.existsSync(crawleePath)) {
+          debugLog('Symlink created but crawlee not accessible, falling back to copy');
+          throw new Error('Symlink verification failed');
+        }
       } catch (symlinkError: unknown) {
         const errorMessage = symlinkError instanceof Error ? symlinkError.message : String(symlinkError);
         debugLog(`Failed to create symlink: ${errorMessage}, falling back to copy`);
 
+        // Remove failed symlink if it exists
+        if (fs.existsSync(tempNodeModules)) {
+          try {
+            await fsPromises.rm(tempNodeModules, { recursive: true, force: true });
+          } catch (removeError) {
+            debugLog(`Failed to remove failed symlink: ${removeError}`);
+          }
+        }
+
         // Fallback: copy the entire node_modules directory
         try {
+          debugLog('Starting fallback copy of shared dependencies...');
           if (process.platform === 'win32') {
             execSync(`robocopy "${sharedNodeModules}" "${tempNodeModules}" /E /NFL /NDL /NJH /NJS /NC /NS`, { stdio: 'pipe' });
           } else {
             execSync(`cp -r "${sharedNodeModules}" "${tempNodeModules}"`, { stdio: 'pipe' });
           }
           debugLog('Fallback copy of shared dependencies completed');
+
+          // Verify the copy worked
+          const crawleePath = path.join(tempNodeModules, 'crawlee');
+          if (!fs.existsSync(crawleePath)) {
+            throw new Error('Copy verification failed - crawlee not found');
+          }
+          debugLog('Copy verification successful - crawlee found');
         } catch (copyError: unknown) {
           const copyErrorMessage = copyError instanceof Error ? copyError.message : String(copyError);
           debugLog(`Failed to copy shared dependencies: ${copyErrorMessage}`);

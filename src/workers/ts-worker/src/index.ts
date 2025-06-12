@@ -405,13 +405,15 @@ async function fetchAndProcessJob() {
         debugLog(`Executing command: ${command} ${args.join(' ')}`);
         await logToDatabase(job.id, `Executing command: ${command} ${args.join(' ')}`);
 
-        // Test if Node.js can execute a simple script in the same environment
-        debugLog('Testing Node.js execution in the target directory...');
+        // Test if Node.js can execute a simple script and check dependencies
+        debugLog('Testing Node.js execution and dependencies in the target directory...');
         try {
             const { execSync } = await import('child_process');
+            const { fsPromises } = await ensureFsModules();
+
+            // Test 1: Basic Node.js execution
             const testScript = `console.log('Node.js test successful'); process.exit(0);`;
             const testScriptPath = path.join(path.dirname(tmpScriptPath), 'test.js');
-            const { fsPromises } = await ensureFsModules();
             await fsPromises.writeFile(testScriptPath, testScript, 'utf-8');
 
             const testResult = execSync(`node "${testScriptPath}"`, {
@@ -422,11 +424,64 @@ async function fetchAndProcessJob() {
             debugLog(`Node.js test result: ${testResult.trim()}`);
             await logToDatabase(job.id, `Node.js test successful: ${testResult.trim()}`);
 
-            // Clean up test script
+            // Test 2: Check if crawlee module is accessible
+            const crawleeTestScript = `
+                try {
+                    const crawlee = require('crawlee');
+                    console.log('Crawlee module found successfully');
+                    console.log('Crawlee version:', crawlee.version || 'unknown');
+                    process.exit(0);
+                } catch (error) {
+                    console.error('Crawlee module test failed:', error.message);
+                    console.error('Module search paths:', require.resolve.paths('crawlee'));
+                    process.exit(1);
+                }
+            `;
+            const crawleeTestPath = path.join(path.dirname(tmpScriptPath), 'crawlee-test.js');
+            await fsPromises.writeFile(crawleeTestPath, crawleeTestScript, 'utf-8');
+
+            try {
+                const crawleeResult = execSync(`node "${crawleeTestPath}"`, {
+                    cwd: path.dirname(tmpScriptPath),
+                    encoding: 'utf-8',
+                    timeout: 10000
+                });
+                debugLog(`Crawlee test result: ${crawleeResult.trim()}`);
+                await logToDatabase(job.id, `Crawlee test successful: ${crawleeResult.trim()}`);
+            } catch (crawleeError) {
+                debugLog(`Crawlee test failed: ${crawleeError}`);
+                await logToDatabase(job.id, `Crawlee test failed: ${crawleeError}`);
+            }
+
+            // Test 3: Check node_modules symlink
+            const nodeModulesPath = path.join(path.dirname(tmpScriptPath), 'node_modules');
+            const { fsSync } = await ensureFsModules();
+            if (fsSync.existsSync(nodeModulesPath)) {
+                const stats = fsSync.lstatSync(nodeModulesPath);
+                const linkInfo = stats.isSymbolicLink() ? 'symlink' : 'directory';
+                debugLog(`node_modules exists as ${linkInfo}`);
+                await logToDatabase(job.id, `node_modules exists as ${linkInfo}`);
+
+                // Check if crawlee exists in node_modules
+                const crawleePath = path.join(nodeModulesPath, 'crawlee');
+                if (fsSync.existsSync(crawleePath)) {
+                    debugLog('crawlee directory found in node_modules');
+                    await logToDatabase(job.id, 'crawlee directory found in node_modules');
+                } else {
+                    debugLog('crawlee directory NOT found in node_modules');
+                    await logToDatabase(job.id, 'crawlee directory NOT found in node_modules');
+                }
+            } else {
+                debugLog('node_modules directory does not exist');
+                await logToDatabase(job.id, 'node_modules directory does not exist');
+            }
+
+            // Clean up test scripts
             await fsPromises.unlink(testScriptPath);
+            await fsPromises.unlink(crawleeTestPath);
         } catch (testError) {
-            debugLog(`Node.js test failed: ${testError}`);
-            await logToDatabase(job.id, `Node.js test failed: ${testError}`);
+            debugLog(`Dependency test failed: ${testError}`);
+            await logToDatabase(job.id, `Dependency test failed: ${testError}`);
         }
 
         // Add a small delay before spawning the process to ensure everything is ready

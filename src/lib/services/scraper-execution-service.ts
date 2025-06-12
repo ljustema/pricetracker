@@ -212,7 +212,9 @@ export class ScraperExecutionService {
           });
 
         if (timeoutError) {
-          console.error(`Run ${actualRunId}: Error setting timeout: ${timeoutError.message}`);
+          console.error(`Run ${actualRunId}: Error setting timeout: ${timeoutError.message || timeoutError.toString() || 'Unknown error'}`);
+        } else {
+          console.log(`Run ${actualRunId}: Timeout set successfully for ${timeoutAt.toISOString()}`);
         }
 
         // For regular runs, add a wait to see if the worker picks up the job
