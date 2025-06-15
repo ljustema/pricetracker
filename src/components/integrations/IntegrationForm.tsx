@@ -23,6 +23,7 @@ const formSchema = z.object({
   sync_frequency: z.string().optional(),
   configuration: z.object({
     activeOnly: z.boolean().optional(),
+    importAllCustomFields: z.boolean().optional(),
   }).optional(),
 }).refine((data) => {
   // For non-manual platforms, require API credentials
@@ -62,6 +63,7 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
       sync_frequency: integration?.sync_frequency || 'daily',
       configuration: {
         activeOnly: integration?.configuration?.activeOnly !== false, // Default to true
+        importAllCustomFields: integration?.configuration?.importAllCustomFields !== false, // Default to true
       },
     },
   });
@@ -82,6 +84,7 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
         sync_frequency: integration.sync_frequency,
         configuration: {
           activeOnly: integration.configuration?.activeOnly !== false, // Default to true
+          importAllCustomFields: integration.configuration?.importAllCustomFields !== false, // Default to true
         },
       });
     }
@@ -362,6 +365,29 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
                         </FormLabel>
                         <FormDescription>
                           When checked, only products marked as active in your store will be imported.
+                        </FormDescription>
+                      </div>
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="configuration.importAllCustomFields"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value !== false} // Default to true if undefined
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                      <div className="space-y-1 leading-none">
+                        <FormLabel>
+                          Import all extra custom fields
+                        </FormLabel>
+                        <FormDescription>
+                          When checked, all extra product features and attributes will be imported to raw_data for custom field processing. Unchecking this will only import basic product information.
                         </FormDescription>
                       </div>
                     </FormItem>

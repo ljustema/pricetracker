@@ -43,6 +43,7 @@ interface Integration {
   api_key: string;
   configuration?: {
     activeOnly?: boolean;
+    importAllCustomFields?: boolean;
   };
 }
 
@@ -52,12 +53,40 @@ export class IntegrationSyncService {
   private runId: string;
   private supabase: SupabaseClient;
   private logs: Record<string, unknown>[] = [];
+  private heartbeatInterval: NodeJS.Timeout | null = null;
 
   constructor(userId: string, integrationId: string, runId: string, supabase: SupabaseClient) {
     this.userId = userId;
     this.integrationId = integrationId;
     this.runId = runId;
     this.supabase = supabase;
+  }
+
+  /**
+   * Start a heartbeat to keep the progress timestamp updated
+   */
+  private startHeartbeat(): void {
+    // Update progress every 30 seconds to prevent stall detection
+    this.heartbeatInterval = setInterval(async () => {
+      try {
+        await this.supabase
+          .from('integration_runs')
+          .update({ last_progress_update: new Date().toISOString() })
+          .eq('id', this.runId);
+      } catch (error) {
+        console.error('Heartbeat update failed:', error);
+      }
+    }, 30000); // 30 seconds
+  }
+
+  /**
+   * Stop the heartbeat
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
   }
 
   /**
@@ -89,7 +118,7 @@ export class IntegrationSyncService {
   }
 
   /**
-   * Update the status of the integration run
+   * Update the status of the integration run with retry logic
    */
   private async updateRunStatus(
     status: 'processing' | 'completed' | 'failed',
@@ -113,10 +142,8 @@ export class IntegrationSyncService {
     if (stats) {
       if (stats.productsProcessed !== undefined) {
         updateData.products_processed = stats.productsProcessed;
-        // Update progress timestamp when products_processed changes during processing
-        if (status === 'processing') {
-          updateData.last_progress_update = new Date().toISOString();
-        }
+        // Always update progress timestamp when products_processed changes
+        updateData.last_progress_update = new Date().toISOString();
       }
       if (stats.productsUpdated !== undefined) {
         updateData.products_updated = stats.productsUpdated;
@@ -130,15 +157,41 @@ export class IntegrationSyncService {
       updateData.error_message = errorMessage;
     }
 
-    const { error } = await this.supabase
-      .from('integration_runs')
-      .update(updateData)
-      .eq('id', this.runId);
+    // Retry logic for database updates
+    let retryCount = 0;
+    const maxRetries = 3;
 
-    if (error) {
-      console.error('Error updating run status:', error);
-      const errorMessage = error && typeof error === 'object' && 'message' in error ? (error as { message: string }).message : 'Unknown error';
-      throw new Error(`Failed to update run status: ${errorMessage}`);
+    while (retryCount < maxRetries) {
+      try {
+        const { error } = await this.supabase
+          .from('integration_runs')
+          .update(updateData)
+          .eq('id', this.runId);
+
+        if (!error) {
+          // Success, break out of retry loop
+          break;
+        }
+
+        console.error(`Error updating run status (attempt ${retryCount + 1}):`, error);
+
+        if (retryCount === maxRetries - 1) {
+          // Last attempt failed, throw error
+          const errorMessage = error && typeof error === 'object' && 'message' in error ? (error as { message: string }).message : 'Unknown error';
+          throw new Error(`Failed to update run status after ${maxRetries} attempts: ${errorMessage}`);
+        }
+
+        retryCount++;
+        // Wait before retrying (exponential backoff)
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+
+      } catch (error) {
+        if (retryCount === maxRetries - 1) {
+          throw error;
+        }
+        retryCount++;
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+      }
     }
   }
 
@@ -177,33 +230,55 @@ export class IntegrationSyncService {
     let batchNumber = 0;
     let totalBatches = 0; // This will be updated when we know the total count
 
-    // Use the fetchProductsInBatches method instead of fetchProducts
-    await client.fetchProductsInBatches({
-      batchSize,
-      onBatchReceived: async (productBatch, currentPage, totalPages) => {
-        // Update total batches estimate if this is the first batch
-        if (batchNumber === 0 && totalPages > 0) {
-          // Rough estimate of total batches based on pages and average batch size
-          totalBatches = totalPages;
-          this.log('info', 'FETCH_ESTIMATE', `Estimated total batches: ~${totalBatches} (based on ${totalPages} pages)`);
-        }
+    // Use the fetchProductsInBatches method with better error handling
+    try {
+      await client.fetchProductsInBatches({
+        batchSize,
+        onBatchReceived: async (productBatch, currentPage, totalPages) => {
+          // Update total batches estimate if this is the first batch
+          if (batchNumber === 0 && totalPages > 0) {
+            // Rough estimate of total batches based on pages and average batch size
+            totalBatches = totalPages;
+            this.log('info', 'FETCH_ESTIMATE', `Estimated total batches: ~${totalBatches} (based on ${totalPages} pages)`);
+          }
 
-        batchNumber++;
-        this.log('info', 'BATCH_RECEIVED', `Received batch ${batchNumber} with ${productBatch.length} products (page ${currentPage}/${totalPages})`);
+          batchNumber++;
+          this.log('info', 'BATCH_RECEIVED', `Received batch ${batchNumber} with ${productBatch.length} products (page ${currentPage}/${totalPages})`);
 
-        // Process this batch immediately
-        await this.processProductBatch(productBatch, batchNumber, totalBatches || '?');
+          // Process this batch immediately
+          await this.processProductBatch(productBatch, batchNumber, totalBatches || '?', integration);
 
-        totalProductsProcessed += productBatch.length;
+          totalProductsProcessed += productBatch.length;
 
-        // Update the run status with progress
-        await this.updateRunStatus('processing', { productsProcessed: totalProductsProcessed });
-      },
-      onProgress: (current, total) => {
-        this.log('info', 'FETCH_PROGRESS', `Fetching page ${current} of ${total}`);
-      },
-      activeOnly: activeOnly,
-    });
+          // Update the run status with progress more frequently to prevent stall detection
+          try {
+            await this.updateRunStatus('processing', { productsProcessed: totalProductsProcessed });
+            this.log('info', 'PROGRESS_UPDATE', `Updated progress: ${totalProductsProcessed} products processed`);
+          } catch (error) {
+            // Log but don't fail the entire process if progress update fails
+            this.log('error', 'PROGRESS_UPDATE_ERROR', `Failed to update progress: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          }
+        },
+        onProgress: (current, total) => {
+          this.log('info', 'FETCH_PROGRESS', `Fetching page ${current} of ${total}`);
+
+          // Update progress timestamp during API fetching to prevent stall detection
+          this.supabase
+            .from('integration_runs')
+            .update({ last_progress_update: new Date().toISOString() })
+            .eq('id', this.runId)
+            .then(() => {})
+            .catch((error) => {
+              console.error('Failed to update progress during API fetch:', error);
+            });
+        },
+        activeOnly: activeOnly,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.log('error', 'FETCH_PRODUCTS_ERROR', `Error during product fetching: ${errorMessage}`);
+      throw new Error(`Failed to fetch products from Prestashop: ${errorMessage}`);
+    }
 
     this.log('info', 'FETCH_COMPLETE', `Fetched and processed ${totalProductsProcessed} products in ${batchNumber} batches`);
 
@@ -227,21 +302,35 @@ export class IntegrationSyncService {
       productsProcessed = countArray?.length || 0;
     }
 
-    // Call the process_pending_integration_products function one final time to ensure all products are processed
+    // Call the process_pending_integration_products function one final time with timeout
     try {
       this.log('info', 'FINAL_PROCESSING_TRIGGER', 'Triggering final processing for all pending products');
 
-      const { data: finalProcessResult, error: finalProcessError } = await this.supabase
+      // Add timeout to prevent hanging on final processing
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Final processing timeout after 10 minutes')), 10 * 60 * 1000);
+      });
+
+      const processingPromise = this.supabase
         .rpc('process_pending_integration_products', { run_id: this.runId });
 
-      if (finalProcessError) {
-        const errorMessage = finalProcessError && typeof finalProcessError === 'object' && 'message' in finalProcessError ? (finalProcessError as { message: string }).message : 'Unknown error';
+      // Race between the actual operation and timeout
+      const result = await Promise.race([processingPromise, timeoutPromise]) as { data: unknown; error: unknown };
+
+      if (result.error) {
+        const errorMessage = result.error && typeof result.error === 'object' && 'message' in result.error ? (result.error as { message: string }).message : 'Unknown error';
         this.log('error', 'FINAL_PROCESSING_ERROR', `Error in final processing: ${errorMessage}`);
       } else {
-        this.log('info', 'FINAL_PROCESSING_COMPLETE', `Final processing complete: ${JSON.stringify(finalProcessResult)}`);
+        this.log('info', 'FINAL_PROCESSING_COMPLETE', `Final processing complete: ${JSON.stringify(result.data)}`);
       }
     } catch (error) {
-      this.log('error', 'FINAL_PROCESSING_EXCEPTION', `Exception in final processing: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.log('error', 'FINAL_PROCESSING_EXCEPTION', `Exception in final processing: ${errorMessage}`);
+
+      // Log timeout specifically but don't fail the entire sync
+      if (errorMessage.includes('timeout')) {
+        this.log('warn', 'FINAL_PROCESSING_TIMEOUT', 'Final processing timed out, but sync will continue with current results');
+      }
     }
 
     // Wait a moment for any remaining processing to complete
@@ -291,14 +380,18 @@ export class IntegrationSyncService {
   /**
    * Process a batch of products
    */
-  private async processProductBatch(batch: Record<string, unknown>[], batchNumber: number, totalBatches: number | string): Promise<void> {
+  private async processProductBatch(batch: Record<string, unknown>[], batchNumber: number, totalBatches: number | string, integration: Integration): Promise<void> {
     this.log('info', 'BATCH_PROCESSING', `Processing batch ${batchNumber}/${totalBatches} (${batch.length} products)`);
+
+    // Check if we should import all custom fields
+    const importAllCustomFields = integration.configuration?.importAllCustomFields !== false; // Default to true
 
     // Prepare the batch for insertion
     const stagedProducts = batch.map(product => {
       // Log the first product in detail to debug
       if (batch.indexOf(product) === 0) {
         console.log('First product raw data:', JSON.stringify(product, null, 2));
+        console.log(`Import all custom fields setting: ${importAllCustomFields}`);
       }
 
       // Make sure we handle empty strings properly
@@ -309,9 +402,16 @@ export class IntegrationSyncService {
       const productUrl = product.product_url && product.product_url !== '' ? product.product_url : null;
       const currencyCode = product.currency_code || 'SEK'; // Default to SEK if not provided
 
-      // Extract features for custom fields processing
-      // Only include features in raw_data, not the basic product fields
-      const featuresForCustomFields = product.features || {};
+      // Determine what to store in raw_data based on configuration
+      let rawDataToStore: Record<string, unknown>;
+
+      if (importAllCustomFields) {
+        // Store all extra features and attributes for custom field processing
+        rawDataToStore = (product.features as Record<string, unknown>) || {};
+      } else {
+        // Store minimal data - only basic product information is imported
+        rawDataToStore = {};
+      }
 
       return {
         integration_run_id: this.runId,
@@ -327,7 +427,7 @@ export class IntegrationSyncService {
         image_url: imageUrl,
         url: productUrl, // Add the product URL to the staged product
         currency_code: currencyCode, // Add the currency code
-        raw_data: featuresForCustomFields, // Store only features for custom fields processing
+        raw_data: rawDataToStore, // Store custom fields based on configuration
         status: 'pending',
         created_at: new Date().toISOString()
       };
@@ -356,22 +456,35 @@ export class IntegrationSyncService {
 
     this.log('info', 'BATCH_STAGED', `Staged batch ${batchNumber}/${totalBatches} (${batch.length} products)`);
 
-    // Process this batch immediately by calling the database function
+    // Process this batch immediately by calling the database function with timeout
     try {
       this.log('info', 'BATCH_PROCESSING_TRIGGER', `Triggering processing for batch ${batchNumber}/${totalBatches}`);
 
-      // Call the process_pending_integration_products function to process this batch
-      const { data: processResult, error: processError } = await this.supabase
+      // Add timeout to prevent hanging on database operations
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Database processing timeout after 5 minutes')), 5 * 60 * 1000);
+      });
+
+      const processingPromise = this.supabase
         .rpc('process_pending_integration_products', { run_id: this.runId });
 
-      if (processError) {
-        const errorMessage = processError && typeof processError === 'object' && 'message' in processError ? (processError as { message: string }).message : 'Unknown error';
+      // Race between the actual operation and timeout
+      const result = await Promise.race([processingPromise, timeoutPromise]) as { data: unknown; error: unknown };
+
+      if (result.error) {
+        const errorMessage = result.error && typeof result.error === 'object' && 'message' in result.error ? (result.error as { message: string }).message : 'Unknown error';
         this.log('error', 'BATCH_PROCESSING_ERROR', `Error processing batch ${batchNumber}: ${errorMessage}`);
       } else {
-        this.log('info', 'BATCH_PROCESSED', `Processed batch ${batchNumber}/${totalBatches}: ${JSON.stringify(processResult)}`);
+        this.log('info', 'BATCH_PROCESSED', `Processed batch ${batchNumber}/${totalBatches}: ${JSON.stringify(result.data)}`);
       }
     } catch (error) {
-      this.log('error', 'BATCH_PROCESSING_EXCEPTION', `Exception processing batch ${batchNumber}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.log('error', 'BATCH_PROCESSING_EXCEPTION', `Exception processing batch ${batchNumber}: ${errorMessage}`);
+
+      // If it's a timeout, we should still continue with the next batch
+      if (errorMessage.includes('timeout')) {
+        this.log('warn', 'BATCH_PROCESSING_TIMEOUT', `Batch ${batchNumber} timed out, continuing with next batch`);
+      }
     }
   }
 
@@ -380,6 +493,9 @@ export class IntegrationSyncService {
    */
   async executeSync(): Promise<SyncResult> {
     try {
+      // Start heartbeat to prevent stall detection
+      this.startHeartbeat();
+
       // Update run status to processing
       await this.updateRunStatus('processing');
       this.log('info', 'SYNC_START', 'Starting integration sync using staged approach');
@@ -455,6 +571,9 @@ export class IntegrationSyncService {
         errorMessage,
         logDetails: this.logs,
       };
+    } finally {
+      // Always stop the heartbeat when sync is complete or failed
+      this.stopHeartbeat();
     }
   }
 }

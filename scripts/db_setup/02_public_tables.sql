@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-06-10 16:11:30
+-- Generated: 2025-06-13 09:51:04
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -594,7 +594,8 @@ CREATE TABLE public.integrations (
     sync_frequency text DEFAULT 'daily'::text,
     configuration jsonb,
     created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now()
+    updated_at timestamp with time zone DEFAULT now(),
+    next_run_time timestamp with time zone
 );
 
 --
@@ -701,7 +702,12 @@ CREATE TABLE public.product_custom_field_values (
     custom_field_id uuid NOT NULL,
     value text,
     created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now()
+    updated_at timestamp with time zone DEFAULT now(),
+    source_type character varying(20),
+    source_id uuid,
+    last_updated_by character varying(20),
+    confidence_score integer DEFAULT 100,
+    created_by_source character varying(20)
 );
 
 --
@@ -846,6 +852,19 @@ COMMENT ON COLUMN public.scraper_ai_sessions.data_extraction_data IS 'Data from 
 COMMENT ON COLUMN public.scraper_ai_sessions.assembly_data IS 'Data from the script assembly phase';
 
 --
+-- Name: scraper_run_timeouts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraper_run_timeouts (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    run_id uuid NOT NULL,
+    timeout_at timestamp with time zone NOT NULL,
+    processed boolean DEFAULT false NOT NULL,
+    processed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
 -- Name: scraper_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -869,19 +888,6 @@ CREATE TABLE public.scraper_runs (
     error_details text,
     claimed_by_worker_at timestamp with time zone,
     current_phase integer
-);
-
---
--- Name: scraper_run_timeouts; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.scraper_run_timeouts (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    run_id uuid NOT NULL,
-    timeout_at timestamp with time zone NOT NULL,
-    processed boolean DEFAULT false NOT NULL,
-    processed_at timestamp with time zone,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 --
@@ -911,6 +917,7 @@ CREATE TABLE public.scrapers (
     scrape_only_own_products boolean DEFAULT false NOT NULL,
     filter_by_active_brands boolean DEFAULT false NOT NULL,
     supplier_id uuid,
+    next_run_time timestamp with time zone,
     CONSTRAINT scrapers_target_check CHECK ((((competitor_id IS NOT NULL) AND (supplier_id IS NULL)) OR ((competitor_id IS NULL) AND (supplier_id IS NOT NULL))))
 );
 
@@ -1024,6 +1031,7 @@ CREATE TABLE public.temp_competitors_scraped_data (
     scraped_at timestamp with time zone DEFAULT now(),
     ean text,
     currency_code text,
+    raw_data jsonb,
     CONSTRAINT temp_competitors_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
 );
 
@@ -1080,7 +1088,8 @@ CREATE TABLE public.temp_suppliers_scraped_data (
     scraped_at timestamp with time zone DEFAULT now(),
     processed boolean DEFAULT false,
     created_at timestamp with time zone DEFAULT now(),
-    supplier_recommended_price numeric(10,2)
+    supplier_recommended_price numeric(10,2),
+    raw_data jsonb
 );
 
 --
@@ -1108,6 +1117,9 @@ CREATE TABLE public.user_custom_fields (
     default_value text,
     validation_rules jsonb,
     created_at timestamp with time zone DEFAULT now(),
+    update_strategy character varying(20) DEFAULT 'source_priority'::character varying,
+    source_priority jsonb DEFAULT '{"manual": 100, "supplier": 60, "competitor": 40, "integration": 80}'::jsonb,
+    allow_auto_update boolean DEFAULT true,
     CONSTRAINT user_custom_fields_field_type_check CHECK ((field_type = ANY (ARRAY['text'::text, 'number'::text, 'boolean'::text, 'url'::text, 'date'::text])))
 );
 
@@ -1157,6 +1169,8 @@ CREATE TABLE public.user_settings (
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
     auto_create_custom_fields boolean DEFAULT true,
+    custom_fields_update_strategy character varying(20) DEFAULT 'source_priority'::character varying,
+    custom_fields_source_priority jsonb DEFAULT '{"manual": 100, "supplier": 60, "competitor": 40, "integration": 80}'::jsonb,
     CONSTRAINT companies_primary_currency_check CHECK ((char_length(primary_currency) = 3))
 );
 
@@ -1661,6 +1675,13 @@ ALTER TABLE ONLY public.scraper_ai_sessions
     ADD CONSTRAINT scraper_ai_sessions_pkey PRIMARY KEY (id);
 
 --
+-- Name: scraper_run_timeouts scraper_run_timeouts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_run_timeouts
+    ADD CONSTRAINT scraper_run_timeouts_pkey PRIMARY KEY (id);
+
+--
 -- Name: scraper_runs scraper_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2158,6 +2179,13 @@ ALTER TABLE ONLY public.scraper_ai_sessions
     ADD CONSTRAINT scraper_ai_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
 --
+-- Name: scraper_run_timeouts scraper_run_timeouts_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_run_timeouts
+    ADD CONSTRAINT scraper_run_timeouts_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.scraper_runs(id) ON DELETE CASCADE;
+
+--
 -- Name: scraper_runs scraper_runs_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2534,6 +2562,12 @@ ALTER TABLE public.rate_limit_log ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.scraper_ai_sessions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraper_run_timeouts; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraper_run_timeouts ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: scraper_runs; Type: ROW SECURITY; Schema: public; Owner: -

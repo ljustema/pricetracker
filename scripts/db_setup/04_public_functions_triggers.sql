@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-06-10 16:11:30
+-- Generated: 2025-06-13 09:51:04
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -423,7 +423,9 @@ DECLARE
 
 CREATE FUNCTION public.create_scheduled_scraper_jobs() RETURNS TABLE(jobs_created integer, message text)
     LANGUAGE plpgsql
-    AS $$ DECLARE scraper_record record; job_count integer := 0; new_job_id uuid; current_timestamp timestamp with time zone := now(); max_python_jobs integer := 1; max_typescript_jobs integer := 1; current_python_jobs integer; current_typescript_jobs integer; max_jobs_per_run integer := 2; BEGIN SELECT COUNT(*) INTO current_python_jobs FROM public.scraper_runs sr WHERE sr.status IN ('pending', 'initializing', 'running') AND sr.scraper_type = 'python'; SELECT COUNT(*) INTO current_typescript_jobs FROM public.scraper_runs sr WHERE sr.status IN ('pending', 'initializing', 'running') AND sr.scraper_type = 'typescript'; RAISE NOTICE 'Current jobs - Python: %/%, TypeScript: %/%, Max per run: %', current_python_jobs, max_python_jobs, current_typescript_jobs, max_typescript_jobs, max_jobs_per_run; IF current_python_jobs >= max_python_jobs AND current_typescript_jobs >= max_typescript_jobs THEN RETURN QUERY SELECT 0, 'All workers busy - Python: ' || current_python_jobs || '/' || max_python_jobs || ', TypeScript: ' || current_typescript_jobs || '/' || max_typescript_jobs; RETURN; END IF; FOR scraper_record IN SELECT s.id, s.user_id, s.name, s.scraper_type, s.schedule, s.last_run, s.competitor_id FROM public.scrapers s WHERE s.is_active = true AND s.schedule IS NOT NULL AND (s.last_run IS NULL OR s.last_run < current_timestamp - interval '23 hours') ORDER BY COALESCE(s.last_run, '1970-01-01'::timestamp with time zone) ASC LIMIT 20 LOOP IF job_count >= max_jobs_per_run THEN RAISE NOTICE 'Reached max jobs per run limit (%)', max_jobs_per_run; EXIT; END IF; IF scraper_record.scraper_type = 'python' AND current_python_jobs >= max_python_jobs THEN CONTINUE; END IF; IF scraper_record.scraper_type = 'typescript' AND current_typescript_jobs >= max_typescript_jobs THEN CONTINUE; END IF; IF NOT EXISTS ( SELECT 1 FROM public.scraper_runs sr WHERE sr.scraper_id = scraper_record.id AND sr.status IN ('pending', 'initializing', 'running') ) THEN INSERT INTO public.scraper_runs ( id, scraper_id, user_id, status, started_at, is_test_run, scraper_type, created_at ) VALUES ( gen_random_uuid(), scraper_record.id, scraper_record.user_id, 'pending', current_timestamp, false, scraper_record.scraper_type, current_timestamp ) RETURNING id INTO new_job_id; job_count := job_count + 1; IF scraper_record.scraper_type = 'python' THEN current_python_jobs := current_python_jobs + 1; ELSIF scraper_record.scraper_type = 'typescript' THEN current_typescript_jobs := current_typescript_jobs + 1; END IF; RAISE NOTICE 'Created scheduled job % for scraper % (%) - Priority: %', new_job_id, scraper_record.name, scraper_record.scraper_type, CASE WHEN scraper_record.last_run IS NULL THEN 'Never run' ELSE extract(epoch from (current_timestamp - scraper_record.last_run))/3600 || ' hours ago' END; END IF; END LOOP; RETURN QUERY SELECT job_count, 'Created ' || job_count || ' scheduled scraper jobs (Python: ' || current_python_jobs || '/' || max_python_jobs || ', TypeScript: ' || current_typescript_jobs || '/' || max_typescript_jobs || ')'; END; $$;
+    AS $$
+DECLARE
+    scraper_record record;
 
 --
 -- Name: FUNCTION create_user_for_nextauth(); Type: COMMENT; Schema: public; Owner: -
@@ -1395,6 +1397,26 @@ DECLARE
     field_key TEXT;
 
 --
+-- Name: process_custom_fields_from_raw_data(uuid, uuid, jsonb, character varying, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_custom_fields_from_raw_data(p_user_id uuid, p_product_id uuid, p_raw_data jsonb, p_source_type character varying DEFAULT 'competitor'::character varying, p_source_id uuid DEFAULT NULL::uuid) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $_$
+DECLARE
+    field_key TEXT;
+
+--
+-- Name: process_existing_temp_integrations(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_existing_temp_integrations() RETURNS TABLE(processed_count integer, error_count integer)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    temp_record RECORD;
+
+--
 -- Name: process_pending_integration_products(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1417,7 +1439,7 @@ CREATE FUNCTION public.process_scraper_timeouts() RETURNS integer
 --
 
 CREATE FUNCTION public.process_temp_competitors_scraped_data() RETURNS trigger
-    LANGUAGE plpgsql SECURITY DEFINER
+    LANGUAGE plpgsql
     AS $$
 DECLARE
     matched_product_id UUID;
@@ -1437,7 +1459,7 @@ DECLARE
 --
 
 CREATE FUNCTION public.process_temp_suppliers_scraped_data() RETURNS trigger
-    LANGUAGE plpgsql SECURITY DEFINER
+    LANGUAGE plpgsql
     AS $$
 DECLARE
     matched_product_id UUID;
@@ -1558,6 +1580,34 @@ BEGIN
   WHERE id = NEW.conversation_id;
 
 --
+-- Name: update_integration_next_run_on_completion(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_integration_next_run_on_completion() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Only update next_run_time when status changes to 'completed'
+    IF NEW.status = 'completed' AND OLD.status != 'completed' THEN
+        -- Update the integration's last_sync_at and next_run_time
+        UPDATE public.integrations
+        SET 
+            last_sync_at = NEW.completed_at,
+            last_sync_status = 'success',
+            updated_at = now()
+        WHERE id = NEW.integration_id;
+
+--
+-- Name: update_integration_next_run_time(uuid, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_integration_next_run_time(integration_id uuid, completed_at timestamp with time zone DEFAULT now()) RETURNS timestamp with time zone
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    integration_record record;
+
+--
 -- Name: update_integration_progress_timestamp(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1612,6 +1662,33 @@ Current pg_cron schedule:
         p_max_typescript_workers,
         p_max_integration_workers,
         p_max_jobs_per_run);
+
+--
+-- Name: update_scraper_next_run_on_completion(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_scraper_next_run_on_completion() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Only update next_run_time when status changes to 'completed'
+    IF NEW.status = 'completed' AND OLD.status != 'completed' THEN
+        -- Update the scraper's last_run and calculate next_run_time
+        UPDATE public.scrapers
+        SET 
+            last_run = NEW.completed_at,
+            updated_at = now()
+        WHERE id = NEW.scraper_id;
+
+--
+-- Name: update_scraper_next_run_time(uuid, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_scraper_next_run_time(scraper_id uuid, completed_at timestamp with time zone DEFAULT now()) RETURNS timestamp with time zone
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    scraper_record record;
 
 --
 -- Name: update_scraper_status_from_run(); Type: FUNCTION; Schema: public; Owner: -
@@ -2128,7 +2205,7 @@ CREATE TRIGGER process_temp_competitors_trigger BEFORE INSERT ON public.temp_com
 -- Name: temp_integrations_scraped_data process_temp_integrations_trigger; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER process_temp_integrations_trigger BEFORE UPDATE ON public.temp_integrations_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_integrations_scraped_data();
+CREATE TRIGGER process_temp_integrations_trigger AFTER INSERT ON public.temp_integrations_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_integrations_scraped_data();
 
 --
 -- Name: temp_suppliers_scraped_data process_temp_suppliers_trigger; Type: TRIGGER; Schema: public; Owner: -
@@ -2159,6 +2236,18 @@ CREATE TRIGGER sync_brand_name_trigger BEFORE INSERT OR UPDATE OF brand_id ON pu
 --
 
 CREATE TRIGGER trigger_update_conversation_timestamp AFTER INSERT ON public.support_messages FOR EACH ROW EXECUTE FUNCTION public.update_conversation_timestamp();
+
+--
+-- Name: integration_runs trigger_update_integration_next_run; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trigger_update_integration_next_run AFTER UPDATE ON public.integration_runs FOR EACH ROW EXECUTE FUNCTION public.update_integration_next_run_on_completion();
+
+--
+-- Name: scraper_runs trigger_update_scraper_next_run; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trigger_update_scraper_next_run AFTER UPDATE ON public.scraper_runs FOR EACH ROW EXECUTE FUNCTION public.update_scraper_next_run_on_completion();
 
 --
 -- Name: professional_scraper_requests update_professional_scraper_requests_updated_at; Type: TRIGGER; Schema: public; Owner: -

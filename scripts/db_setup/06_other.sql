@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-06-10 16:11:30
+-- Generated: 2025-06-13 09:51:04
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -675,6 +675,30 @@ RETURN;
 END IF;
 
 EXIT;
+
+END IF;
+
+END IF;
+
+END LOOP;
+
+END;
+
+$$;
+
+current_timestamp timestamp with time zone := now();
+
+RETURN;
+
+END IF;
+
+EXIT;
+
+END IF;
+
+END IF;
+
+END IF;
 
 END IF;
 
@@ -1969,7 +1993,7 @@ field_value TEXT;
 
 field_type TEXT;
 
-custom_field_id UUID;
+v_custom_field_id UUID;
 
 fields_processed INTEGER := 0;
 
@@ -1981,7 +2005,8 @@ standard_fields TEXT[] := ARRAY[
         'currency_code', 'currency', 'is_active', 'created_at', 'updated_at',
         'scraped_at', 'competitor_id', 'integration_id', 'scraper_id', 'status',
         'error_message', 'processed_at', 'product_id', 'prestashop_product_id',
-        'raw_data', 'integration_run_id'
+        'raw_data', 'integration_run_id', 'competitor_price', 'raw_price', 'is_available',
+        'stock_status'
     ];
 
 BEGIN
@@ -2023,17 +2048,17 @@ ELSIF field_value ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN
 END IF;
 
 -- Check if custom field already exists
-        SELECT id INTO custom_field_id
-        FROM user_custom_fields
-        WHERE user_id = p_user_id AND field_name = field_key;
+        SELECT ucf.id INTO v_custom_field_id
+        FROM user_custom_fields ucf
+        WHERE ucf.user_id = p_user_id AND ucf.field_name = field_key;
 
 -- Create custom field if it doesn't exist
-        IF custom_field_id IS NULL THEN
+        IF v_custom_field_id IS NULL THEN
             INSERT INTO user_custom_fields (
                 user_id, field_name, field_type, is_required, default_value, validation_rules
             ) VALUES (
                 p_user_id, field_key, field_type, false, NULL, NULL
-            ) RETURNING id INTO custom_field_id;
+            ) RETURNING id INTO v_custom_field_id;
 
 fields_created := fields_created + 1;
 
@@ -2041,13 +2066,13 @@ END IF;
 
 -- Delete existing value for this field and product (to avoid duplicates)
         DELETE FROM product_custom_field_values
-        WHERE product_id = p_product_id AND custom_field_id = custom_field_id;
+        WHERE product_id = p_product_id AND custom_field_id = v_custom_field_id;
 
 -- Insert new custom field value
         INSERT INTO product_custom_field_values (
             product_id, custom_field_id, value
         ) VALUES (
-            p_product_id, custom_field_id, field_value
+            p_product_id, v_custom_field_id, field_value
         );
 
 fields_processed := fields_processed + 1;
@@ -2072,6 +2097,374 @@ RETURN jsonb_build_object(
 END;
 
 $_$;
+
+field_value TEXT;
+
+field_type TEXT;
+
+normalized_field_key TEXT;
+
+v_custom_field_id UUID;
+
+fields_processed INTEGER := 0;
+
+fields_created INTEGER := 0;
+
+fields_skipped INTEGER := 0;
+
+existing_source_type VARCHAR(20);
+
+existing_confidence INTEGER;
+
+user_update_strategy VARCHAR(20);
+
+field_update_strategy VARCHAR(20);
+
+source_priority_map JSONB;
+
+current_priority INTEGER;
+
+existing_priority INTEGER;
+
+should_update BOOLEAN;
+
+auto_create_enabled BOOLEAN;
+
+standard_fields TEXT[] := ARRAY[
+        'id', 'user_id', 'name', 'sku', 'ean', 'brand', 'brand_id', 'category',
+        'description', 'image_url', 'url', 'price', 'our_retail_price', 'our_wholesale_price',
+        'currency_code', 'currency', 'is_active', 'created_at', 'updated_at',
+        'scraped_at', 'competitor_id', 'integration_id', 'scraper_id', 'status',
+        'error_message', 'processed_at', 'product_id', 'prestashop_product_id',
+        'raw_data', 'integration_run_id', 'competitor_price', 'raw_price', 'is_available',
+        'stock_status'
+    ];
+
+BEGIN
+    -- Return early if no raw_data
+    IF p_raw_data IS NULL THEN
+        RETURN jsonb_build_object('fields_processed', 0, 'fields_created', 0, 'fields_skipped', 0);
+
+END IF;
+
+-- Get user's global custom fields settings
+    SELECT 
+        COALESCE(custom_fields_update_strategy, 'source_priority'),
+        COALESCE(custom_fields_source_priority, '{"manual": 100, "integration": 80, "supplier": 60, "competitor": 40}'),
+        COALESCE(auto_create_custom_fields, true)
+    INTO user_update_strategy, source_priority_map, auto_create_enabled
+    FROM user_settings 
+    WHERE user_id = p_user_id;
+
+-- If no user settings found, use defaults
+    IF user_update_strategy IS NULL THEN
+        user_update_strategy := 'source_priority';
+
+source_priority_map := '{"manual": 100, "integration": 80, "supplier": 60, "competitor": 40}';
+
+auto_create_enabled := true;
+
+END IF;
+
+-- Get current source priority
+    current_priority := COALESCE((source_priority_map->>p_source_type)::INTEGER, 0);
+
+-- Process each field in raw_data
+    FOR field_key, field_value IN SELECT * FROM jsonb_each_text(p_raw_data)
+    LOOP
+        -- Skip if field is a standard field or empty
+        IF field_key = ANY(standard_fields) OR field_value IS NULL OR field_value = '' THEN
+            CONTINUE;
+
+END IF;
+
+-- Normalize field name: capitalize first letter and trim whitespace
+        normalized_field_key := TRIM(field_key);
+
+IF LENGTH(normalized_field_key) > 0 THEN
+            normalized_field_key := UPPER(LEFT(normalized_field_key, 1)) || SUBSTRING(normalized_field_key FROM 2);
+
+END IF;
+
+-- Updated field name validation to support Swedish characters (åäöÅÄÖ) and parentheses ()
+        -- Allow letters (including Swedish), numbers, underscores, spaces, and parentheses
+        -- Must start with a letter
+        IF NOT (normalized_field_key ~ '^[a-zA-ZåäöÅÄÖ][a-zA-ZåäöÅÄÖ0-9_ ()]*$') THEN
+            CONTINUE;
+
+END IF;
+
+-- Detect field type
+        field_type := 'text'; -- Default
+        IF field_value ~ '^[0-9]+\.?[0-9]*$' THEN
+            field_type := 'number';
+
+ELSIF field_value IN ('true', 'false') THEN
+            field_type := 'boolean';
+
+ELSIF field_value ~ '^https?://' THEN
+            field_type := 'url';
+
+ELSIF field_value ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN
+            field_type := 'date';
+
+END IF;
+
+-- Check if custom field already exists (using normalized field name)
+        SELECT ucf.id, ucf.update_strategy INTO v_custom_field_id, field_update_strategy
+        FROM user_custom_fields ucf
+        WHERE ucf.user_id = p_user_id AND ucf.field_name = normalized_field_key;
+
+-- Create custom field if it doesn't exist AND auto-create is enabled
+        IF v_custom_field_id IS NULL THEN
+            IF auto_create_enabled THEN
+                INSERT INTO user_custom_fields (
+                    user_id, field_name, field_type, is_required, default_value, validation_rules,
+                    update_strategy, source_priority, allow_auto_update
+                ) VALUES (
+                    p_user_id, normalized_field_key, field_type, false, NULL, NULL,
+                    user_update_strategy, source_priority_map, true
+                ) RETURNING id INTO v_custom_field_id;
+
+fields_created := fields_created + 1;
+
+field_update_strategy := user_update_strategy;
+
+ELSE
+                -- Auto-create is disabled, skip this field
+                fields_skipped := fields_skipped + 1;
+
+CONTINUE;
+
+END IF;
+
+END IF;
+
+-- Check if field value already exists and determine if we should update
+        SELECT source_type, confidence_score 
+        INTO existing_source_type, existing_confidence
+        FROM product_custom_field_values
+        WHERE product_id = p_product_id AND custom_field_id = v_custom_field_id;
+
+should_update := false;
+
+IF existing_source_type IS NULL THEN
+            -- No existing value, always create
+            should_update := true;
+
+ELSE
+            -- Existing value found, check update strategy
+            existing_priority := COALESCE((source_priority_map->>existing_source_type)::INTEGER, 0);
+
+CASE COALESCE(field_update_strategy, user_update_strategy)
+                WHEN 'always_update' THEN
+                    should_update := true;
+
+WHEN 'never_update' THEN
+                    should_update := false;
+
+WHEN 'source_priority' THEN
+                    should_update := current_priority > existing_priority;
+
+WHEN 'manual_approval' THEN
+                    -- For now, treat as source_priority. Later we can add approval queue
+                    should_update := current_priority > existing_priority;
+
+ELSE
+                    -- Default to source_priority
+                    should_update := current_priority > existing_priority;
+
+END CASE;
+
+END IF;
+
+IF should_update THEN
+            -- Delete existing value (if any)
+            DELETE FROM product_custom_field_values
+            WHERE product_id = p_product_id AND custom_field_id = v_custom_field_id;
+
+-- Insert new custom field value with source information
+            INSERT INTO product_custom_field_values (
+                product_id, custom_field_id, value, source_type, source_id, 
+                last_updated_by, confidence_score, created_by_source
+            ) VALUES (
+                p_product_id, v_custom_field_id, field_value, p_source_type, p_source_id,
+                p_source_type, 100, p_source_type
+            );
+
+fields_processed := fields_processed + 1;
+
+ELSE
+            fields_skipped := fields_skipped + 1;
+
+END IF;
+
+END LOOP;
+
+RETURN jsonb_build_object(
+        'fields_processed', fields_processed,
+        'fields_created', fields_created,
+        'fields_skipped', fields_skipped,
+        'source_type', p_source_type,
+        'source_priority', current_priority,
+        'auto_create_enabled', auto_create_enabled
+    );
+
+EXCEPTION WHEN OTHERS THEN
+    -- Log error but don't fail the main process
+    RAISE WARNING 'Error processing custom fields for product %: %', p_product_id, SQLERRM;
+
+RETURN jsonb_build_object(
+        'fields_processed', 0,
+        'fields_created', 0,
+        'fields_skipped', 0,
+        'error', SQLERRM
+    );
+
+END;
+
+$_$;
+
+processed_count integer := 0;
+
+error_count integer := 0;
+
+existing_product_id UUID;
+
+v_brand_id UUID;
+
+current_retail_price NUMERIC(10,2);
+
+current_wholesale_price NUMERIC(10,2);
+
+custom_fields_result JSONB;
+
+BEGIN
+    -- Process each processing record (changed from pending to processing)
+    FOR temp_record IN 
+        SELECT * FROM temp_integrations_scraped_data WHERE status = 'processing' LIMIT 100
+    LOOP
+        BEGIN
+            -- Find or create brand if we have brand name
+            v_brand_id := NULL;
+
+IF temp_record.brand IS NOT NULL AND temp_record.brand != '' THEN
+                SELECT find_or_create_brand(temp_record.user_id, temp_record.brand) INTO v_brand_id;
+
+END IF;
+
+-- Try to find existing product by EAN first
+            existing_product_id := NULL;
+
+IF temp_record.ean IS NOT NULL AND temp_record.ean != '' THEN
+                SELECT id INTO existing_product_id
+                FROM products
+                WHERE user_id = temp_record.user_id
+                  AND ean = temp_record.ean
+                LIMIT 1;
+
+END IF;
+
+-- If no match by EAN, try by SKU and brand
+            IF existing_product_id IS NULL AND temp_record.sku IS NOT NULL AND temp_record.sku != '' AND temp_record.brand IS NOT NULL AND temp_record.brand != '' THEN
+                SELECT id INTO existing_product_id
+                FROM products
+                WHERE user_id = temp_record.user_id
+                  AND sku = temp_record.sku
+                  AND brand = temp_record.brand
+                LIMIT 1;
+
+END IF;
+
+current_retail_price := NULL;
+
+current_wholesale_price := NULL;
+
+IF existing_product_id IS NOT NULL THEN
+                -- Get current prices for comparison
+                SELECT our_retail_price, our_wholesale_price
+                INTO current_retail_price, current_wholesale_price
+                FROM products
+                WHERE id = existing_product_id;
+
+-- Update existing product
+                UPDATE products SET
+                    name = COALESCE(temp_record.name, name),
+                    sku = COALESCE(temp_record.sku, sku),
+                    ean = COALESCE(temp_record.ean, ean),
+                    brand = COALESCE(temp_record.brand, brand),
+                    brand_id = COALESCE(v_brand_id, brand_id),
+                    our_retail_price = temp_record.our_retail_price,
+                    our_wholesale_price = temp_record.our_wholesale_price,
+                    image_url = COALESCE(temp_record.image_url, image_url),
+                    url = COALESCE(temp_record.url, url),
+                    currency_code = COALESCE(temp_record.currency_code, currency_code),
+                    updated_at = NOW()
+                WHERE id = existing_product_id;
+
+ELSE
+                -- Create new product
+                INSERT INTO products (
+                    user_id, name, sku, ean, brand, brand_id,
+                    our_retail_price, our_wholesale_price, image_url, currency_code, url
+                ) VALUES (
+                    temp_record.user_id, temp_record.name, temp_record.sku, temp_record.ean, temp_record.brand, v_brand_id,
+                    temp_record.our_retail_price, temp_record.our_wholesale_price, temp_record.image_url, temp_record.currency_code, temp_record.url
+                ) RETURNING id INTO existing_product_id;
+
+END IF;
+
+-- Create price change records if needed
+            IF temp_record.our_retail_price IS NOT NULL AND (current_retail_price IS NULL OR current_retail_price != temp_record.our_retail_price) THEN
+                INSERT INTO price_changes_competitors (
+                    user_id, product_id, integration_id, old_our_retail_price, new_our_retail_price,
+                    price_change_percentage, changed_at, currency_code, url
+                ) VALUES (
+                    temp_record.user_id, existing_product_id, temp_record.integration_id,
+                    COALESCE(current_retail_price, temp_record.our_retail_price), temp_record.our_retail_price,
+                    CASE WHEN current_retail_price IS NULL OR current_retail_price = 0 THEN 0
+                         ELSE ROUND(((temp_record.our_retail_price - current_retail_price) / current_retail_price * 100)::numeric, 2) END,
+                    NOW(), temp_record.currency_code, temp_record.url
+                );
+
+END IF;
+
+IF temp_record.our_wholesale_price IS NOT NULL AND (current_wholesale_price IS NULL OR current_wholesale_price != temp_record.our_wholesale_price) THEN
+                INSERT INTO price_changes_suppliers (
+                    user_id, product_id, integration_id, old_our_wholesale_price, new_our_wholesale_price,
+                    price_change_percentage, changed_at, currency_code, url
+                ) VALUES (
+                    temp_record.user_id, existing_product_id, temp_record.integration_id,
+                    COALESCE(current_wholesale_price, temp_record.our_wholesale_price), temp_record.our_wholesale_price,
+                    CASE WHEN current_wholesale_price IS NULL OR current_wholesale_price = 0 THEN 0
+                         ELSE ROUND(((temp_record.our_wholesale_price - current_wholesale_price) / current_wholesale_price * 100)::numeric, 2) END,
+                    NOW(), temp_record.currency_code, temp_record.url
+                );
+
+END IF;
+
+-- Delete the processed record
+            DELETE FROM temp_integrations_scraped_data WHERE id = temp_record.id;
+
+processed_count := processed_count + 1;
+
+EXCEPTION WHEN OTHERS THEN
+            -- Mark as error
+            UPDATE temp_integrations_scraped_data 
+            SET status = 'error', error_message = SQLERRM, processed_at = NOW() 
+            WHERE id = temp_record.id;
+
+error_count := error_count + 1;
+
+END;
+
+END LOOP;
+
+RETURN QUERY SELECT processed_count, error_count;
+
+END;
+
+$$;
 
 batch_size INTEGER := 100;
 
@@ -2137,6 +2530,8 @@ $$;
 current_competitor_price NUMERIC(10,2);
 
 v_brand_id UUID;
+
+custom_fields_result JSONB;
 
 BEGIN
     -- If product_id is already provided, use it
@@ -2227,6 +2622,19 @@ END IF;
 
 END IF;
 
+-- Process custom fields from raw_data if we have a product
+    -- Pass source information: 'competitor' as source_type and competitor_id as source_id
+    IF matched_product_id IS NOT NULL AND NEW.raw_data IS NOT NULL THEN
+        SELECT process_custom_fields_from_raw_data(
+            NEW.user_id,
+            matched_product_id,
+            NEW.raw_data,
+            'competitor',
+            NEW.competitor_id
+        ) INTO custom_fields_result;
+
+END IF;
+
 -- Get current competitor price for this product and competitor
     SELECT new_competitor_price INTO current_competitor_price
     FROM price_changes_competitors
@@ -2236,31 +2644,35 @@ END IF;
     ORDER BY changed_at DESC
     LIMIT 1;
 
--- Insert competitor price change record (ONLY competitor price fields)
-    INSERT INTO price_changes_competitors (
-        user_id,
-        product_id,
-        competitor_id,
-        old_competitor_price,
-        new_competitor_price,
-        price_change_percentage,
-        changed_at,
-        currency_code,
-        url
-    ) VALUES (
-        NEW.user_id,
-        matched_product_id,
-        NEW.competitor_id,
-        COALESCE(current_competitor_price, NEW.competitor_price), -- Use current price as old price, or new price if first time
-        NEW.competitor_price,
-        CASE 
-            WHEN current_competitor_price IS NULL OR current_competitor_price = 0 THEN 0
-            ELSE ROUND(((NEW.competitor_price - current_competitor_price) / current_competitor_price * 100)::numeric, 2)
-        END,
-        NOW(),
-        NEW.currency_code,
-        NEW.url
-    );
+-- Only insert competitor price change record if price has actually changed
+    -- OR if this is the first price record for this product/competitor combination
+    IF current_competitor_price IS NULL OR current_competitor_price != NEW.competitor_price THEN
+        INSERT INTO price_changes_competitors (
+            user_id,
+            product_id,
+            competitor_id,
+            old_competitor_price,
+            new_competitor_price,
+            price_change_percentage,
+            changed_at,
+            currency_code,
+            url
+        ) VALUES (
+            NEW.user_id,
+            matched_product_id,
+            NEW.competitor_id,
+            COALESCE(current_competitor_price, NEW.competitor_price), -- Use current price as old price, or new price if first time
+            NEW.competitor_price,
+            CASE 
+                WHEN current_competitor_price IS NULL OR current_competitor_price = 0 THEN 0
+                ELSE ROUND(((NEW.competitor_price - current_competitor_price) / current_competitor_price * 100)::numeric, 2)
+            END,
+            NOW(),
+            NEW.currency_code,
+            NEW.url
+        );
+
+END IF;
 
 -- Delete the processed temp record
     DELETE FROM temp_competitors_scraped_data WHERE id = NEW.id;
@@ -2272,216 +2684,196 @@ $$;
 
 v_brand_id UUID;
 
-old_retail_price DECIMAL(10, 2);
+current_retail_price NUMERIC(10,2);
 
-old_wholesale_price DECIMAL(10, 2);
-
-new_retail_price DECIMAL(10, 2);
-
-new_wholesale_price DECIMAL(10, 2);
-
-merged_data JSONB;
-
-existing_product RECORD;
+current_wholesale_price NUMERIC(10,2);
 
 custom_fields_result JSONB;
 
+rounded_retail_price NUMERIC(10,2);
+
+rounded_wholesale_price NUMERIC(10,2);
+
 BEGIN
-    -- Skip if already processed
-    IF NEW.status = 'processed' THEN
-        RETURN NEW;
+    -- Process immediately on INSERT (no status check needed)
+    
+    -- Round integration prices to whole numbers (no decimals)
+    rounded_retail_price := ROUND(NEW.our_retail_price);
 
-END IF;
+rounded_wholesale_price := ROUND(NEW.our_wholesale_price);
 
--- Calculate new prices (integration prices already include tax) and round to remove decimals
-    new_retail_price := ROUND(NEW.our_retail_price);
-
-new_wholesale_price := ROUND(NEW.our_wholesale_price);
-
--- Find or create brand
+-- Find or create brand if we have brand name
     IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
         SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
 
 END IF;
 
--- Use enhanced fuzzy matching to find existing product
-    SELECT find_product_with_fuzzy_matching(
-        NEW.user_id,
-        NEW.ean,
-        NEW.brand,
-        NEW.sku,
-        NEW.name,
-        v_brand_id
-    ) INTO existing_product_id;
+-- Try to find existing product by EAN first
+    IF NEW.ean IS NOT NULL AND NEW.ean != '' THEN
+        SELECT id INTO existing_product_id
+        FROM products
+        WHERE user_id = NEW.user_id
+          AND ean = NEW.ean
+        LIMIT 1;
+
+END IF;
+
+-- If no match by EAN, try by SKU and brand
+    IF existing_product_id IS NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+        SELECT id INTO existing_product_id
+        FROM products
+        WHERE user_id = NEW.user_id
+          AND sku = NEW.sku
+          AND brand = NEW.brand
+        LIMIT 1;
+
+END IF;
 
 IF existing_product_id IS NOT NULL THEN
-        -- Get existing product data
-        SELECT * INTO existing_product FROM products WHERE id = existing_product_id;
+        -- Get current prices for comparison
+        SELECT our_retail_price, our_wholesale_price
+        INTO current_retail_price, current_wholesale_price
+        FROM products
+        WHERE id = existing_product_id;
 
--- Store old prices
-        old_retail_price := existing_product.our_retail_price;
-
-old_wholesale_price := existing_product.our_wholesale_price;
-
--- Update existing product with new data
+-- Update existing product with integration data (overwrite all fields since we own this data)
+        -- Use rounded prices
         UPDATE products SET
-            name = COALESCE(NULLIF(NEW.name, ''), name),
-            sku = COALESCE(NULLIF(NEW.sku, ''), sku),
-            ean = COALESCE(NULLIF(NEW.ean, ''), ean),
-            brand = COALESCE(NULLIF(NEW.brand, ''), brand),
+            name = COALESCE(NEW.name, name),
+            sku = COALESCE(NEW.sku, sku),
+            ean = COALESCE(NEW.ean, ean),
+            brand = COALESCE(NEW.brand, brand),
             brand_id = COALESCE(v_brand_id, brand_id),
-            our_retail_price = new_retail_price,
-            our_wholesale_price = new_wholesale_price,
-            image_url = COALESCE(NULLIF(NEW.image_url, ''), image_url),
-            url = COALESCE(NULLIF(NEW.url, ''), url),
-            currency_code = COALESCE(NULLIF(NEW.currency_code, ''), currency_code),
+            our_retail_price = rounded_retail_price,
+            our_wholesale_price = rounded_wholesale_price,
+            image_url = COALESCE(NEW.image_url, image_url),
+            url = COALESCE(NEW.url, url),
+            currency_code = COALESCE(NEW.currency_code, currency_code),
             updated_at = NOW()
         WHERE id = existing_product_id;
 
 ELSE
-        -- Create new product if we have sufficient data
-        IF (NEW.ean IS NOT NULL AND NEW.ean != '') OR
-           (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL) THEN
-
-            INSERT INTO products (
-                user_id, name, sku, ean, brand, brand_id,
-                our_retail_price, our_wholesale_price, image_url, url, currency_code,
-                is_active, created_at, updated_at
-            ) VALUES (
-                NEW.user_id, NEW.name, NEW.sku, NEW.ean, NEW.brand, v_brand_id,
-                new_retail_price, new_wholesale_price, NEW.image_url, NEW.url, NEW.currency_code,
-                true, NOW(), NOW()
-            ) RETURNING id INTO existing_product_id;
-
--- For new products, old_price should be NULL (no previous price)
-            old_retail_price := NULL;
-
-old_wholesale_price := NULL;
-
-END IF;
+        -- Create new product with rounded prices
+        INSERT INTO products (
+            user_id,
+            name,
+            sku,
+            ean,
+            brand,
+            brand_id,
+            our_retail_price,
+            our_wholesale_price,
+            image_url,
+            currency_code,
+            url
+        ) VALUES (
+            NEW.user_id,
+            NEW.name,
+            NEW.sku,
+            NEW.ean,
+            NEW.brand,
+            v_brand_id,
+            rounded_retail_price,
+            rounded_wholesale_price,
+            NEW.image_url,
+            NEW.currency_code,
+            NEW.url
+        ) RETURNING id INTO existing_product_id;
 
 END IF;
 
 -- Process custom fields from raw_data if we have a product
+    -- Pass source information: 'integration' as source_type and integration_id as source_id
     IF existing_product_id IS NOT NULL AND NEW.raw_data IS NOT NULL THEN
         SELECT process_custom_fields_from_raw_data(
             NEW.user_id,
             existing_product_id,
-            NEW.raw_data
+            NEW.raw_data,
+            'integration',
+            NEW.integration_id
         ) INTO custom_fields_result;
 
 END IF;
 
--- Record retail price change if we have a price and a product
-    -- For integration data, we track our retail price changes in price_changes_competitors
-    IF new_retail_price IS NOT NULL AND existing_product_id IS NOT NULL THEN
-        -- Handle retail price change logic - ONLY use our retail price columns for integration data
-        IF old_retail_price IS NULL THEN
-            -- First time for the product, record initial price
-            INSERT INTO price_changes_competitors (
-                user_id, product_id, integration_id, 
-                old_competitor_price, new_competitor_price,  -- Set to NULL for integration data
-                old_our_retail_price, new_our_retail_price,
-                price_change_percentage, currency_code, changed_at, url
-            ) VALUES (
-                NEW.user_id, existing_product_id, NEW.integration_id,
-                NULL, NULL,  -- No competitor prices for integration data
-                new_retail_price, -- Use current price as old price the first time
-                new_retail_price,
-                0, -- 0% change the first time
-                NEW.currency_code, NOW(), NEW.url
-            );
-
-ELSE
-            -- Check if retail price has changed
-            IF new_retail_price != old_retail_price THEN
-                INSERT INTO price_changes_competitors (
-                    user_id, product_id, integration_id,
-                    old_competitor_price, new_competitor_price,  -- Set to NULL for integration data
-                    old_our_retail_price, new_our_retail_price,
-                    price_change_percentage, currency_code, changed_at, url
-                ) VALUES (
-                    NEW.user_id, existing_product_id, NEW.integration_id,
-                    NULL, NULL,  -- No competitor prices for integration data
-                    old_retail_price, new_retail_price,
-                    CASE
-                        WHEN old_retail_price IS NOT NULL AND old_retail_price > 0 THEN
-                            ROUND(((new_retail_price - old_retail_price) / old_retail_price * 100)::numeric, 2)
-                        ELSE 0
-                    END,
-                    NEW.currency_code, NOW(), NEW.url
-                );
+-- Create price change records for retail prices (in competitors table) ONLY if price changed
+    -- Use rounded prices for comparison and storage
+    IF rounded_retail_price IS NOT NULL AND (current_retail_price IS NULL OR current_retail_price != rounded_retail_price) THEN
+        INSERT INTO price_changes_competitors (
+            user_id,
+            product_id,
+            integration_id,
+            old_our_retail_price,
+            new_our_retail_price,
+            price_change_percentage,
+            changed_at,
+            currency_code,
+            url
+        ) VALUES (
+            NEW.user_id,
+            existing_product_id,
+            NEW.integration_id,
+            COALESCE(current_retail_price, rounded_retail_price),
+            rounded_retail_price,
+            CASE 
+                WHEN current_retail_price IS NULL OR current_retail_price = 0 THEN 0
+                ELSE ROUND(((rounded_retail_price - current_retail_price) / current_retail_price * 100)::numeric, 2)
+            END,
+            NOW(),
+            NEW.currency_code,
+            NEW.url
+        );
 
 END IF;
 
-END IF;
+-- Create price change records for wholesale prices (in suppliers table) ONLY if price changed
+    -- Use rounded prices for comparison and storage
+    IF rounded_wholesale_price IS NOT NULL AND (current_wholesale_price IS NULL OR current_wholesale_price != rounded_wholesale_price) THEN
+        INSERT INTO price_changes_suppliers (
+            user_id,
+            product_id,
+            integration_id,
+            old_our_wholesale_price,
+            new_our_wholesale_price,
+            price_change_percentage,
+            changed_at,
+            currency_code,
+            url
+        ) VALUES (
+            NEW.user_id,
+            existing_product_id,
+            NEW.integration_id,
+            COALESCE(current_wholesale_price, rounded_wholesale_price),
+            rounded_wholesale_price,
+            CASE 
+                WHEN current_wholesale_price IS NULL OR current_wholesale_price = 0 THEN 0
+                ELSE ROUND(((rounded_wholesale_price - current_wholesale_price) / current_wholesale_price * 100)::numeric, 2)
+            END,
+            NOW(),
+            NEW.currency_code,
+            NEW.url
+        );
 
 END IF;
 
--- Record wholesale price change if we have a wholesale price and a product
-    -- For integration data, we track our wholesale price changes in price_changes_suppliers
-    IF new_wholesale_price IS NOT NULL AND existing_product_id IS NOT NULL THEN
-        -- Handle wholesale price change logic in suppliers table
-        IF old_wholesale_price IS NULL THEN
-            -- First time for the product, record initial wholesale price
-            INSERT INTO price_changes_suppliers (
-                user_id, product_id, integration_id, 
-                old_our_wholesale_price, new_our_wholesale_price,
-                old_supplier_price, new_supplier_price,  -- Set to NULL for integration data
-                price_change_percentage, currency_code, changed_at, url, change_source
-            ) VALUES (
-                NEW.user_id, existing_product_id, NEW.integration_id,
-                new_wholesale_price, -- Use current price as old price the first time
-                new_wholesale_price,
-                NULL, NULL, -- No supplier price data from integration
-                0, -- 0% change the first time
-                NEW.currency_code, NOW(), NEW.url, 'integration'
-            );
-
-ELSE
-            -- Check if wholesale price has changed
-            IF new_wholesale_price != old_wholesale_price THEN
-                INSERT INTO price_changes_suppliers (
-                    user_id, product_id, integration_id,
-                    old_our_wholesale_price, new_our_wholesale_price,
-                    old_supplier_price, new_supplier_price,  -- Set to NULL for integration data
-                    price_change_percentage, currency_code, changed_at, url, change_source
-                ) VALUES (
-                    NEW.user_id, existing_product_id, NEW.integration_id,
-                    old_wholesale_price, new_wholesale_price,
-                    NULL, NULL, -- No supplier price data from integration
-                    CASE
-                        WHEN old_wholesale_price IS NOT NULL AND old_wholesale_price > 0 THEN
-                            ROUND(((new_wholesale_price - old_wholesale_price) / old_wholesale_price * 100)::numeric, 2)
-                        ELSE 0
-                    END,
-                    NEW.currency_code, NOW(), NEW.url, 'integration'
-                );
-
-END IF;
-
-END IF;
-
-END IF;
-
--- Mark as processed
-    NEW.status := 'processed';
-
-NEW.processed_at := NOW();
+-- Mark as processed and set processed_at
+    UPDATE temp_integrations_scraped_data 
+    SET status = 'processed', 
+        processed_at = NOW() 
+    WHERE id = NEW.id;
 
 -- Delete from temp table (cleanup after processing)
     DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
 
--- Return NULL to prevent the UPDATE (since we deleted the record)
-    RETURN NULL;
+-- Return NEW for INSERT trigger
+    RETURN NEW;
 
 EXCEPTION WHEN OTHERS THEN
     -- Mark as error and store error message
-    NEW.status := 'error';
-
-NEW.error_message := SQLERRM;
-
-NEW.processed_at := NOW();
+    UPDATE temp_integrations_scraped_data 
+    SET status = 'error', 
+        error_message = SQLERRM, 
+        processed_at = NOW() 
+    WHERE id = NEW.id;
 
 RETURN NEW;
 
@@ -2501,6 +2893,10 @@ price_change_pct DECIMAL(10, 2);
 
 existing_product RECORD;
 
+custom_fields_result JSONB;
+
+price_changed BOOLEAN := FALSE;
+
 BEGIN
     -- Find or create brand if we have brand name
     IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
@@ -2518,41 +2914,13 @@ END IF;
         v_brand_id
     ) INTO matched_product_id;
 
--- If no match found, create a new product if we have sufficient data
-    IF matched_product_id IS NULL THEN
-        -- Check if we have sufficient data to create a product
-        IF (NEW.ean IS NOT NULL AND NEW.ean != '') OR
-           (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL) THEN
+IF matched_product_id IS NOT NULL THEN
+        -- Product exists, get current data for comparison
+        SELECT * INTO existing_product
+        FROM products
+        WHERE id = matched_product_id;
 
-            -- Create a new product
-            INSERT INTO products (
-                user_id,
-                name,
-                sku,
-                ean,
-                brand,
-                brand_id,
-                image_url,
-                url,
-                currency_code
-            ) VALUES (
-                NEW.user_id,
-                NEW.name,
-                NEW.sku,
-                NEW.ean,
-                NEW.brand,
-                v_brand_id,
-                NEW.image_url,
-                NEW.url,
-                COALESCE(NEW.currency_code, 'SEK')
-            )
-            RETURNING id INTO matched_product_id;
-
-END IF;
-
-ELSE
-        -- Update existing product ONLY with missing information (don't overwrite existing data)
-        -- For suppliers/competitors: only fill in NULL or empty fields
+-- Update existing product with supplier data (only fill missing fields)
         UPDATE products SET
             name = CASE WHEN (name IS NULL OR name = '') AND NEW.name IS NOT NULL AND NEW.name != '' THEN NEW.name ELSE name END,
             sku = CASE WHEN (sku IS NULL OR sku = '') AND NEW.sku IS NOT NULL AND NEW.sku != '' THEN NEW.sku ELSE sku END,
@@ -2565,120 +2933,106 @@ ELSE
             updated_at = NOW()
         WHERE id = matched_product_id;
 
+ELSE
+        -- Create new product
+        INSERT INTO products (
+            user_id,
+            name,
+            sku,
+            ean,
+            brand,
+            brand_id,
+            image_url,
+            currency_code,
+            url
+        ) VALUES (
+            NEW.user_id,
+            NEW.name,
+            NEW.sku,
+            NEW.ean,
+            NEW.brand,
+            v_brand_id,
+            NEW.image_url,
+            NEW.currency_code,
+            NEW.url
+        ) RETURNING id INTO matched_product_id;
+
 END IF;
 
--- Only proceed with price tracking if we have a product
-    IF matched_product_id IS NOT NULL THEN
-        -- Get the last prices for this product from this supplier
-        SELECT 
-            new_supplier_price,
-            new_our_wholesale_price,
-            new_supplier_recommended_price
-        INTO 
-            last_supplier_price,
-            last_our_wholesale_price,
-            last_supplier_recommended_price
-        FROM price_changes_suppliers
-        WHERE product_id = matched_product_id 
-          AND supplier_id = NEW.supplier_id
-          AND user_id = NEW.user_id
-        ORDER BY changed_at DESC
-        LIMIT 1;
+-- Process custom fields from raw_data if we have a product
+    -- Pass source information: 'supplier' as source_type and supplier_id as source_id
+    IF matched_product_id IS NOT NULL AND NEW.raw_data IS NOT NULL THEN
+        SELECT process_custom_fields_from_raw_data(
+            NEW.user_id,
+            matched_product_id,
+            NEW.raw_data,
+            'supplier',
+            NEW.supplier_id
+        ) INTO custom_fields_result;
 
--- Only add a price change if:
-        -- 1. This is the first time we see this product (last_supplier_price IS NULL), OR
-        -- 2. Any of the prices have actually changed
-        IF last_supplier_price IS NULL THEN
-            -- First time for the product, record initial prices
-            INSERT INTO price_changes_suppliers (
-                user_id,
-                product_id,
-                supplier_id,
-                old_supplier_price,
-                new_supplier_price,
-                old_our_wholesale_price,
-                new_our_wholesale_price,
-                old_supplier_recommended_price,
-                new_supplier_recommended_price,
-                price_change_percentage,
-                changed_at,
-                currency_code,
-                url,
-                minimum_order_quantity,
-                lead_time_days,
-                change_source
-            ) VALUES (
-                NEW.user_id,
-                matched_product_id,
-                NEW.supplier_id,
-                NEW.supplier_price, -- Use current price as old price the first time
-                NEW.supplier_price,
-                NULL, -- No previous wholesale price
-                NULL, -- No new wholesale price from supplier data
-                NEW.supplier_recommended_price, -- Use current as old the first time
-                NEW.supplier_recommended_price,
-                0,  -- 0% change the first time
-                NOW(),
-                NEW.currency_code,
-                NEW.url,
-                NEW.minimum_order_quantity,
-                NEW.lead_time_days,
-                'scraper'
-            );
+END IF;
+
+-- Get last supplier prices for comparison
+    SELECT 
+        new_supplier_price,
+        new_our_wholesale_price,
+        new_supplier_recommended_price
+    INTO 
+        last_supplier_price,
+        last_our_wholesale_price,
+        last_supplier_recommended_price
+    FROM price_changes_suppliers
+    WHERE product_id = matched_product_id
+      AND supplier_id = NEW.supplier_id
+      AND user_id = NEW.user_id
+    ORDER BY changed_at DESC
+    LIMIT 1;
+
+-- Check if any price has changed
+    IF (last_supplier_price IS NULL AND NEW.supplier_price IS NOT NULL) OR
+       (last_supplier_price IS NOT NULL AND NEW.supplier_price IS NOT NULL AND last_supplier_price != NEW.supplier_price) OR
+       (last_supplier_recommended_price IS NULL AND NEW.supplier_recommended_price IS NOT NULL) OR
+       (last_supplier_recommended_price IS NOT NULL AND NEW.supplier_recommended_price IS NOT NULL AND last_supplier_recommended_price != NEW.supplier_recommended_price) THEN
+        price_changed := TRUE;
+
+END IF;
+
+-- Calculate price change percentage for supplier price
+    IF last_supplier_price IS NOT NULL AND last_supplier_price > 0 AND NEW.supplier_price IS NOT NULL THEN
+        price_change_pct := ROUND(((NEW.supplier_price - last_supplier_price) / last_supplier_price * 100)::numeric, 2);
 
 ELSE
-            -- Check if any price has changed
-            IF NEW.supplier_price != last_supplier_price OR 
-               COALESCE(NEW.supplier_recommended_price, 0) != COALESCE(last_supplier_recommended_price, 0) THEN
-                
-                -- Calculate price change percentage based on supplier price
-                IF last_supplier_price = 0 THEN
-                    price_change_pct := 0; -- Avoid division by zero
-                ELSE
-                    price_change_pct := ((NEW.supplier_price - last_supplier_price) / last_supplier_price) * 100;
+        price_change_pct := 0;
 
 END IF;
 
--- Only add price change entry if something changed
-                INSERT INTO price_changes_suppliers (
-                    user_id,
-                    product_id,
-                    supplier_id,
-                    old_supplier_price,
-                    new_supplier_price,
-                    old_our_wholesale_price,
-                    new_our_wholesale_price,
-                    old_supplier_recommended_price,
-                    new_supplier_recommended_price,
-                    price_change_percentage,
-                    changed_at,
-                    currency_code,
-                    url,
-                    minimum_order_quantity,
-                    lead_time_days,
-                    change_source
-                ) VALUES (
-                    NEW.user_id,
-                    matched_product_id,
-                    NEW.supplier_id,
-                    last_supplier_price,
-                    NEW.supplier_price,
-                    last_our_wholesale_price,
-                    last_our_wholesale_price, -- Keep same wholesale price
-                    last_supplier_recommended_price,
-                    NEW.supplier_recommended_price,
-                    price_change_pct,
-                    NOW(),
-                    NEW.currency_code,
-                    NEW.url,
-                    NEW.minimum_order_quantity,
-                    NEW.lead_time_days,
-                    'scraper'
-                );
-
-END IF;
-
-END IF;
+-- Insert supplier price change record ONLY if price has changed
+    IF price_changed AND (NEW.supplier_price IS NOT NULL OR NEW.supplier_recommended_price IS NOT NULL) THEN
+        INSERT INTO price_changes_suppliers (
+            user_id,
+            product_id,
+            supplier_id,
+            old_supplier_price,
+            new_supplier_price,
+            old_supplier_recommended_price,
+            new_supplier_recommended_price,
+            price_change_percentage,
+            changed_at,
+            currency_code,
+            url
+        ) VALUES (
+            NEW.user_id,
+            matched_product_id,
+            NEW.supplier_id,
+            COALESCE(last_supplier_price, NEW.supplier_price),
+            NEW.supplier_price,
+            COALESCE(last_supplier_recommended_price, NEW.supplier_recommended_price),
+            NEW.supplier_recommended_price,
+            price_change_pct,
+            NOW(),
+            NEW.currency_code,
+            NEW.url
+        );
 
 END IF;
 
@@ -2869,6 +3223,69 @@ END;
 
 $$;
 
+-- Calculate and set the next run time
+        PERFORM public.update_integration_next_run_time(NEW.integration_id, NEW.completed_at);
+
+END IF;
+
+RETURN NEW;
+
+END;
+
+$$;
+
+next_run timestamp with time zone;
+
+base_time timestamp with time zone;
+
+BEGIN
+    -- Get integration details
+    SELECT id, sync_frequency, last_sync_at
+    INTO integration_record
+    FROM public.integrations
+    WHERE id = integration_id;
+
+IF NOT FOUND THEN
+        RAISE EXCEPTION 'Integration not found: %', integration_id;
+
+END IF;
+
+-- Use completed_at as base time
+    base_time := completed_at;
+
+-- Calculate next run time based on frequency
+    CASE integration_record.sync_frequency
+        WHEN 'hourly' THEN
+            next_run := base_time + interval '1 hour';
+
+WHEN 'daily' THEN
+            -- Schedule for 5:00 AM the next day
+            next_run := date_trunc('day', base_time) + interval '1 day' + interval '5 hours';
+
+WHEN 'weekly' THEN
+            next_run := base_time + interval '7 days';
+
+WHEN 'monthly' THEN
+            next_run := base_time + interval '1 month';
+
+ELSE
+            -- Default to daily if frequency is unknown
+            next_run := date_trunc('day', base_time) + interval '1 day' + interval '5 hours';
+
+END CASE;
+
+-- Update the integration with the new next run time
+    UPDATE public.integrations
+    SET next_run_time = next_run,
+        updated_at = now()
+    WHERE id = integration_id;
+
+RETURN next_run;
+
+END;
+
+$$;
+
 END IF;
 
 RETURN NEW;
@@ -2917,6 +3334,89 @@ END IF;
 END;
 
 $$;
+
+END;
+
+$$;
+
+-- Calculate and set the next run time
+        PERFORM public.update_scraper_next_run_time(NEW.scraper_id, NEW.completed_at);
+
+END IF;
+
+RETURN NEW;
+
+END;
+
+$$;
+
+next_run timestamp with time zone;
+
+base_time timestamp with time zone;
+
+schedule_time text;
+
+schedule_hours integer;
+
+schedule_minutes integer;
+
+BEGIN
+    -- Get scraper details
+    SELECT id, schedule, last_run
+    INTO scraper_record
+    FROM public.scrapers
+    WHERE id = scraper_id;
+
+IF NOT FOUND THEN
+        RAISE EXCEPTION 'Scraper not found: %', scraper_id;
+
+END IF;
+
+-- Use completed_at as base time
+    base_time := completed_at;
+
+-- Get schedule time (default to 02:00 if not specified)
+    schedule_time := COALESCE(scraper_record.schedule->>'time', '02:00');
+
+-- Parse hours and minutes
+    schedule_hours := split_part(schedule_time, ':', 1)::integer;
+
+schedule_minutes := split_part(schedule_time, ':', 2)::integer;
+
+-- Calculate next run time based on frequency
+    CASE scraper_record.schedule->>'frequency'
+        WHEN 'hourly' THEN
+            next_run := base_time + interval '1 hour';
+
+WHEN 'daily' THEN
+            -- Schedule for the specified time the next day
+            next_run := date_trunc('day', base_time) + interval '1 day' + 
+                       make_interval(hours => schedule_hours, mins => schedule_minutes);
+
+WHEN 'weekly' THEN
+            -- Schedule for the same day next week at the specified time
+            next_run := date_trunc('day', base_time) + interval '7 days' + 
+                       make_interval(hours => schedule_hours, mins => schedule_minutes);
+
+WHEN 'monthly' THEN
+            -- Schedule for the same day next month at the specified time
+            next_run := date_trunc('day', base_time) + interval '1 month' + 
+                       make_interval(hours => schedule_hours, mins => schedule_minutes);
+
+ELSE
+            -- Default to daily if frequency is unknown
+            next_run := date_trunc('day', base_time) + interval '1 day' + 
+                       make_interval(hours => schedule_hours, mins => schedule_minutes);
+
+END CASE;
+
+-- Update the scraper with the new next run time
+    UPDATE public.scrapers
+    SET next_run_time = next_run,
+        updated_at = now()
+    WHERE id = scraper_id;
+
+RETURN next_run;
 
 END;
 
@@ -4037,6 +4537,24 @@ CREATE INDEX idx_product_custom_field_values_custom_field_id ON public.product_c
 CREATE INDEX idx_product_custom_field_values_product_id ON public.product_custom_field_values USING btree (product_id);
 
 --
+-- Name: idx_product_custom_field_values_product_source; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_product_source ON public.product_custom_field_values USING btree (product_id, source_type);
+
+--
+-- Name: idx_product_custom_field_values_source_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_source_id ON public.product_custom_field_values USING btree (source_id);
+
+--
+-- Name: idx_product_custom_field_values_source_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_source_type ON public.product_custom_field_values USING btree (source_type);
+
+--
 -- Name: idx_products_brand; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4179,6 +4697,18 @@ CREATE INDEX idx_scraper_ai_sessions_current_phase ON public.scraper_ai_sessions
 --
 
 CREATE INDEX idx_scraper_ai_sessions_user_id ON public.scraper_ai_sessions USING btree (user_id);
+
+--
+-- Name: idx_scraper_run_timeouts_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_run_timeouts_run_id ON public.scraper_run_timeouts USING btree (run_id);
+
+--
+-- Name: idx_scraper_run_timeouts_timeout_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_run_timeouts_timeout_at ON public.scraper_run_timeouts USING btree (timeout_at) WHERE (processed = false);
 
 --
 -- Name: idx_scraper_runs_created_at; Type: INDEX; Schema: public; Owner: -

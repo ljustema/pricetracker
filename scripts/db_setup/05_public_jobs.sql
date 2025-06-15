@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Job-related objects
 -- =========================================================================
--- Generated: 2025-06-10 16:11:30
+-- Generated: 2025-06-13 09:51:04
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -110,7 +110,7 @@ BEGIN
         RETURN QUERY SELECT 0, format('Integration worker busy - %s/%s jobs running',
             current_integration_jobs, max_integration_jobs);
 
--- Process integrations in order of priority (longest time since last sync)
+-- Process integrations that are due to run based on their stored next_run_time
     FOR integration_record IN
         SELECT
             i.id,
@@ -118,15 +118,17 @@ BEGIN
             i.name,
             i.platform,
             i.sync_frequency,
-            i.last_sync_at
+            i.last_sync_at,
+            i.next_run_time
         FROM public.integrations i
         WHERE i.status = 'active'
           AND i.sync_frequency IS NOT NULL
-          -- Only consider integrations that haven't synced in more than 23 hours
-          AND (i.last_sync_at IS NULL OR i.last_sync_at < current_timestamp - interval '23 hours')
+          AND i.next_run_time IS NOT NULL
+          -- Only consider integrations that are due to run
+          AND i.next_run_time <= current_timestamp
         ORDER BY
-          -- Prioritize integrations that haven't synced in the longest time
-          COALESCE(i.last_sync_at, '1970-01-01'::timestamp with time zone) ASC
+          -- Prioritize integrations that are most overdue
+          i.next_run_time ASC
         LIMIT 10 -- Only check the 10 most overdue integrations
     LOOP
         -- Stop if we've reached the per-run job limit or worker capacity
@@ -162,15 +164,123 @@ job_count := job_count + 1;
 current_integration_jobs := current_integration_jobs + 1;
 
 -- Log the job creation
-            RAISE NOTICE 'Created scheduled job % for integration % (%) - Priority: %',
+            RAISE NOTICE 'Created scheduled job % for integration % (%) - Due at: %',
                 new_job_id, integration_record.name, integration_record.platform,
-                CASE
-                    WHEN integration_record.last_sync_at IS NULL THEN 'Never synced'
-                    ELSE extract(epoch from (current_timestamp - integration_record.last_sync_at))/3600 || ' hours ago'
-                END;
+                integration_record.next_run_time;
 
 RETURN QUERY SELECT job_count, format('Created %s scheduled integration jobs (%s/%s)',
         job_count, current_integration_jobs, max_integration_jobs);
+
+job_count integer := 0;
+
+new_job_id uuid;
+
+-- Concurrency limits for scraper workers
+    max_python_jobs integer := 1;
+
+max_typescript_jobs integer := 1;
+
+current_python_jobs integer;
+
+current_typescript_jobs integer;
+
+max_jobs_per_run integer := 2;
+
+BEGIN
+    -- Check current job counts by type
+    SELECT COUNT(*) INTO current_python_jobs
+    FROM public.scraper_runs sr
+    WHERE sr.status IN ('pending', 'initializing', 'running')
+      AND sr.scraper_type = 'python';
+
+SELECT COUNT(*) INTO current_typescript_jobs
+    FROM public.scraper_runs sr
+    WHERE sr.status IN ('pending', 'initializing', 'running')
+      AND sr.scraper_type = 'typescript';
+
+-- Log current status
+    RAISE NOTICE 'Current jobs - Python: %/%, TypeScript: %/%, Max per run: %',
+        current_python_jobs, max_python_jobs, current_typescript_jobs, max_typescript_jobs, max_jobs_per_run;
+
+-- If all workers are busy, don't create any jobs
+    IF current_python_jobs >= max_python_jobs AND current_typescript_jobs >= max_typescript_jobs THEN
+        RETURN QUERY SELECT 0, 'All workers busy - Python: ' || current_python_jobs || '/' || max_python_jobs || ', TypeScript: ' || current_typescript_jobs || '/' || max_typescript_jobs;
+
+-- Process scrapers that are due to run based on their stored next_run_time
+    FOR scraper_record IN
+        SELECT
+            s.id,
+            s.user_id,
+            s.name,
+            s.scraper_type,
+            s.schedule,
+            s.last_run,
+            s.next_run_time,
+            s.competitor_id
+        FROM public.scrapers s
+        WHERE s.is_active = true
+          AND s.schedule IS NOT NULL
+          AND s.next_run_time IS NOT NULL
+          -- Only consider scrapers that are due to run
+          AND s.next_run_time <= current_timestamp
+        ORDER BY
+          -- Prioritize scrapers that are most overdue
+          s.next_run_time ASC
+        LIMIT 20 -- Only check the 20 most overdue scrapers
+    LOOP
+        -- Stop if we've reached the per-run job limit
+        IF job_count >= max_jobs_per_run THEN
+            RAISE NOTICE 'Reached max jobs per run limit (%)', max_jobs_per_run;
+
+-- Check worker capacity by type
+        IF scraper_record.scraper_type = 'python' AND current_python_jobs >= max_python_jobs THEN
+            CONTINUE;
+
+IF scraper_record.scraper_type = 'typescript' AND current_typescript_jobs >= max_typescript_jobs THEN
+            CONTINUE;
+
+-- Check if there's already a pending, running job for this scraper
+        IF NOT EXISTS (
+            SELECT 1 FROM public.scraper_runs sr
+            WHERE sr.scraper_id = scraper_record.id
+              AND sr.status IN ('pending', 'initializing', 'running')
+        ) THEN
+            -- Create new scraper run job
+            INSERT INTO public.scraper_runs (
+                id,
+                scraper_id,
+                user_id,
+                status,
+                started_at,
+                is_test_run,
+                scraper_type,
+                created_at
+            ) VALUES (
+                gen_random_uuid(),
+                scraper_record.id,
+                scraper_record.user_id,
+                'pending',
+                current_timestamp,
+                false,
+                scraper_record.scraper_type,
+                current_timestamp
+            ) RETURNING id INTO new_job_id;
+
+job_count := job_count + 1;
+
+-- Update worker counts
+            IF scraper_record.scraper_type = 'python' THEN
+                current_python_jobs := current_python_jobs + 1;
+
+ELSIF scraper_record.scraper_type = 'typescript' THEN
+                current_typescript_jobs := current_typescript_jobs + 1;
+
+-- Log the job creation
+            RAISE NOTICE 'Created scheduled job % for scraper % (%) - Due at: %',
+                new_job_id, scraper_record.name, scraper_record.scraper_type,
+                scraper_record.next_run_time;
+
+RETURN QUERY SELECT job_count, 'Created ' || job_count || ' scheduled scraper jobs (Python: ' || current_python_jobs || '/' || max_python_jobs || ', TypeScript: ' || current_typescript_jobs || '/' || max_typescript_jobs || ')';
 
 has_pending_job_flag boolean;
 

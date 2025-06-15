@@ -2,7 +2,9 @@ import { createSupabaseAdminClient } from '@/lib/supabase/server';
 
 // Define configuration type for integrations
 export interface IntegrationConfiguration {
-  [key: string]: string | number | boolean | null;
+  activeOnly?: boolean;
+  importAllCustomFields?: boolean;
+  [key: string]: string | number | boolean | null | undefined;
 }
 
 // Define log details type

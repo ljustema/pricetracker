@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Row Level Security policies
 -- =========================================================================
--- Generated: 2025-06-10 16:11:30
+-- Generated: 2025-06-13 09:51:04
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -192,6 +192,14 @@ CREATE POLICY "Users can insert their own supplier scraped data" ON public.temp_
 --
 
 CREATE POLICY "Users can insert their own suppliers" ON public.suppliers FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+--
+-- Name: scraper_run_timeouts Users can manage their own scraper run timeouts; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can manage their own scraper run timeouts" ON public.scraper_run_timeouts USING ((run_id IN ( SELECT sr.id
+   FROM public.scraper_runs sr
+  WHERE (sr.user_id = auth.uid()))));
 
 --
 -- Name: temp_integrations_scraped_data Users can only access their own integration products; Type: POLICY; Schema: public; Owner: -
