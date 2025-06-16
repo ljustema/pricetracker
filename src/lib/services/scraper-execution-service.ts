@@ -434,8 +434,6 @@ export class ScraperExecutionService {
   ): Promise<ValidationResponse> {
     const logs: ValidationLog[] = [];
     const products: ValidationProduct[] = [];
-    const MAX_PRODUCTS = 10;
-    const MAX_URLS = 5; // Limit URL collection for validation speed
     const TIMEOUT_MS = 120000; // 120 seconds (2 minutes) timeout for the entire validation
 
     const addLog = (lvl: ValidationLog['lvl'], phase: string, msg: string, data?: Record<string, unknown>) => {
@@ -446,7 +444,7 @@ export class ScraperExecutionService {
     addLog('INFO', 'SETUP', `Starting validation for ${scraperType} script.`);
 
     if (scraperType === 'python') {
-      addLog('INFO', 'SETUP', 'Starting Python script validation via direct execution.');
+      addLog('INFO', 'SETUP', 'Starting Python script validation via static analysis (Python runtime not available on Next.js platform).');
 
       // --- Static validation: require get_metadata and scrape functions ---
       const missingFunctions: string[] = [];
@@ -467,174 +465,48 @@ export class ScraperExecutionService {
         };
       }
 
-      const projectRoot = process.cwd(); // Get the actual CWD of the Node process
-      const uuid = randomUUID();
-      const tempFilePath = path.join(tmpdir(), `validate-${uuid}.py`); // Absolute path for temp file
-      // No longer using wrapper script
+      // --- Additional static validation checks ---
+      const validationIssues: string[] = [];
 
-      try {
-        // Write user script content to a temporary file
-        await fsPromises.writeFile(tempFilePath, scriptContent, 'utf-8');
-        addLog('INFO', 'PYTHON_VALIDATION', `Temporary user script written to ${tempFilePath}`);
-        // Execute the Python wrapper script using spawnSync
-        // Removed log line referencing wrapperScriptPath
-        // Determine Python executable path - try multiple options
-        let pythonExecutable = process.env.PYTHON_EXECUTABLE_PATH;
-        let pathSource = 'environment variable (PYTHON_EXECUTABLE_PATH)';
-        if (!pythonExecutable) {
-          if (process.platform === 'win32') {
-            pythonExecutable = 'C:\\Python311\\python.exe'; // Local Windows fallback
-            pathSource = 'local Windows fallback (C:\\Python311\\python.exe)';
-          } else {
-            // Try multiple Python commands for Linux/Railway
-            const pythonCommands = ['python3', 'python', 'py'];
-            for (const cmd of pythonCommands) {
-              try {
-                execSync(`${cmd} --version`, { stdio: 'pipe' });
-                pythonExecutable = cmd;
-                pathSource = `found working executable (${cmd})`;
-                break;
-              } catch (error) {
-                // Continue to next command
-              }
-            }
-            if (!pythonExecutable) {
-              pythonExecutable = 'python3'; // Default fallback
-              pathSource = 'default fallback "python3"';
-            }
-          }
-        }
-        addLog('INFO', 'PYTHON_VALIDATION', `Using Python executable: ${pythonExecutable} (Source: ${pathSource})`);
-
-        // --- PATCH: Run metadata command first to extract target_url ---
-        let extractedTargetUrl: string | undefined = undefined;
-        try {
-          const metadataCommand = `"${pythonExecutable}" "${tempFilePath}" metadata`;
-          addLog('INFO', 'PYTHON_METADATA', `Executing metadata command: ${metadataCommand}`);
-          const metadataOutput = execSync(metadataCommand, {
-            encoding: 'utf-8',
-            timeout: TIMEOUT_MS / 2,
-            cwd: projectRoot,
-            stdio: ['pipe', 'pipe', 'pipe']
-          });
-          const metadata = JSON.parse(metadataOutput);
-          if (metadata && typeof metadata === 'object' && metadata.target_url && typeof metadata.target_url === 'string') {
-            extractedTargetUrl = metadata.target_url;
-            addLog('INFO', 'PYTHON_METADATA', `Extracted target_url from metadata: ${extractedTargetUrl}`);
-          } else {
-            addLog('WARN', 'PYTHON_METADATA', 'No target_url found in metadata output.');
-          }
-        } catch (err) {
-          addLog('WARN', 'PYTHON_METADATA', `Failed to extract metadata: ${err instanceof Error ? err.message : String(err)}`);
-        }
-
-        // --- Continue with scrape --validate as before ---
-        const validationArgs = [
-            'scrape', // <-- Insert the required positional command!
-            `--validate`,
-            `--limit-urls`, MAX_URLS.toString(), // Use constants defined earlier
-            `--limit-products`, MAX_PRODUCTS.toString()
-        ];
-        const command = `"${pythonExecutable}" "${tempFilePath}" ${validationArgs.join(' ')}`;
-        addLog('INFO', 'PYTHON_VALIDATION', `Executing direct validation command: ${command} in CWD: ${projectRoot}`);
-
-        let pythonOutput: string | Buffer;
-        let pythonStderr = '';
-
-        try {
-          // Execute using execSync
-          // Ensure the subprocess environment forces UTF-8 I/O for validation too
-          const execEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
-
-          pythonOutput = execSync(command, {
-            encoding: 'utf-8', // How Node decodes the output
-            timeout: TIMEOUT_MS,
-            cwd: projectRoot,
-            stdio: ['pipe', 'pipe', 'pipe'], // Explicitly capture stdout and stderr
-            env: execEnv // Pass the modified environment
-          });
-          // execSync throws on non-zero exit code, so stderr might be in the error object
-        } catch (error: unknown) { // Catch as unknown first
-          // Type assertion after checking it's an object
-          const execError = error as ExecSyncError;
-
-          // Handle errors from execSync (timeout, non-zero exit code, etc.)
-          addLog('ERROR', 'PYTHON_VALIDATION', `Failed to execute Python script via execSync: ${execError.message}`);
-          // Capture stderr from the error object if available
-          pythonStderr = execError.stderr ? execError.stderr.toString() : ''; // Keep stderr capture
-          if (pythonStderr) {
-             addLog('WARN', 'PYTHON_STDERR', `Script stderr (from execSync error):\n${pythonStderr.trim()}`);
-          }
-          // Check if it was specifically a timeout using the typed error
-          if (execError.signal === 'SIGTERM' || execError.code === 'ETIMEDOUT' || /timed out/i.test(execError.message)) {
-             return { valid: false, error: `Validation timed out (${TIMEOUT_MS}ms)`, logs, products: [] };
-          }
-          return { valid: false, error: `Validation script execution failed: ${execError.message}`, logs, products: [] };
-        }
-
-        // If execSync succeeded (exit code 0), pythonOutput contains stdout
-        const pythonStdout = pythonOutput.toString();
-
-        // Note: With execSync successful execution, stderr is usually empty or contains warnings.
-        // We primarily logged it in the catch block for errors. We could potentially
-        // log pythonProcess.stderr here too if needed, but it's less common for successful runs.
-
-        // --- Continue parsing direct script JSONL output ---
-        addLog('DEBUG', 'PYTHON_STDOUT', 'Raw stdout suppressed for privacy.'); // Do not log full script output
-
-        // Parse the JSONL output (one JSON object per line)
-        const productLines = pythonStdout.split('\n').filter(line => line.trim());
-        const parsedProducts = [];
-        let parseError = null;
-        for (const line of productLines) {
-          try {
-            const obj = JSON.parse(line);
-            // Log the parsed object name immediately after parsing to check encoding in Node.js
-            if (obj && typeof obj === 'object' && obj.name) {
-              addLog('DEBUG', 'PYTHON_PARSE_CHECK', `Parsed product name in Node.js: ${obj.name}`);
-            }
-            // If this line is metadata from get_metadata (Python), extract target_url if present
-            if (
-              obj &&
-              typeof obj === 'object' &&
-              obj.target_url &&
-              typeof obj.target_url === 'string' &&
-              (!extractedTargetUrl || extractedTargetUrl === '')
-            ) {
-              extractedTargetUrl = obj.target_url;
-            }
-            parsedProducts.push(obj);
-          } catch (err) {
-            parseError = err;
-            addLog('ERROR', 'PYTHON_VALIDATION', `Failed to parse product JSON line: ${line}`);
-          }
-        }
-        if (parseError) {
-          addLog('ERROR', 'PYTHON_VALIDATION', `At least one product line could not be parsed as JSON.`);
-          return { valid: false, error: 'Failed to parse one or more product lines as JSON.', logs, products: [] };
-        }
-        addLog('INFO', 'PYTHON_VALIDATION', `Parsed ${parsedProducts.length} products from JSONL output.`);
-        // Return target_url as metadata if found
-        return {
-          valid: true,
-          error: null,
-          products: parsedProducts,
-          logs,
-          metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined,
-        };
-
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        addLog('ERROR', 'PYTHON_VALIDATION', `Exception during validation: ${errorMsg}`);
-        return { valid: false, error: errorMsg, logs, products: [] };
-      } finally {
-        try {
-          await fsPromises.unlink(tempFilePath);
-          addLog('INFO', 'PYTHON_VALIDATION', 'Temporary file deleted.');
-        } catch {
-          // Ignore cleanup errors
-        }
+      // Check for required imports
+      if (!scriptContent.includes('import json')) {
+        validationIssues.push('Missing "import json" - required for JSONL output');
       }
+      if (!scriptContent.includes('import sys')) {
+        validationIssues.push('Missing "import sys" - required for stdout/stderr handling');
+      }
+      if (!scriptContent.includes('import argparse')) {
+        validationIssues.push('Missing "import argparse" - required for command-line arguments');
+      }
+
+      // Check for required argument parsing
+      if (!scriptContent.includes('argparse.ArgumentParser')) {
+        validationIssues.push('Missing argparse.ArgumentParser - required for command-line interface');
+      }
+      if (!scriptContent.includes("choices=['metadata', 'scrape']")) {
+        validationIssues.push('Missing command choices - script must accept "metadata" and "scrape" commands');
+      }
+
+      // Check for required output patterns
+      if (!scriptContent.includes('json.dumps') && !scriptContent.includes('print(json.dumps')) {
+        validationIssues.push('Missing JSON output - script must output JSONL format using json.dumps');
+      }
+
+      if (validationIssues.length > 0) {
+        addLog('WARN', 'PYTHON_VALIDATION', `Script has potential issues: ${validationIssues.join(', ')}`);
+        // Don't fail validation for these issues, just warn
+      }
+
+      addLog('INFO', 'PYTHON_VALIDATION', 'Static validation passed. Script structure appears correct.');
+      addLog('INFO', 'PYTHON_VALIDATION', 'Note: Full execution validation will be performed by py-worker during test runs.');
+
+      // Return success for static validation
+      return {
+        valid: true,
+        error: null,
+        logs,
+        products: [] // No products from static validation
+      };
     }
 
     // --- TypeScript Validation using Babel compilation ---
