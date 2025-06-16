@@ -286,18 +286,20 @@ def scrape(context: Dict[str, Any]):
 
             product_data = {
                 "name": name,
-                "price": price,
-                "currency": "USD", # Or detect from page
+                "competitor_price": price,  # Updated field name to match temp_competitors_scraped_data table
+                "currency_code": "USD",  # Updated field name to match temp_competitors_scraped_data table
                 "url": link,
                 "image_url": image_url,
                 "sku": sku,
                 "brand": brand,
                 "ean": ean,
+                "is_available": True,  # Add availability field
+                "raw_data": {}  # Custom fields data - any additional fields will be automatically processed as custom fields
             }
 
             # --- Filtering Logic (Optional) ---
             # Example: Filter by active brand
-            if filter_by_active_brands and brand not in active_brand_names:
+            if filter_by_active_brands and active_brand_names and brand not in active_brand_names:
                  log_progress(f"Skipping product (inactive brand): {name} ({brand})")
                  continue
 
@@ -306,7 +308,7 @@ def scrape(context: Dict[str, Any]):
                 is_own_product = False
 
                 # Check EAN match if available
-                if ean and ean in own_product_eans:
+                if ean and own_product_eans and ean in own_product_eans:
                     is_own_product = True
 
                 # Check SKU/Brand match
@@ -363,16 +365,26 @@ if __name__ == '__main__':
                 log_error(f"Error generating metadata: {e}", exc_info=True)
                 sys.exit(1)
         elif args.command == 'scrape':
-            if not args.context:
-                log_error("Missing --context argument for scrape command")
-                sys.exit(1)
             try:
-                context_data = json.loads(args.context)
-                # Add validation flags if present
-                if args.validate:
-                    context_data['is_validation'] = True
-                    context_data['limit_urls'] = args.limit_urls
-                    context_data['limit_products'] = args.limit_products
+                # Handle validation mode without context
+                if args.validate and not args.context:
+                    context_data = {
+                        'is_validation': True,
+                        'is_test_run': True,
+                        'limit_urls': args.limit_urls,
+                        'limit_products': args.limit_products,
+                        'run_id': 'validation-run'
+                    }
+                elif args.context:
+                    context_data = json.loads(args.context)
+                    # Add validation flags if present
+                    if args.validate:
+                        context_data['is_validation'] = True
+                        context_data['limit_urls'] = args.limit_urls
+                        context_data['limit_products'] = args.limit_products
+                else:
+                    log_error("Missing --context argument for scrape command")
+                    sys.exit(1)
                 scrape(context_data)
             except json.JSONDecodeError as e:
                  log_error(f"Failed to decode context JSON: {e}")

@@ -39,6 +39,8 @@ interface PriceChange {
   integration_id: string | null;
   old_competitor_price?: number;
   new_competitor_price?: number;
+  old_our_retail_price?: number;
+  new_our_retail_price?: number;
   price_change_percentage: number;
   changed_at: string;
   products: {
@@ -225,7 +227,15 @@ const DashboardTab: React.FC = () => {
                           {priceChange.price_change_percentage > 0 ? '+' : ''}{priceChange.price_change_percentage.toFixed(2)}%
                         </div>
                         <div className="text-sm text-gray-500">
-                          {formatCurrency(priceChange.old_competitor_price || 0)} → {formatCurrency(priceChange.new_competitor_price || 0)}
+                          {formatCurrency(
+                            priceChange.competitor_id
+                              ? (priceChange.old_competitor_price || 0)
+                              : (priceChange.old_our_retail_price || 0)
+                          )} → {formatCurrency(
+                            priceChange.competitor_id
+                              ? (priceChange.new_competitor_price || 0)
+                              : (priceChange.new_our_retail_price || 0)
+                          )}
                         </div>
                       </div>
                     </div>

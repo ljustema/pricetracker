@@ -498,14 +498,14 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
     products_to_insert = []
     for p in products:
         # Basic validation/defaults before insertion
-        if not isinstance(p, dict) or not p.get('name') or p.get('price') is None:
+        if not isinstance(p, dict) or not p.get('name') or p.get('competitor_price') is None:
              log_event("WARN", "DB_INSERT_PREP", run_id, f"Skipping invalid product data structure: {str(p)[:100]}")
              continue
         try:
             # Ensure price is a valid number
-            price = float(p['price'])
+            price = float(p['competitor_price'])
         except (ValueError, TypeError):
-             log_event("WARN", "DB_INSERT_PREP", run_id, f"Skipping product with invalid price '{p.get('price')}': {p.get('name')}")
+             log_event("WARN", "DB_INSERT_PREP", run_id, f"Skipping product with invalid price '{p.get('competitor_price')}': {p.get('name')}")
              continue
 
         # Extract raw_data if present
@@ -812,7 +812,7 @@ def process_job(conn, job):
                             try:
                                 product = json.loads(line)
                                 # Basic validation of product structure
-                                if isinstance(product, dict) and product.get('name') and product.get('price') is not None:
+                                if isinstance(product, dict) and product.get('name') and product.get('competitor_price') is not None:
                                     products_buffer.append(product)
                                     product_count += 1
 

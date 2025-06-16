@@ -77,6 +77,10 @@ export default async function DashboardPage() {
     product_id: string;
     old_competitor_price?: number;
     new_competitor_price?: number;
+    old_our_retail_price?: number;
+    new_our_retail_price?: number;
+    competitor_id?: string;
+    integration_id?: string;
     changed_at: string;
     price_change_percentage: number;
     products: {
@@ -90,7 +94,6 @@ export default async function DashboardPage() {
     integrations?: {
       name: string;
     };
-    integration_id?: string;
     source_type?: 'competitor' | 'integration';
   };
 
@@ -110,6 +113,10 @@ export default async function DashboardPage() {
       product_id,
       old_competitor_price,
       new_competitor_price,
+      old_our_retail_price,
+      new_our_retail_price,
+      competitor_id,
+      integration_id,
       changed_at,
       price_change_percentage,
       products (
@@ -388,8 +395,16 @@ export default async function DashboardPage() {
                       </p>
                     </div>
                     <PriceChangeDisplay
-                      oldPrice={priceChange.old_competitor_price || 0}
-                      newPrice={priceChange.new_competitor_price || 0}
+                      oldPrice={
+                        priceChange.competitor_id
+                          ? (priceChange.old_competitor_price || 0)
+                          : (priceChange.old_our_retail_price || 0)
+                      }
+                      newPrice={
+                        priceChange.competitor_id
+                          ? (priceChange.new_competitor_price || 0)
+                          : (priceChange.new_our_retail_price || 0)
+                      }
                       currencyCode={'SEK'}
                       percentage={priceChange.price_change_percentage}
                     />

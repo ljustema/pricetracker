@@ -31,6 +31,8 @@ export async function GET(_request: NextRequest) {
         integration_id,
         old_competitor_price,
         new_competitor_price,
+        old_our_retail_price,
+        new_our_retail_price,
         price_change_percentage,
         changed_at,
         products(name),

@@ -623,9 +623,9 @@ export class ScraperExecutionService {
       }
     }
 
-    // --- TypeScript Validation using Node.js execSync ---
+    // --- TypeScript Validation using Babel compilation ---
     if (scraperType === 'typescript') {
-      addLog('INFO', 'TYPESCRIPT_VALIDATION', 'Starting TypeScript script validation via Node.js execSync.');
+      addLog('INFO', 'TYPESCRIPT_VALIDATION', 'Starting TypeScript script validation using Babel compilation.');
 
       // --- Static validation: check for required patterns ---
       const missingPatterns: string[] = [];
@@ -692,10 +692,10 @@ export class ScraperExecutionService {
 
           const packageJsonPath = path.join(tempDir, 'package.json');
           await fsPromises.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf-8');
-          addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Created package.json at ${packageJsonPath}`);
+          addLog('DEBUG', 'BABEL_COMPILATION', `Created package.json at ${packageJsonPath}`);
 
           // Install dependencies first
-          addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Installing dependencies (this may take a moment)...');
+          addLog('INFO', 'BABEL_COMPILATION', 'Installing dependencies (this may take a moment)...');
           try {
             execSync('npm install --no-package-lock --no-save', {
               encoding: 'utf-8',
@@ -703,10 +703,10 @@ export class ScraperExecutionService {
               cwd: tempDir,
               stdio: ['pipe', 'pipe', 'pipe']
             });
-            addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Dependencies installed successfully');
+            addLog('INFO', 'BABEL_COMPILATION', 'Dependencies installed successfully');
 
             // Install Playwright browsers for TypeScript scrapers that use PlaywrightCrawler
-            addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Installing Playwright browsers (this may take a moment)...');
+            addLog('INFO', 'BABEL_COMPILATION', 'Installing Playwright browsers (this may take a moment)...');
             try {
               execSync('npx playwright install --with-deps chromium', {
                 encoding: 'utf-8',
@@ -714,183 +714,97 @@ export class ScraperExecutionService {
                 cwd: tempDir,
                 stdio: ['pipe', 'pipe', 'pipe']
               });
-              addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Playwright browsers installed successfully');
+              addLog('INFO', 'BABEL_COMPILATION', 'Playwright browsers installed successfully');
             } catch (playwrightError) {
               const error = playwrightError as ExecSyncError;
-              addLog('WARN', 'TYPESCRIPT_COMPILATION', `Playwright browser installation warning: ${error.message}`);
+              addLog('WARN', 'BABEL_COMPILATION', `Playwright browser installation warning: ${error.message}`);
 
               if (error.stderr) {
                 const stderr = error.stderr.toString();
-                addLog('WARN', 'TYPESCRIPT_COMPILATION', `Playwright installation stderr: ${stderr.trim()}`);
+                addLog('WARN', 'BABEL_COMPILATION', `Playwright installation stderr: ${stderr.trim()}`);
               }
 
               // Continue even if Playwright installation has warnings
-              addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Continuing with validation despite Playwright installation issues');
+              addLog('INFO', 'BABEL_COMPILATION', 'Continuing with validation despite Playwright installation issues');
             }
           } catch (npmError) {
             const error = npmError as ExecSyncError;
-            addLog('WARN', 'TYPESCRIPT_COMPILATION', `npm install warning: ${error.message}`);
+            addLog('WARN', 'BABEL_COMPILATION', `npm install warning: ${error.message}`);
 
             if (error.stderr) {
               const stderr = error.stderr.toString();
-              addLog('WARN', 'TYPESCRIPT_COMPILATION', `npm install stderr: ${stderr.trim()}`);
+              addLog('WARN', 'BABEL_COMPILATION', `npm install stderr: ${stderr.trim()}`);
             }
 
             // Continue even if npm install has warnings
           }
 
-          // Create a tsconfig.json file with very permissive settings
-          const tsConfigContent = {
-            compilerOptions: {
-              target: "ES2020",
-              module: "CommonJS",
-              moduleResolution: "Node",
-              esModuleInterop: true,
-              skipLibCheck: true,
-              resolveJsonModule: true,
-              outDir: ".",
-              allowSyntheticDefaultImports: true,
-              noImplicitAny: false,
-              strictNullChecks: false,
-              allowJs: true,
-              noEmitOnError: false,
-              isolatedModules: true,
-              suppressImplicitAnyIndexErrors: true,
-              ignoreDeprecations: "5.0",
-              downlevelIteration: true
-            },
-            include: ["scraper.ts"],
-            exclude: ["node_modules"]
+          // Create babel.config.json for TypeScript compilation
+          const babelConfig = {
+            presets: [
+              "@babel/preset-env",
+              "@babel/preset-typescript"
+            ]
           };
 
-          const tsConfigPath = path.join(tempDir, 'tsconfig.json');
-          await fsPromises.writeFile(tsConfigPath, JSON.stringify(tsConfigContent, null, 2), 'utf-8');
-          addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Created tsconfig.json at ${tsConfigPath}`);
+          const babelConfigPath = path.join(tempDir, 'babel.config.json');
+          await fsPromises.writeFile(babelConfigPath, JSON.stringify(babelConfig, null, 2), 'utf-8');
+          addLog('DEBUG', 'BABEL_COMPILATION', `Created babel.config.json at ${babelConfigPath}`);
 
-          // Now compile using tsc from node_modules
-          addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Compiling TypeScript using local tsc');
+          // Now compile using Babel as primary compiler
+          addLog('INFO', 'BABEL_COMPILATION', 'Compiling TypeScript using Babel');
 
           try {
-            // Try to find the tsc executable
-            let tscPath = path.join(tempDir, 'node_modules', '.bin', 'tsc');
-            let tscCommand = process.platform === 'win32' ? `"${tscPath}"` : tscPath;
+            // Try to find the babel executable
+            const babelPath = path.join(tempDir, 'node_modules', '.bin', 'babel');
+            const babelCommand = process.platform === 'win32' ? `"${babelPath}.cmd"` : `"${babelPath}"`;
 
-            // Check if the tsc executable exists
-            try {
-              await fsPromises.access(tscPath);
-              addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Found tsc at ${tscPath}`);
-            } catch (_accessError) {
-              // If not found in .bin, try the typescript/bin directory
-              addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `tsc not found at ${tscPath}, trying alternative location`);
-              tscPath = path.join(tempDir, 'node_modules', 'typescript', 'bin', 'tsc');
-              tscCommand = process.platform === 'win32' ? `"${tscPath}"` : tscPath;
+            // Execute babel to compile TypeScript
+            const babelFullCommand = `${babelCommand} scraper.ts --out-file scraper.js --extensions ".ts"`;
+            addLog('DEBUG', 'BABEL_COMPILATION', `Executing: ${babelFullCommand}`);
 
-              try {
-                await fsPromises.access(tscPath);
-                addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Found tsc at ${tscPath}`);
-              } catch (_accessError2) {
-                // If still not found, try using npx
-                addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `tsc not found at ${tscPath}, falling back to npx`);
-                tscCommand = 'npx tsc';
-              }
-            }
-
-            // Execute the TypeScript compiler
-            addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Executing: ${tscCommand}`);
-
-            // We need to specify the input file explicitly
-            const fullCommand = `${tscCommand} scraper.ts`;
-            addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Full command: ${fullCommand}`);
-
-            execSync(fullCommand, {
+            execSync(babelFullCommand, {
               encoding: 'utf-8',
               timeout: TIMEOUT_MS / 2,
               cwd: tempDir,
               stdio: ['pipe', 'pipe', 'pipe']
             });
 
-            addLog('INFO', 'TYPESCRIPT_COMPILATION', 'TypeScript compilation successful');
-          } catch (tscError) {
-            const error = tscError as ExecSyncError;
+            addLog('INFO', 'BABEL_COMPILATION', 'Babel compilation successful');
+          } catch (babelError) {
+            const error = babelError as ExecSyncError;
             let errorMessage = error.message;
             let stderrOutput = '';
 
             // Try to extract the stderr output
             if (error.stderr) {
               stderrOutput = error.stderr.toString().trim();
-              addLog('ERROR', 'TYPESCRIPT_STDERR', `Compilation errors:\n${stderrOutput}`);
+              addLog('ERROR', 'BABEL_STDERR', `Babel compilation errors:\n${stderrOutput}`);
               errorMessage = stderrOutput || errorMessage;
             }
 
             // If stderr is empty, just use the error message directly
             if (!stderrOutput && error.message) {
               errorMessage = error.message;
-              addLog('ERROR', 'TYPESCRIPT_STDERR', `Error message: ${errorMessage}`);
+              addLog('ERROR', 'BABEL_STDERR', `Error message: ${errorMessage}`);
             }
 
-            // No need to list directory contents - removed for cleaner output
-
-            // Try using Babel as a fallback
-            addLog('WARN', 'TYPESCRIPT_COMPILATION', `TypeScript compilation failed, trying Babel as fallback`);
-
-            try {
-              // Create a babel.config.json file
-              const babelConfig = {
-                presets: [
-                  "@babel/preset-env",
-                  "@babel/preset-typescript"
-                ]
-              };
-
-              const babelConfigPath = path.join(tempDir, 'babel.config.json');
-              await fsPromises.writeFile(babelConfigPath, JSON.stringify(babelConfig, null, 2), 'utf-8');
-              addLog('DEBUG', 'BABEL_COMPILATION', `Created babel.config.json at ${babelConfigPath}`);
-
-              // Try to find babel executable
-              const babelPath = path.join(tempDir, 'node_modules', '.bin', 'babel');
-              const babelCommand = process.platform === 'win32' ? `"${babelPath}"` : babelPath;
-
-              // Execute babel
-              const babelFullCommand = `${babelCommand} scraper.ts --out-file scraper.js --extensions ".ts"`;
-              addLog('DEBUG', 'BABEL_COMPILATION', `Executing: ${babelFullCommand}`);
-
-              execSync(babelFullCommand, {
-                encoding: 'utf-8',
-                timeout: TIMEOUT_MS / 2,
-                cwd: tempDir,
-                stdio: ['pipe', 'pipe', 'pipe']
-              });
-
-              addLog('INFO', 'BABEL_COMPILATION', 'Babel compilation successful');
-              // Continue with the compiled file - no need to return
-            } catch (babelError) {
-              const error = babelError as ExecSyncError;
-              // Log the Babel error
-              if (error.stderr) {
-                const stderr = error.stderr.toString().trim();
-                addLog('ERROR', 'BABEL_STDERR', `Babel compilation errors:\n${stderr}`);
-              } else {
-                addLog('ERROR', 'BABEL_STDERR', `Babel compilation error: ${error.message}`);
-              }
-
-              // If both TypeScript and Babel fail, throw the original TypeScript error
-              addLog('ERROR', 'TYPESCRIPT_COMPILATION', `Both TypeScript and Babel compilation failed: ${errorMessage}`);
-              throw new Error(`TypeScript compilation failed: ${errorMessage}`);
-            }
+            addLog('ERROR', 'BABEL_COMPILATION', `Babel compilation failed: ${errorMessage}`);
+            throw new Error(`Babel compilation failed: ${errorMessage}`);
           }
         } catch (compileError) {
           const error = compileError as ExecSyncError;
-          addLog('ERROR', 'TYPESCRIPT_COMPILATION', `TypeScript compilation failed: ${error.message}`);
+          addLog('ERROR', 'BABEL_COMPILATION', `Babel compilation failed: ${error.message}`);
 
           // Log stderr if available
           if (error.stderr) {
             const stderr = error.stderr.toString();
-            addLog('ERROR', 'TYPESCRIPT_STDERR', `Compilation stderr:\n${stderr.trim()}`);
+            addLog('ERROR', 'BABEL_STDERR', `Compilation stderr:\n${stderr.trim()}`);
 
             // Include the stderr in the error message for better visibility
             return {
               valid: false,
-              error: `TypeScript compilation failed: ${stderr.trim()}`,
+              error: `Babel compilation failed: ${stderr.trim()}`,
               logs,
               products: []
             };
@@ -898,7 +812,7 @@ export class ScraperExecutionService {
 
           return {
             valid: false,
-            error: `TypeScript compilation failed: ${error.message}`,
+            error: `Babel compilation failed: ${error.message}`,
             logs,
             products: []
           };
