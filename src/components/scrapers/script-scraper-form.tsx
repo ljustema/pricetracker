@@ -489,29 +489,42 @@ export default function ScriptScraperForm({ // Renamed component
         )} {/* <-- Correctly close the conditional rendering */}
         ) {/* <-- Moved closing parenthesis inside the curly braces */}
 
-          {/* Products Display Section - Show after validation */}
-          {/* Products Display Section - Use sampleProducts */}
-          {validationResult?.sampleProducts && validationResult.sampleProducts.length > 0 && (
+          {/* Approve Validation Section - Show for successful validations */}
+          {validationResult?.success && (
             <div className="mt-4">
               <div className="flex justify-between items-center mb-2">
                 <div className="flex items-center">
                   <label className="block text-sm font-medium text-gray-700">
-                    Sample Products ({validationResult.sampleProducts.length} found)
+                    {validationResult.sampleProducts && validationResult.sampleProducts.length > 0
+                      ? `Sample Products (${validationResult.sampleProducts.length} found)`
+                      : "Validation Results"
+                    }
                   </label>
-                  {/* Approve Validation button moved here */}
-                  {validationResult?.success && validationResult.sampleProducts && validationResult.sampleProducts.length > 0 && (
-                     <button
-                       type="button"
-                       disabled={isValidationApproved} // Only disable if already approved
-                       onClick={() => setIsValidationApproved(true)}
-                       className="ml-4 inline-flex items-center rounded-md border border-transparent bg-green-100 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                     >
-                       {isValidationApproved ? <><CheckCircleIcon className="h-4 w-4 mr-1.5" />Approved</> : "Approve Validation"}
-                     </button>
-                  )}
+                  {/* Approve Validation button - show for all successful validations */}
+                  <button
+                    type="button"
+                    disabled={isValidationApproved} // Only disable if already approved
+                    onClick={() => setIsValidationApproved(true)}
+                    className="ml-4 inline-flex items-center rounded-md border border-transparent bg-green-100 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isValidationApproved ? <><CheckCircleIcon className="h-4 w-4 mr-1.5" />Approved</> : "Approve Validation"}
+                  </button>
                 </div>
                 {/* Removed button container div */}
               </div>
+
+          {/* Show message for static validation (no products) */}
+          {(!validationResult.sampleProducts || validationResult.sampleProducts.length === 0) && (
+            <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-md">
+              <p className="text-sm text-blue-800">
+                Static validation completed successfully. Use "Test Run" after creating the scraper to validate execution and see sample products.
+              </p>
+            </div>
+          )}
+
+          {/* Products Display Section - Show only when products exist */}
+          {validationResult?.sampleProducts && validationResult.sampleProducts.length > 0 && (
+            <div className="mt-2">
 
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200">
@@ -603,6 +616,8 @@ export default function ScriptScraperForm({ // Renamed component
               <p className="mt-2 text-xs text-gray-500">
                 * Products require either an EAN or both Brand and SKU for matching.
               </p>
+            </div>
+          )}
             </div>
           )}
         </> {/* Fragment end */}
