@@ -478,7 +478,7 @@ export class ScraperExecutionService {
         addLog('INFO', 'PYTHON_VALIDATION', `Temporary user script written to ${tempFilePath}`);
         // Execute the Python wrapper script using spawnSync
         // Removed log line referencing wrapperScriptPath
-        // Determine Python executable path (logic remains the same)
+        // Determine Python executable path - try multiple options
         let pythonExecutable = process.env.PYTHON_EXECUTABLE_PATH;
         let pathSource = 'environment variable (PYTHON_EXECUTABLE_PATH)';
         if (!pythonExecutable) {
@@ -486,8 +486,22 @@ export class ScraperExecutionService {
             pythonExecutable = 'C:\\Python311\\python.exe'; // Local Windows fallback
             pathSource = 'local Windows fallback (C:\\Python311\\python.exe)';
           } else {
-            pythonExecutable = 'python'; // Default for Linux/Railway
-            pathSource = 'default "python"';
+            // Try multiple Python commands for Linux/Railway
+            const pythonCommands = ['python3', 'python', 'py'];
+            for (const cmd of pythonCommands) {
+              try {
+                execSync(`${cmd} --version`, { stdio: 'pipe' });
+                pythonExecutable = cmd;
+                pathSource = `found working executable (${cmd})`;
+                break;
+              } catch (error) {
+                // Continue to next command
+              }
+            }
+            if (!pythonExecutable) {
+              pythonExecutable = 'python3'; // Default fallback
+              pathSource = 'default fallback "python3"';
+            }
           }
         }
         addLog('INFO', 'PYTHON_VALIDATION', `Using Python executable: ${pythonExecutable} (Source: ${pathSource})`);
