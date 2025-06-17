@@ -572,10 +572,13 @@ export class BrandService {
       return; // Nothing to insert
     }
 
-    // Insert the entries
+    // Insert the entries, ignoring conflicts for pairs that are already dismissed
     const { error } = await supabase
       .from('dismissed_duplicates')
-      .insert(entries);
+      .upsert(entries, {
+        onConflict: 'user_id,brand_id_1,brand_id_2',
+        ignoreDuplicates: true
+      });
 
     if (error) {
       console.error(`Error dismissing duplicates:`, error);
