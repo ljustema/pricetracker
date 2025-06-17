@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Edit, Save, X, Plus } from "lucide-react";
+import { Edit, Save, X, Plus, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,6 +44,7 @@ export default function ProductCustomFields({
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [showEmptyFields, setShowEmptyFields] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -81,13 +82,19 @@ export default function ProductCustomFields({
     return customFieldValues.find(cfv => cfv.custom_field_id === fieldId);
   }, [customFieldValues]);
 
-  // Filter fields based on showOnlyWithValues prop
-  const fieldsToShow = showOnlyWithValues
-    ? customFields.filter(field => {
-        const value = getFieldValue(field.id);
-        return value && value.trim() !== '';
-      })
-    : customFields;
+  // Separate fields with values from empty fields
+  const fieldsWithValues = customFields.filter(field => {
+    const value = getFieldValue(field.id);
+    return value && value.trim() !== '';
+  });
+
+  const emptyFields = customFields.filter(field => {
+    const value = getFieldValue(field.id);
+    return !value || value.trim() === '';
+  });
+
+  // For backward compatibility with showOnlyWithValues prop
+  const fieldsToShow = showOnlyWithValues ? fieldsWithValues : customFields;
 
   const handleEdit = () => {
     // Initialize editing values with current values
@@ -190,12 +197,14 @@ export default function ProductCustomFields({
         );
 
       case 'number':
+        // Use text input for number fields since they often contain units (e.g., "160cm", "5.6kg")
+        // HTML number inputs can't handle values with units
         return (
           <Input
-            type="number"
+            type="text"
             value={value}
             onChange={(e) => handleValueChange(field.id, e.target.value)}
-            placeholder={field.default_value || ''}
+            placeholder={field.default_value || 'Enter number (units allowed)'}
           />
         );
 
@@ -245,6 +254,38 @@ export default function ProductCustomFields({
     );
   }
 
+  // Helper function to render a field
+  const renderField = (field: CustomField) => {
+    const fieldSource = getFieldSource(field.id);
+    return (
+      <div key={field.id}>
+        <Label htmlFor={`field-${field.id}`} className="flex items-center gap-2 mb-2">
+          <span className="flex items-center gap-1">
+            {field.field_name}
+            {field.is_required && <span className="text-red-500">*</span>}
+          </span>
+          {fieldSource?.source_type && (
+            <SourceBadge
+              sourceType={fieldSource.source_type}
+              confidenceScore={fieldSource.confidence_score}
+              showIcon={true}
+              showScore={false}
+            />
+          )}
+        </Label>
+        {(isEditing || alwaysEditable) ? (
+          <div className="mt-2">
+            {renderFieldInput(field)}
+          </div>
+        ) : (
+          <div className="mt-2 p-2 bg-gray-50 rounded-md text-sm">
+            {CustomFieldsClientService.formatFieldValue(field, getFieldValue(field.id))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <Card className="p-6">
       <div className="flex items-center justify-between mb-4">
@@ -279,38 +320,55 @@ export default function ProductCustomFields({
         )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {fieldsToShow.map((field) => {
-          const fieldSource = getFieldSource(field.id);
-          return (
-            <div key={field.id}>
-              <Label htmlFor={`field-${field.id}`} className="flex items-center gap-2 mb-2">
-                <span className="flex items-center gap-1">
-                  {field.field_name}
-                  {field.is_required && <span className="text-red-500">*</span>}
-                </span>
-                {fieldSource?.source_type && (
-                  <SourceBadge
-                    sourceType={fieldSource.source_type}
-                    confidenceScore={fieldSource.confidence_score}
-                    showIcon={true}
-                    showScore={false}
-                  />
+      {/* For backward compatibility - show all fields if showOnlyWithValues is true */}
+      {showOnlyWithValues ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {fieldsToShow.map(renderField)}
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* Fields with values */}
+          {fieldsWithValues.length > 0 && (
+            <div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {fieldsWithValues.map(renderField)}
+              </div>
+            </div>
+          )}
+
+          {/* Empty fields - collapsible section */}
+          {emptyFields.length > 0 && (
+            <div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowEmptyFields(!showEmptyFields)}
+                className="flex items-center gap-2 text-gray-600 hover:text-gray-800 p-0 h-auto font-normal"
+              >
+                {showEmptyFields ? (
+                  <ChevronUp className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
                 )}
-              </Label>
-              {(isEditing || alwaysEditable) ? (
-                <div className="mt-2">
-                  {renderFieldInput(field)}
-                </div>
-              ) : (
-                <div className="mt-2 p-2 bg-gray-50 rounded-md text-sm">
-                  {CustomFieldsClientService.formatFieldValue(field, getFieldValue(field.id))}
+                {showEmptyFields ? 'Hide' : 'Show'} empty fields ({emptyFields.length})
+              </Button>
+
+              {showEmptyFields && (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {emptyFields.map(renderField)}
                 </div>
               )}
             </div>
-          );
-        })}
-      </div>
+          )}
+
+          {/* Show message if no fields at all */}
+          {fieldsWithValues.length === 0 && emptyFields.length === 0 && (
+            <div className="text-center text-gray-500">
+              <p>No custom field values available for this product.</p>
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   );
 }

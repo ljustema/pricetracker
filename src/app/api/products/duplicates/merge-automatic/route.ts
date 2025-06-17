@@ -74,24 +74,28 @@ export async function POST(_request: NextRequest) {
     const duplicateGroups = Object.values(groupedDuplicates) as DuplicateGroup[];
 
     // Filter groups that are very likely the same product:
-    // Same brand and SKU where one has EAN and the other doesn't
+    // Same brand and SKU where at least one has EAN and others don't
     const automaticMergeGroups = duplicateGroups.filter((group) => {
-      if (group.products.length !== 2) return false;
-      
-      const [product1, product2] = group.products;
-      
-      // Both must have same brand and SKU
-      const sameBrand = product1.brand && product2.brand && 
-                       product1.brand.toLowerCase().trim() === product2.brand.toLowerCase().trim();
-      const sameSku = product1.sku && product2.sku && 
-                     product1.sku.toLowerCase().trim() === product2.sku.toLowerCase().trim();
-      
-      if (!sameBrand || !sameSku) return false;
-      
-      // One must have EAN and the other must not
-      const hasEanPattern = (product1.ean && !product2.ean) || (!product1.ean && product2.ean);
-      
-      return hasEanPattern;
+      if (group.products.length < 2 || group.products.length > 3) return false;
+
+      // All products must have same brand and SKU
+      const firstProduct = group.products[0];
+      const allSameBrand = group.products.every(product =>
+        product.brand && firstProduct.brand &&
+        product.brand.toLowerCase().trim() === firstProduct.brand.toLowerCase().trim()
+      );
+      const allSameSku = group.products.every(product =>
+        product.sku && firstProduct.sku &&
+        product.sku.toLowerCase().trim() === firstProduct.sku.toLowerCase().trim()
+      );
+
+      if (!allSameBrand || !allSameSku) return false;
+
+      // At least one must have EAN and at least one must not have EAN
+      const productsWithEan = group.products.filter(p => p.ean && p.ean.trim() !== '');
+      const productsWithoutEan = group.products.filter(p => !p.ean || p.ean.trim() === '');
+
+      return productsWithEan.length >= 1 && productsWithoutEan.length >= 1;
     });
 
     let mergedCount = 0;
@@ -101,48 +105,71 @@ export async function POST(_request: NextRequest) {
     // Process each automatic merge group
     for (const group of automaticMergeGroups) {
       try {
-        const [product1, product2] = group.products;
-        
-        // Product with EAN becomes primary, product without EAN becomes duplicate
-        const primaryProduct = product1.ean ? product1 : product2;
-        const duplicateProduct = product1.ean ? product2 : product1;
+        // Separate products with and without EANs
+        const productsWithEan = group.products.filter(p => p.ean && p.ean.trim() !== '');
+        const productsWithoutEan = group.products.filter(p => !p.ean || p.ean.trim() === '');
 
-        // Call the merge function
-        const { data: result, error: mergeError } = await supabase.rpc(
-          "merge_products_api",
-          {
-            primary_id: primaryProduct.product_id,
-            duplicate_id: duplicateProduct.product_id
+        // Select primary product (prefer product with EAN, or first product if multiple have EANs)
+        const primaryProduct = productsWithEan.length > 0 ? productsWithEan[0] : group.products[0];
+
+        // Get all products to merge into primary (all others)
+        const duplicateProducts = group.products.filter(p => p.product_id !== primaryProduct.product_id);
+
+        let groupMergedCount = 0;
+        let groupErrorCount = 0;
+        const groupErrors: string[] = [];
+
+        // Merge each duplicate into the primary
+        for (const duplicateProduct of duplicateProducts) {
+          const { data: result, error: mergeError } = await supabase.rpc(
+            "merge_products_api",
+            {
+              primary_id: primaryProduct.product_id,
+              duplicate_id: duplicateProduct.product_id
+            }
+          );
+
+          if (mergeError) {
+            console.error(`Error merging products in group ${group.group_id}:`, mergeError);
+            groupErrorCount++;
+            groupErrors.push(`${duplicateProduct.name}: ${mergeError.message}`);
+          } else if (!result?.success) {
+            console.error(`Merge operation failed for group ${group.group_id}:`, result?.message);
+            groupErrorCount++;
+            groupErrors.push(`${duplicateProduct.name}: ${result?.message || "Unknown error"}`);
+          } else {
+            groupMergedCount++;
           }
-        );
+        }
 
-        if (mergeError) {
-          console.error(`Error merging products in group ${group.group_id}:`, mergeError);
-          errorCount++;
-          details.push({
-            group: group.match_reason,
-            success: false,
-            error: mergeError.message,
-            primary: primaryProduct.name,
-            duplicate: duplicateProduct.name
-          });
-        } else if (!result?.success) {
-          console.error(`Merge operation failed for group ${group.group_id}:`, result?.message);
-          errorCount++;
-          details.push({
-            group: group.match_reason,
-            success: false,
-            error: result?.message || "Unknown error",
-            primary: primaryProduct.name,
-            duplicate: duplicateProduct.name
-          });
-        } else {
+        // Update overall counters
+        if (groupErrorCount === 0) {
           mergedCount++;
           details.push({
             group: group.match_reason,
             success: true,
             primary: primaryProduct.name,
-            duplicate: duplicateProduct.name
+            duplicate: duplicateProducts.map(p => p.name).join(', ')
+          });
+        } else if (groupMergedCount === 0) {
+          // All merges failed
+          errorCount++;
+          details.push({
+            group: group.match_reason,
+            success: false,
+            error: groupErrors.join('; '),
+            primary: primaryProduct.name,
+            duplicate: duplicateProducts.map(p => p.name).join(', ')
+          });
+        } else {
+          // Partial success
+          mergedCount++;
+          details.push({
+            group: group.match_reason,
+            success: true,
+            primary: primaryProduct.name,
+            duplicate: duplicateProducts.map(p => p.name).join(', '),
+            error: `Partial success: ${groupErrors.join('; ')}`
           });
         }
       } catch (err) {

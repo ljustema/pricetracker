@@ -34,8 +34,10 @@ interface PriceData {
   product_id: string;
   competitor_id?: string;
   integration_id?: string;
-  old_price?: number;
-  new_price: number;
+  old_competitor_price?: number;
+  new_competitor_price?: number;
+  old_our_retail_price?: number;
+  new_our_retail_price?: number;
   price_change_percentage?: number;
   currency_code: string;
   changed_at: string;
@@ -230,7 +232,7 @@ export async function GET(_request: NextRequest) {
           const prices = {
             our_prices: [] as Array<{
               price: number;
-              currency: string;
+              currency_code: string; // Fixed: use currency_code instead of currency
               source: string;
               platform?: string;
               updated_at: string;
@@ -238,7 +240,7 @@ export async function GET(_request: NextRequest) {
             }>,
             competitor_prices: [] as Array<{
               price: number;
-              currency: string;
+              currency_code: string; // Fixed: use currency_code instead of currency
               source: string;
               website?: string;
               updated_at: string;
@@ -249,8 +251,8 @@ export async function GET(_request: NextRequest) {
           pricesArray.forEach((price: PriceData) => {
             if (price.source_type === 'integration') {
               prices.our_prices.push({
-                price: price.new_price,
-                currency: price.currency_code,
+                price: price.new_our_retail_price || 0, // Use new_our_retail_price for integration prices
+                currency_code: price.currency_code,
                 source: price.source_name,
                 platform: price.source_platform,
                 updated_at: price.changed_at,
@@ -258,8 +260,8 @@ export async function GET(_request: NextRequest) {
               });
             } else if (price.source_type === 'competitor') {
               prices.competitor_prices.push({
-                price: price.new_price,
-                currency: price.currency_code,
+                price: price.new_competitor_price || 0, // Use new_competitor_price for competitor prices
+                currency_code: price.currency_code,
                 source: price.source_name,
                 website: price.source_website,
                 updated_at: price.changed_at,

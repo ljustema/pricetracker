@@ -216,7 +216,7 @@ export function DuplicatesList() {
       if (result.errorCount > 0) {
         setError(`Automatic merge completed: ${result.mergedCount} successful merges, ${result.errorCount} errors. Check console for details.`);
       } else if (result.mergedCount === 0) {
-        setError('No products were eligible for automatic merging. Automatic merge only works for products with same brand and SKU where one has EAN and the other doesn\'t.');
+        setError('No products were eligible for automatic merging. Automatic merge only works for groups of 2-3 products with same brand and SKU where at least one has EAN and others don\'t.');
       }
 
     } catch (err: unknown) {
@@ -356,7 +356,12 @@ export function DuplicatesList() {
     window.open(productUrl, '_blank', 'noopener,noreferrer');
   };
 
-  const formatPrice = (price: number, currencyCode: string | null | undefined = 'SEK') => {
+  const formatPrice = (price: number | null | undefined, currencyCode: string | null | undefined = 'SEK') => {
+    // Check if price is valid
+    if (price === null || price === undefined || isNaN(price)) {
+      return 'N/A';
+    }
+
     // Ensure currency code is valid and not null/undefined
     const validCurrencyCode = currencyCode && currencyCode.length === 3 ? currencyCode : 'SEK';
 
@@ -541,6 +546,21 @@ export function DuplicatesList() {
                           <label htmlFor={`duplicate-${group.group_id}-${product.product_id}`} className="text-sm">Duplicate</label>
                         </div>
                       </div>
+
+                      {/* Product image */}
+                      {product.image_url && (
+                        <div className="flex-shrink-0">
+                          <img
+                            src={`/api/proxy-image?url=${encodeURIComponent(product.image_url)}`}
+                            alt={product.name}
+                            className="w-20 h-20 object-cover rounded-lg border border-gray-200"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement;
+                              target.style.display = 'none';
+                            }}
+                          />
+                        </div>
+                      )}
 
                       {/* Product info */}
                       <div className="flex-1">

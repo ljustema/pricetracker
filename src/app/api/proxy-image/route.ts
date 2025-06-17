@@ -7,10 +7,7 @@ export async function GET(request: NextRequest) {
     return new NextResponse('Missing URL parameter', { status: 400 });
   }
 
-  // Log environment info for debugging
-  const isRailway = process.env.RAILWAY_ENVIRONMENT !== undefined;
-  const environment = isRailway ? 'Railway' : 'Local';
-  console.log(`[${environment}] Proxy-image request for URL:`, url);
+  // Only log errors, not every request
 
   try {
     // Set up headers for the request
@@ -85,9 +82,6 @@ export async function GET(request: NextRequest) {
     let lastError: Response | null = null;
 
     for (const urlToTry of urlsToTry) {
-      console.log('Attempting to fetch image from:', urlToTry);
-      console.log('Request headers:', JSON.stringify(headers, null, 2));
-
       try {
         // Fetch the image from the URL with appropriate headers and timeout
         const controller = new AbortController();
@@ -103,17 +97,12 @@ export async function GET(request: NextRequest) {
 
         clearTimeout(timeoutId);
 
-        console.log(`Response status: ${response.status} ${response.statusText}`);
-        console.log('Response headers:', JSON.stringify(Object.fromEntries(response.headers.entries()), null, 2));
-
         if (response.ok) {
           // Get the image data as an array buffer
           const imageBuffer = await response.arrayBuffer();
-          console.log(`Successfully fetched image, size: ${imageBuffer.byteLength} bytes`);
 
           // Get the content type from the response
           const contentType = response.headers.get('content-type') || 'image/jpeg';
-          console.log(`Content type: ${contentType}`);
 
           // Return the image with the appropriate content type
           return new NextResponse(imageBuffer, {
@@ -126,25 +115,10 @@ export async function GET(request: NextRequest) {
 
         // Store the last error response
         lastError = response;
-        console.error(`Failed to fetch from ${urlToTry}: ${response.status} ${response.statusText}`);
-
-        // Try to get response text for more details
-        try {
-          const responseText = await response.text();
-          console.error('Error response body:', responseText.substring(0, 500)); // Log first 500 chars
-        } catch (textError) {
-          console.error('Could not read error response body:', textError);
-        }
       } catch (fetchError) {
-        console.error(`Error fetching from ${urlToTry}:`, fetchError);
-
-        // Log specific error types
-        if (fetchError instanceof Error) {
-          console.error('Error name:', fetchError.name);
-          console.error('Error message:', fetchError.message);
-          if (fetchError.name === 'AbortError') {
-            console.error('Request timed out after 10 seconds');
-          }
+        // Only log errors, not every failed attempt
+        if (fetchError instanceof Error && fetchError.name !== 'AbortError') {
+          console.error(`Error fetching image from ${urlToTry}:`, fetchError.message);
         }
       }
     }
