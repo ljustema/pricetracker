@@ -126,16 +126,24 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                         style={{ aspectRatio: '1/1' }}
                         unoptimized // Skip Next.js image optimization for external images
                         onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
-                          console.error(`Failed to load image: ${product.image_url}`);
-                          // Replace with a div that looks like the fallback
+                          console.error(`Failed to load image via proxy: ${product.image_url}`);
                           const imgElement = e.currentTarget;
-                          const parent = imgElement.parentElement;
-                          if (parent) {
-                            // Create a fallback div
-                            const fallbackDiv = document.createElement('div');
-                            fallbackDiv.className = "h-10 w-10 flex-shrink-0 rounded-full bg-gray-200";
-                            // Replace the image with the fallback
-                            parent.replaceChild(fallbackDiv, imgElement);
+
+                          // Try direct image URL as fallback
+                          if (imgElement.src.includes('/api/proxy-image')) {
+                            console.log('Attempting direct image load as fallback');
+                            imgElement.src = product.image_url;
+                          } else {
+                            console.error('Direct image load also failed, using placeholder');
+                            // Replace with a div that looks like the fallback
+                            const parent = imgElement.parentElement;
+                            if (parent) {
+                              // Create a fallback div
+                              const fallbackDiv = document.createElement('div');
+                              fallbackDiv.className = "h-10 w-10 flex-shrink-0 rounded-full bg-gray-200";
+                              // Replace the image with the fallback
+                              parent.replaceChild(fallbackDiv, imgElement);
+                            }
                           }
                         }}
                       />
