@@ -96,7 +96,7 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                 const imgElement = e.currentTarget;
                 if (imgElement.src.includes('/api/proxy-image')) {
                   console.log('Attempting direct image load as fallback');
-                  imgElement.src = productWithPrices.image_url;
+                  imgElement.src = productWithPrices.image_url || '';
                 } else {
                   console.error('Direct image load also failed, using placeholder');
                   // Fallback to a placeholder image

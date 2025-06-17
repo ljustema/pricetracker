@@ -94,7 +94,7 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                     const imgElement = e.currentTarget;
                     if (imgElement.src.includes('/api/proxy-image')) {
                       console.log('Attempting direct image load as fallback');
-                      imgElement.src = product.image_url;
+                      imgElement.src = product.image_url || '';
                     } else {
                       console.error('Direct image load also failed, using placeholder');
                       // Fallback to a placeholder image

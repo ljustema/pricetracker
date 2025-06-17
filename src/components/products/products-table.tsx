@@ -132,7 +132,7 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                           // Try direct image URL as fallback
                           if (imgElement.src.includes('/api/proxy-image')) {
                             console.log('Attempting direct image load as fallback');
-                            imgElement.src = product.image_url;
+                            imgElement.src = product.image_url || '';
                           } else {
                             console.error('Direct image load also failed, using placeholder');
                             // Replace with a div that looks like the fallback
