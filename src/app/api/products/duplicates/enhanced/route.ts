@@ -20,8 +20,8 @@ interface ProductDetails {
   ean: string | null;
   brand: string | null;
   brand_id: string | null;
-  our_price: number | null;
-  wholesale_price: number | null;
+  our_retail_price: number | null;
+  our_wholesale_price: number | null;
   currency_code: string | null;
   url: string | null;
   image_url: string | null;
@@ -157,8 +157,8 @@ export async function GET(_request: NextRequest) {
           ean,
           brand,
           brand_id,
-          our_price,
-          wholesale_price,
+          our_retail_price,
+          our_wholesale_price,
           currency_code,
           url,
           image_url,
