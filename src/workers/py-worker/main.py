@@ -747,7 +747,9 @@ def process_job(conn, job):
                 env=sub_env, # Pass the modified environment
                 text=True, # Read streams as text
                 encoding='utf-8', # Expect UTF-8 encoding
-                errors='strict' # Fail loudly if decoding error occurs
+                errors='replace', # Replace invalid characters instead of failing
+                bufsize=1, # Line buffered
+                universal_newlines=True # Ensure proper line ending handling
             )
 
             # 4. Process stdout (product JSONs) and stderr (logs) in real-time
@@ -760,18 +762,30 @@ def process_job(conn, job):
             script_errors = []
 
             # Create threads to read from stdout and stderr
-            def read_stream(stream, queue):
-                for line in iter(stream.readline, ''):
-                    queue.put(line)
-                stream.close()
+            def read_stream(stream, queue, stream_name):
+                try:
+                    for line in iter(stream.readline, ''):
+                        if line:  # Only put non-empty lines
+                            queue.put(line)
+                        else:
+                            break  # EOF reached
+                except Exception as e:
+                    log_event("ERROR", "STREAM_READER", run_id, f"Error reading {stream_name}: {e}")
+                finally:
+                    try:
+                        stream.close()
+                    except:
+                        pass
 
             # Start threads to read from stdout and stderr
-            stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, stdout_queue))
-            stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_queue))
+            stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, stdout_queue, "stdout"))
+            stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_queue, "stderr"))
             stdout_thread.daemon = True
             stderr_thread.daemon = True
             stdout_thread.start()
             stderr_thread.start()
+
+            log_event("INFO", "SUBPROCESS_THREADS", run_id, "Started stdout and stderr reading threads")
 
             # Initialize variables
             stdout_data = ""
@@ -783,7 +797,9 @@ def process_job(conn, job):
             last_output_time = start_time
 
             # Process output in real-time until process completes or times out
+            loop_count = 0
             while process.poll() is None:
+                loop_count += 1
                 # Check if we've exceeded the timeout
                 current_time = time.time()
                 if current_time - start_time > SCRIPT_TIMEOUT_SECONDS:
@@ -796,6 +812,10 @@ def process_job(conn, job):
                     process.kill()
                     log_event("ERROR", "SUBPROCESS_TIMEOUT", run_id, f"Subprocess killed due to inactivity (no output for 5 minutes)")
                     break
+
+                # Log queue status periodically
+                if loop_count % 100 == 0:  # Every 10 seconds (100 * 0.1s)
+                    log_event("DEBUG", "QUEUE_STATUS", run_id, f"Loop #{loop_count}: stdout_queue size: {stdout_queue.qsize()}, stderr_queue size: {stderr_queue.qsize()}, products parsed: {product_count}")
 
                 # Process stdout
                 try:
