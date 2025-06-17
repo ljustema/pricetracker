@@ -799,15 +799,20 @@ def process_job(conn, job):
 
                 # Process stdout
                 try:
+                    stdout_lines_processed = 0
                     while True:
                         line = stdout_queue.get_nowait()
                         if line:
                             last_output_time = current_time
                             stdout_data += line
                             line = line.strip()
+                            stdout_lines_processed += 1
 
                             if not line:
                                 continue
+
+                            # Debug: Log every stdout line to see what we're receiving
+                            log_event("DEBUG", "STDOUT_RAW", run_id, f"Raw stdout line #{stdout_lines_processed}: {line[:200]}...")
 
                             try:
                                 product = json.loads(line)
@@ -815,6 +820,7 @@ def process_job(conn, job):
                                 if isinstance(product, dict) and product.get('name') and product.get('competitor_price') is not None:
                                     products_buffer.append(product)
                                     product_count += 1
+                                    log_event("INFO", "PRODUCT_PARSED", run_id, f"Successfully parsed product #{product_count}: {product.get('name')} @ {product.get('competitor_price')}")
 
                                     # Update progress in database every 10 products
                                     if product_count % 10 == 0:
@@ -842,8 +848,8 @@ def process_job(conn, job):
                                             log_event("WARN", "PROGRESS_UPDATE", run_id, f"Failed to update product count in database: {count_update_err}")
                                 else:
                                     log_event("WARN", "SCRIPT_STDOUT", run_id, f"Skipping invalid product JSON structure: {line[:100]}...")
-                            except json.JSONDecodeError:
-                                log_event("WARN", "SCRIPT_STDOUT", run_id, f"Failed to decode JSON from stdout: {line[:100]}...")
+                            except json.JSONDecodeError as e:
+                                log_event("WARN", "SCRIPT_STDOUT", run_id, f"Failed to decode JSON from stdout: {line[:100]}... Error: {e}")
                 except queue.Empty:
                     pass
 
@@ -921,12 +927,15 @@ def process_job(conn, job):
             log_event("INFO", "SUBPROCESS_EXEC", run_id, f"Finished processing output from subprocess")
 
             # Save any remaining products in the buffer after processing stdout
+            log_event("INFO", "FINAL_BATCH_CHECK", run_id, f"Checking for remaining products in buffer. Buffer size: {len(products_buffer)}, Total product count: {product_count}")
             if products_buffer:
                 log_event("INFO", "DB_BATCH_SAVE", run_id, f"Saving final batch of {len(products_buffer)} products...")
                 # Ensure connection is valid before saving final batch
                 conn = validate_and_reconnect_if_needed(conn)
                 inserted = save_temp_competitors_scraped_data(conn, run_id, user_id, competitor_id, products_buffer)
                 log_event("INFO", "DB_BATCH_SAVE", run_id, f"Successfully inserted {inserted} products.")
+            else:
+                log_event("WARN", "FINAL_BATCH_CHECK", run_id, f"No products in buffer to save. Total products parsed during run: {product_count}")
 
             # 5. Check exit code after processing all output
             exit_code = process.returncode
