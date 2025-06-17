@@ -752,199 +752,105 @@ def process_job(conn, job):
                 universal_newlines=True # Ensure proper line ending handling
             )
 
-            # 4. Process stdout (product JSONs) and stderr (logs) in real-time
-            import threading
-            import queue
+            # 4. Use communicate() to get all output at once - simpler and more reliable
+            log_event("INFO", "SUBPROCESS_EXEC", run_id, "Waiting for subprocess to complete...")
 
-            # Create queues for stdout and stderr
-            stdout_queue = queue.Queue()
-            stderr_queue = queue.Queue()
+            try:
+                stdout_data, stderr_data = process.communicate(timeout=SCRIPT_TIMEOUT_SECONDS)
+                log_event("INFO", "SUBPROCESS_EXEC", run_id, f"Subprocess completed. Stdout length: {len(stdout_data)}, Stderr length: {len(stderr_data)}")
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout_data, stderr_data = process.communicate()
+                log_event("ERROR", "SUBPROCESS_TIMEOUT", run_id, f"Script execution timed out after {SCRIPT_TIMEOUT_SECONDS} seconds.")
+                raise TimeoutError(f"Script execution timed out after {SCRIPT_TIMEOUT_SECONDS} seconds.")
+
+            # Process stdout (product JSONs)
+            product_count = 0
+            products_buffer = []
             script_errors = []
 
-            # Create threads to read from stdout and stderr
-            def read_stream(stream, queue, stream_name):
-                try:
-                    for line in iter(stream.readline, ''):
-                        if line:  # Only put non-empty lines
-                            queue.put(line)
-                        else:
-                            break  # EOF reached
-                except Exception as e:
-                    log_event("ERROR", "STREAM_READER", run_id, f"Error reading {stream_name}: {e}")
-                finally:
+            if stdout_data:
+                log_event("INFO", "STDOUT_PROCESSING", run_id, f"Processing {len(stdout_data.splitlines())} lines from stdout")
+                for line_num, line in enumerate(stdout_data.splitlines(), 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    log_event("DEBUG", "STDOUT_RAW", run_id, f"Raw stdout line #{line_num}: {line[:200]}...")
+
                     try:
-                        stream.close()
-                    except:
-                        pass
+                        product = json.loads(line)
+                        # Basic validation of product structure
+                        if isinstance(product, dict) and product.get('name') and product.get('competitor_price') is not None:
+                            products_buffer.append(product)
+                            product_count += 1
+                            log_event("INFO", "PRODUCT_PARSED", run_id, f"Successfully parsed product #{product_count}: {product.get('name')} @ {product.get('competitor_price')}")
+                        else:
+                            log_event("WARN", "SCRIPT_STDOUT", run_id, f"Skipping invalid product JSON structure: {line[:100]}...")
+                    except json.JSONDecodeError as e:
+                        log_event("WARN", "SCRIPT_STDOUT", run_id, f"Failed to decode JSON from stdout: {line[:100]}... Error: {e}")
+            else:
+                log_event("WARN", "STDOUT_PROCESSING", run_id, "No stdout data received from subprocess")
 
-            # Start threads to read from stdout and stderr
-            stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, stdout_queue, "stdout"))
-            stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_queue, "stderr"))
-            stdout_thread.daemon = True
-            stderr_thread.daemon = True
-            stdout_thread.start()
-            stderr_thread.start()
-
-            log_event("INFO", "SUBPROCESS_THREADS", run_id, "Started stdout and stderr reading threads")
-
-            # Initialize variables
-            stdout_data = ""
-            stderr_data = ""
+            # Process stderr (logs and progress updates)
             stderr_lines = []
+            script_errors = []
+            phase_batch_info = {}
 
-            # Initialize variables for timeout tracking
-            start_time = time.time()
-            last_output_time = start_time
+            if stderr_data:
+                log_event("INFO", "STDERR_PROCESSING", run_id, f"Processing {len(stderr_data.splitlines())} lines from stderr")
+                for line in stderr_data.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
 
-            # Process output in real-time until process completes or times out
-            loop_count = 0
-            while process.poll() is None:
-                loop_count += 1
-                # Check if we've exceeded the timeout
-                current_time = time.time()
-                if current_time - start_time > SCRIPT_TIMEOUT_SECONDS:
-                    process.kill()
-                    log_event("ERROR", "SUBPROCESS_TIMEOUT", run_id, f"Script execution timed out after {SCRIPT_TIMEOUT_SECONDS} seconds.")
-                    raise TimeoutError(f"Script execution timed out after {SCRIPT_TIMEOUT_SECONDS} seconds.")
+                    stderr_lines.append(line)
 
-                # Check for inactivity timeout (5 minutes without output)
-                if current_time - last_output_time > 300:  # 5 minutes
-                    process.kill()
-                    log_event("ERROR", "SUBPROCESS_TIMEOUT", run_id, f"Subprocess killed due to inactivity (no output for 5 minutes)")
-                    break
+                    # Log the stderr line
+                    log_event("INFO", "SCRIPT_STDERR", run_id, line)
 
-                # Log queue status periodically
-                if loop_count % 100 == 0:  # Every 10 seconds (100 * 0.1s)
-                    log_event("DEBUG", "QUEUE_STATUS", run_id, f"Loop #{loop_count}: stdout_queue size: {stdout_queue.qsize()}, stderr_queue size: {stderr_queue.qsize()}, products parsed: {product_count}")
+                    # Check for error patterns
+                    if any(error_pattern in line.lower() for error_pattern in ['error', 'exception', 'traceback', 'failed']):
+                        script_errors.append(line)
 
-                # Process stdout
-                try:
-                    stdout_lines_processed = 0
-                    while True:
-                        line = stdout_queue.get_nowait()
-                        if line:
-                            last_output_time = current_time
-                            stdout_data += line
-                            line = line.strip()
-                            stdout_lines_processed += 1
+                    # Parse progress updates from stderr
+                    if "Updated progress in database:" in line:
+                        try:
+                            # Extract phase and progress info
+                            # Format: "Updated progress in database: Phase X: Y/Z"
+                            progress_part = line.split("Updated progress in database:")[1].strip()
+                            if "Phase" in progress_part:
+                                phase_part = progress_part.split(":")[0].strip()  # "Phase X"
+                                batch_part = progress_part.split(":")[1].strip()  # "Y/Z"
 
-                            if not line:
-                                continue
+                                current_phase = int(phase_part.split()[1])  # Extract X from "Phase X"
+                                current_batch, total_batches = map(int, batch_part.split("/"))  # Extract Y and Z
 
-                            # Debug: Log every stdout line to see what we're receiving
-                            log_event("DEBUG", "STDOUT_RAW", run_id, f"Raw stdout line #{stdout_lines_processed}: {line[:200]}...")
+                                # Store phase batch info for final status update
+                                phase_batch_info[current_phase] = {
+                                    'current_batch': current_batch,
+                                    'total_batches': total_batches
+                                }
 
-                            try:
-                                product = json.loads(line)
-                                # Basic validation of product structure
-                                if isinstance(product, dict) and product.get('name') and product.get('competitor_price') is not None:
-                                    products_buffer.append(product)
-                                    product_count += 1
-                                    log_event("INFO", "PRODUCT_PARSED", run_id, f"Successfully parsed product #{product_count}: {product.get('name')} @ {product.get('competitor_price')}")
+                                # Update job status with progress
+                                try:
+                                    conn = validate_and_reconnect_if_needed(conn)
+                                    update_job_status(conn, run_id, 'running', current_batch=current_batch, total_batches=total_batches)
+                                except Exception as progress_err:
+                                    log_event("WARN", "PROGRESS_UPDATE", run_id, f"Failed to update progress in database: {progress_err}")
 
-                                    # Update progress in database every 10 products
-                                    if product_count % 10 == 0:
-                                        try:
-                                            conn = validate_and_reconnect_if_needed(conn)
-                                            update_job_status(conn, run_id, 'running', product_count=product_count)
-                                            log_event("INFO", "PROGRESS_UPDATE", run_id, f"Updated product count in database: {product_count}")
-                                        except Exception as count_update_err:
-                                            log_event("WARN", "PROGRESS_UPDATE", run_id, f"Failed to update product count in database: {count_update_err}")
+                        except (ValueError, IndexError) as parse_err:
+                            log_event("WARN", "PROGRESS_PARSE", run_id, f"Failed to parse progress update: {line} - Error: {parse_err}")
+            else:
+                log_event("WARN", "STDERR_PROCESSING", run_id, "No stderr data received from subprocess")
 
-                                    # Save products in batches to the database
-                                    if len(products_buffer) >= DB_BATCH_SIZE:
-                                        log_event("INFO", "DB_BATCH_SAVE", run_id, f"Saving batch of {len(products_buffer)} products...")
-                                        # Ensure connection is valid before saving batch
-                                        conn = validate_and_reconnect_if_needed(conn)
-                                        inserted = save_temp_competitors_scraped_data(conn, run_id, user_id, competitor_id, products_buffer)
-                                        log_event("INFO", "DB_BATCH_SAVE", run_id, f"Successfully inserted {inserted} products.")
-                                        products_buffer = [] # Clear buffer after saving
-
-                                        # Update product count in database after each batch
-                                        try:
-                                            update_job_status(conn, run_id, 'running', product_count=product_count)
-                                            log_event("INFO", "PROGRESS_UPDATE", run_id, f"Updated product count in database: {product_count}")
-                                        except Exception as count_update_err:
-                                            log_event("WARN", "PROGRESS_UPDATE", run_id, f"Failed to update product count in database: {count_update_err}")
-                                else:
-                                    log_event("WARN", "SCRIPT_STDOUT", run_id, f"Skipping invalid product JSON structure: {line[:100]}...")
-                            except json.JSONDecodeError as e:
-                                log_event("WARN", "SCRIPT_STDOUT", run_id, f"Failed to decode JSON from stdout: {line[:100]}... Error: {e}")
-                except queue.Empty:
-                    pass
-
-                # Process stderr
-                try:
-                    while True:
-                        line = stderr_queue.get_nowait()
-                        if line:
-                            last_output_time = current_time
-                            stderr_data += line
-                            line = line.strip()
-
-                            if not line:
-                                continue
-
-                            stderr_lines.append(line)
-
-                            if line.startswith("PROGRESS:"):
-                                progress_msg = line[len("PROGRESS:"):].strip()
-                                log_event("INFO", "SCRIPT_LOG", run_id, progress_msg)
-
-                                # Check if the progress message contains product count information
-                                import re
-                                log_event("DEBUG", "PROGRESS_PARSING", run_id, f"Checking progress message: {progress_msg}")
-
-                                # Check for phase indicator in progress message
-                                phase_match = re.search(r'Phase (\d+):', progress_msg)
-                                current_phase = int(phase_match.group(1)) if phase_match else 1
-
-                                # Look for progress pattern like X/Y
-                                product_progress_match = re.search(r'\b(\d+)\s*\/\s*(\d+)\b', progress_msg)
-                                if product_progress_match:
-                                    current_batch = int(product_progress_match.group(1))
-                                    total_batches = int(product_progress_match.group(2))
-
-                                    # Store the phase-specific batch information
-                                    # This ensures we maintain consistent batch counts per phase
-                                    if 'phase_batch_info' not in locals():
-                                        phase_batch_info = {}
-
-                                    phase_batch_info[current_phase] = {
-                                        'current_batch': current_batch,
-                                        'total_batches': total_batches
-                                    }
-
-                                    # For database updates, always use the current phase's information
-                                    # Update progress in database
-                                    try:
-                                        # Ensure connection is valid
-                                        conn = validate_and_reconnect_if_needed(conn)
-                                        update_job_status(
-                                            conn, run_id, 'running',
-                                            product_count=product_count,
-                                            current_batch=current_batch,
-                                            total_batches=total_batches
-                                        )
-                                        log_event("INFO", "PROGRESS_UPDATE", run_id, f"Updated progress in database: Phase {current_phase}: {current_batch}/{total_batches}")
-                                    except Exception as progress_update_err:
-                                        log_event("WARN", "PROGRESS_UPDATE", run_id, f"Failed to update progress in database: {progress_update_err}")
-                            elif line.startswith("ERROR:"):
-                                error_line = line[len("ERROR:"):].strip()
-                                log_event("ERROR", "SCRIPT_LOG", run_id, error_line)
-                                script_errors.append(error_line) # Collect script-reported errors
-                            else:
-                                # Log other potentially useful stderr output at DEBUG level
-                                log_event("DEBUG", "SCRIPT_STDERR", run_id, line)
-                except queue.Empty:
-                    pass
-
-                # Sleep a bit to avoid busy waiting
-                time.sleep(0.1)
-
-            # We've already processed the output in real-time, so we don't need to process it again
-            # Just log that we're done processing the output
-            log_event("INFO", "SUBPROCESS_EXEC", run_id, f"Finished processing output from subprocess")
+            # Save products in batches to the database
+            if len(products_buffer) >= DB_BATCH_SIZE:
+                log_event("INFO", "DB_BATCH_SAVE", run_id, f"Saving batch of {len(products_buffer)} products...")
+                conn = validate_and_reconnect_if_needed(conn)
+                inserted = save_temp_competitors_scraped_data(conn, run_id, user_id, competitor_id, products_buffer)
+                log_event("INFO", "DB_BATCH_SAVE", run_id, f"Successfully inserted {inserted} products.")
+                products_buffer = [] # Clear buffer after saving
 
             # Save any remaining products in the buffer after processing stdout
             log_event("INFO", "FINAL_BATCH_CHECK", run_id, f"Checking for remaining products in buffer. Buffer size: {len(products_buffer)}, Total product count: {product_count}")
