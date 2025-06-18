@@ -76,26 +76,44 @@ export async function POST(_request: NextRequest) {
     // Filter groups that are very likely the same product:
     // Same brand and SKU where at least one has EAN and others don't
     const automaticMergeGroups = duplicateGroups.filter((group) => {
-      if (group.products.length < 2 || group.products.length > 3) return false;
+      if (group.products.length < 2 || group.products.length > 10) return false;
 
-      // All products must have same brand and SKU
+      // All products must have same brand and SKU (using fuzzy SKU matching)
       const firstProduct = group.products[0];
       const allSameBrand = group.products.every(product =>
         product.brand && firstProduct.brand &&
         product.brand.toLowerCase().trim() === firstProduct.brand.toLowerCase().trim()
       );
-      const allSameSku = group.products.every(product =>
-        product.sku && firstProduct.sku &&
-        product.sku.toLowerCase().trim() === firstProduct.sku.toLowerCase().trim()
-      );
+
+      // Use fuzzy SKU matching - normalize SKUs to ignore punctuation and spacing
+      const normalizeSkuForComparison = (sku: string) => {
+        if (!sku) return '';
+        // Remove all non-alphanumeric characters and convert to uppercase
+        return sku.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      };
+
+      const firstProductNormalizedSku = normalizeSkuForComparison(firstProduct.sku || '');
+      const allSameSku = group.products.every(product => {
+        if (!product.sku || !firstProduct.sku) return false;
+        const normalizedSku = normalizeSkuForComparison(product.sku);
+        return normalizedSku === firstProductNormalizedSku;
+      });
 
       if (!allSameBrand || !allSameSku) return false;
 
-      // At least one must have EAN and at least one must not have EAN
+      // Allow automatic merge in two scenarios:
+      // 1. At least one has EAN and at least one doesn't (original logic)
+      // 2. All products have same brand+SKU (even if none have EAN)
       const productsWithEan = group.products.filter(p => p.ean && p.ean.trim() !== '');
       const productsWithoutEan = group.products.filter(p => !p.ean || p.ean.trim() === '');
 
-      return productsWithEan.length >= 1 && productsWithoutEan.length >= 1;
+      // Scenario 1: Mixed EAN status (original logic)
+      const mixedEanStatus = productsWithEan.length >= 1 && productsWithoutEan.length >= 1;
+
+      // Scenario 2: All have same brand+SKU (already verified above)
+      const sameBrandSku = allSameBrand && allSameSku;
+
+      return mixedEanStatus || sameBrandSku;
     });
 
     let mergedCount = 0;
@@ -107,7 +125,7 @@ export async function POST(_request: NextRequest) {
       try {
         // Separate products with and without EANs
         const productsWithEan = group.products.filter(p => p.ean && p.ean.trim() !== '');
-        const productsWithoutEan = group.products.filter(p => !p.ean || p.ean.trim() === '');
+        const _productsWithoutEan = group.products.filter(p => !p.ean || p.ean.trim() === '');
 
         // Select primary product (prefer product with EAN, or first product if multiple have EANs)
         const primaryProduct = productsWithEan.length > 0 ? productsWithEan[0] : group.products[0];

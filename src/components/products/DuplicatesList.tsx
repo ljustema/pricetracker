@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from 'react';
+import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -216,7 +217,7 @@ export function DuplicatesList() {
       if (result.errorCount > 0) {
         setError(`Automatic merge completed: ${result.mergedCount} successful merges, ${result.errorCount} errors. Check console for details.`);
       } else if (result.mergedCount === 0) {
-        setError('No products were eligible for automatic merging. Automatic merge only works for groups of 2-3 products with same brand and SKU where at least one has EAN and others don\'t.');
+        setError('No products were eligible for automatic merging. Automatic merge works for groups of 2-10 products with same brand and SKU.');
       }
 
     } catch (err: unknown) {
@@ -550,9 +551,11 @@ export function DuplicatesList() {
                       {/* Product image */}
                       {product.image_url && (
                         <div className="flex-shrink-0">
-                          <img
+                          <Image
                             src={`/api/proxy-image?url=${encodeURIComponent(product.image_url)}`}
                             alt={product.name}
+                            width={80}
+                            height={80}
                             className="w-20 h-20 object-cover rounded-lg border border-gray-200"
                             onError={(e) => {
                               const target = e.target as HTMLImageElement;

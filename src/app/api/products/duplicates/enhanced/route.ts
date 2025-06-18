@@ -51,7 +51,7 @@ interface PriceData {
 
 interface PriceInfo {
   price: number;
-  currency: string;
+  currency_code: string;
   source: string;
   platform?: string;
   website?: string;

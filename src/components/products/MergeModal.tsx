@@ -82,8 +82,8 @@ export function MergeModal({
     { key: 'category', label: 'Category' },
     { key: 'description', label: 'Description' },
     { key: 'image_url', label: 'Image URL' },
-    { key: 'our_price', label: 'Our Price' },
-    { key: 'wholesale_price', label: 'Wholesale Price' },
+    { key: 'our_retail_price', label: 'Our Retail Price' },
+    { key: 'our_wholesale_price', label: 'Our Wholesale Price' },
   ];
 
   const handleMerge = async () => {
