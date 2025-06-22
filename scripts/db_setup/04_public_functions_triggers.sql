@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-06-17 15:51:06
+-- Generated: 2025-06-22 16:40:30
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -924,6 +924,104 @@ CREATE FUNCTION public.get_latest_competitor_prices_batch(p_user_id uuid, p_prod
     AS $$ BEGIN RETURN QUERY WITH AllPrices AS ( SELECT pc.id, pc.product_id, pc.competitor_id, pc.integration_id, pc.old_competitor_price, pc.new_competitor_price, pc.old_our_retail_price, pc.new_our_retail_price, pc.price_change_percentage, pc.currency_code, pc.changed_at, CASE WHEN pc.competitor_id IS NOT NULL THEN 'competitor'::TEXT ELSE 'integration'::TEXT END AS source_type, CASE WHEN pc.competitor_id IS NOT NULL THEN c.name ELSE i.name END AS source_name, CASE WHEN pc.competitor_id IS NOT NULL THEN c.website ELSE NULL::TEXT END AS source_website, CASE WHEN pc.competitor_id IS NOT NULL THEN NULL::TEXT ELSE i.platform END AS source_platform, CASE WHEN pc.competitor_id IS NOT NULL THEN pc.competitor_id ELSE pc.integration_id END AS source_id, COALESCE(pc.url, p.url) AS url, ROW_NUMBER() OVER( PARTITION BY pc.product_id, COALESCE(pc.competitor_id, pc.integration_id), CASE WHEN pc.competitor_id IS NOT NULL THEN 'competitor' ELSE 'integration' END ORDER BY pc.changed_at DESC ) as rn FROM price_changes_competitors pc LEFT JOIN competitors c ON pc.competitor_id = c.id LEFT JOIN integrations i ON pc.integration_id = i.id LEFT JOIN products p ON pc.product_id = p.id WHERE pc.user_id = p_user_id AND pc.product_id = ANY(p_product_ids) ) SELECT ap.id, ap.product_id, ap.competitor_id, ap.integration_id, ap.old_competitor_price, ap.new_competitor_price, ap.old_our_retail_price, ap.new_our_retail_price, ap.price_change_percentage, ap.currency_code, ap.changed_at, ap.source_type, ap.source_name, ap.source_website, ap.source_platform, ap.source_id, ap.url FROM AllPrices ap WHERE ap.rn = 1 ORDER BY COALESCE(ap.new_competitor_price, ap.new_our_retail_price) ASC; END; $$;
 
 --
+-- Name: get_latest_competitor_stock(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_competitor_stock(p_user_id uuid, p_product_id uuid) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, current_stock_quantity integer, current_stock_status text, current_availability_date date, last_stock_change integer, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        sc.id,
+        sc.product_id,
+        sc.competitor_id,
+        sc.integration_id,
+        sc.new_stock_quantity as current_stock_quantity,
+        sc.new_stock_status as current_stock_status,
+        sc.new_availability_date as current_availability_date,
+        sc.stock_change_quantity as last_stock_change,
+        sc.changed_at,
+        CASE 
+            WHEN sc.competitor_id IS NOT NULL THEN 'competitor'
+            WHEN sc.integration_id IS NOT NULL THEN 'integration'
+            ELSE 'unknown'
+        END as source_type,
+        COALESCE(c.name, i.name, 'Unknown') as source_name,
+        COALESCE(c.website, i.website, '') as source_website,
+        COALESCE(sc.competitor_id, sc.integration_id) as source_id,
+        sc.url
+    FROM stock_changes_competitors sc
+    LEFT JOIN competitors c ON sc.competitor_id = c.id
+    LEFT JOIN integrations i ON sc.integration_id = i.id
+    WHERE sc.user_id = p_user_id
+      AND sc.product_id = p_product_id
+      AND sc.id IN (
+          -- Get the latest stock record for each competitor/integration
+          SELECT DISTINCT ON (competitor_id, integration_id) id
+          FROM stock_changes_competitors sc2
+          WHERE sc2.user_id = p_user_id
+            AND sc2.product_id = p_product_id
+          ORDER BY competitor_id, integration_id, changed_at DESC
+      )
+    ORDER BY sc.changed_at DESC;
+
+--
+-- Name: FUNCTION get_latest_competitor_stock(p_user_id uuid, p_product_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_latest_competitor_stock(p_user_id uuid, p_product_id uuid) IS 'Gets the latest stock levels for a product from all competitors and integrations';
+
+--
+-- Name: get_latest_competitor_stock_batch(uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_competitor_stock_batch(p_user_id uuid, p_product_ids uuid[]) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, current_stock_quantity integer, current_stock_status text, current_availability_date date, last_stock_change integer, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        sc.id,
+        sc.product_id,
+        sc.competitor_id,
+        sc.integration_id,
+        sc.new_stock_quantity as current_stock_quantity,
+        sc.new_stock_status as current_stock_status,
+        sc.new_availability_date as current_availability_date,
+        sc.stock_change_quantity as last_stock_change,
+        sc.changed_at,
+        CASE 
+            WHEN sc.competitor_id IS NOT NULL THEN 'competitor'
+            WHEN sc.integration_id IS NOT NULL THEN 'integration'
+            ELSE 'unknown'
+        END as source_type,
+        COALESCE(c.name, i.name, 'Unknown') as source_name,
+        COALESCE(c.website, i.website, '') as source_website,
+        COALESCE(sc.competitor_id, sc.integration_id) as source_id,
+        sc.url
+    FROM stock_changes_competitors sc
+    LEFT JOIN competitors c ON sc.competitor_id = c.id
+    LEFT JOIN integrations i ON sc.integration_id = i.id
+    WHERE sc.user_id = p_user_id
+      AND sc.product_id = ANY(p_product_ids)
+      AND sc.id IN (
+          -- Get the latest stock record for each product/competitor/integration combination
+          SELECT DISTINCT ON (product_id, competitor_id, integration_id) id
+          FROM stock_changes_competitors sc2
+          WHERE sc2.user_id = p_user_id
+            AND sc2.product_id = ANY(p_product_ids)
+          ORDER BY product_id, competitor_id, integration_id, changed_at DESC
+      )
+    ORDER BY sc.product_id, sc.changed_at DESC;
+
+--
+-- Name: FUNCTION get_latest_competitor_stock_batch(p_user_id uuid, p_product_ids uuid[]); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_latest_competitor_stock_batch(p_user_id uuid, p_product_ids uuid[]) IS 'Gets the latest stock levels for multiple products from all competitors and integrations in a single query';
+
+--
 -- Name: get_or_create_unknown_brand(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1035,6 +1133,22 @@ BEGIN
         SELECT completed_at FROM public.integration_runs 
         WHERE status = 'completed' AND completed_at >= date_trunc('day', now())
     ) completed_jobs;
+
+--
+-- Name: get_stock_summary_stats(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_stock_summary_stats(p_user_id uuid) RETURNS json
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    result JSON;
+
+--
+-- Name: FUNCTION get_stock_summary_stats(p_user_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_stock_summary_stats(p_user_id uuid) IS 'Returns summary statistics for stock tracking including product counts, stock levels, and sales velocity';
 
 --
 -- Name: get_unique_competitor_products(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -1510,6 +1624,23 @@ CREATE FUNCTION public.set_statement_timeout(p_milliseconds integer) RETURNS voi
     AS $$
 BEGIN
   EXECUTE format('SET statement_timeout = %s', p_milliseconds);
+
+--
+-- Name: standardize_stock_status(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.standardize_stock_status(raw_status text) RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF raw_status IS NULL OR raw_status = '' THEN
+        RETURN 'unknown';
+
+--
+-- Name: FUNCTION standardize_stock_status(raw_status text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.standardize_stock_status(raw_status text) IS 'Standardizes various stock status formats into consistent categories';
 
 --
 -- Name: sync_brand_id(); Type: FUNCTION; Schema: public; Owner: -

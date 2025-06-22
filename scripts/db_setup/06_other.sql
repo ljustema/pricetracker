@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-06-17 15:51:06
+-- Generated: 2025-06-22 16:40:30
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -1432,6 +1432,14 @@ END;
 
 $$;
 
+END;
+
+$$;
+
+END;
+
+$$;
+
 BEGIN
     -- Try to find existing 'Unknown' brand
     SELECT id INTO brand_id_result
@@ -1739,6 +1747,68 @@ RETURN _result;
 END;
 
 $$;
+
+END;
+
+$$;
+
+BEGIN
+    SELECT json_build_object(
+        'total_products_tracked', (
+            SELECT COUNT(DISTINCT product_id)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+        ),
+        'total_competitors', (
+            SELECT COUNT(DISTINCT competitor_id)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+              AND competitor_id IS NOT NULL
+        ),
+        'products_in_stock', (
+            SELECT COUNT(DISTINCT product_id)
+            FROM stock_changes_competitors sc1
+            WHERE user_id = p_user_id
+              AND new_stock_quantity > 0
+              AND id IN (
+                  SELECT DISTINCT ON (product_id, competitor_id) id
+                  FROM stock_changes_competitors sc2
+                  WHERE sc2.user_id = p_user_id
+                    AND sc2.product_id = sc1.product_id
+                    AND sc2.competitor_id = sc1.competitor_id
+                  ORDER BY product_id, competitor_id, changed_at DESC
+              )
+        ),
+        'products_out_of_stock', (
+            SELECT COUNT(DISTINCT product_id)
+            FROM stock_changes_competitors sc1
+            WHERE user_id = p_user_id
+              AND new_stock_quantity = 0
+              AND id IN (
+                  SELECT DISTINCT ON (product_id, competitor_id) id
+                  FROM stock_changes_competitors sc2
+                  WHERE sc2.user_id = p_user_id
+                    AND sc2.product_id = sc1.product_id
+                    AND sc2.competitor_id = sc1.competitor_id
+                  ORDER BY product_id, competitor_id, changed_at DESC
+              )
+        ),
+        'total_stock_changes', (
+            SELECT COUNT(*)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+              AND changed_at >= NOW() - INTERVAL '30 days'
+        ),
+        'avg_daily_sales', (
+            SELECT COALESCE(AVG(ABS(stock_change_quantity)), 0)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+              AND stock_change_quantity < 0
+              AND changed_at >= NOW() - INTERVAL '30 days'
+        )
+    ) INTO result;
+
+RETURN result;
 
 END;
 
@@ -2634,6 +2704,15 @@ has_name BOOLEAN := FALSE;
 
 fuzzy_name_enabled BOOLEAN := FALSE;
 
+-- Stock processing variables
+    current_stock_quantity INTEGER;
+
+current_stock_status TEXT;
+
+current_availability_date DATE;
+
+standardized_status TEXT;
+
 BEGIN
     -- Get user's matching rules settings
     SELECT matching_rules INTO user_matching_rules
@@ -2647,9 +2726,9 @@ BEGIN
 END IF;
 
 -- Check what data we have
-    has_ean := (NEW.ean IS NOT NULL AND NEW.ean != '');
+    has_ean := (NEW.ean IS NOT NULL AND NEW.ean != '' AND NEW.ean != '-');
 
-has_brand_sku := (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '');
+has_brand_sku := (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.sku != '-');
 
 has_name := (NEW.name IS NOT NULL AND NEW.name != '');
 
@@ -2670,6 +2749,7 @@ END IF;
         matched_product_id := NEW.product_id;
 
 ELSE
+        -- ENHANCED MATCHING LOGIC
         -- Try to find existing product by EAN first (if EAN priority is enabled and we have EAN)
         IF (user_matching_rules->>'ean_priority')::boolean = true AND has_ean THEN
             SELECT id INTO matched_product_id
@@ -2684,11 +2764,13 @@ END IF;
         IF matched_product_id IS NULL AND 
            (user_matching_rules->>'sku_brand_fallback')::boolean = true AND 
            has_brand_sku THEN
+            
+            -- Try exact brand + exact SKU first
             SELECT id INTO matched_product_id
             FROM products
             WHERE user_id = NEW.user_id
-              AND sku = NEW.sku
-              AND brand = NEW.brand
+              AND TRIM(sku) = TRIM(NEW.sku)
+              AND TRIM(brand) = TRIM(NEW.brand)
             LIMIT 1;
 
 END IF;
@@ -2702,14 +2784,21 @@ END IF;
               AND LOWER(TRIM(name)) = LOWER(TRIM(NEW.name))
             LIMIT 1;
 
--- If no exact match, try fuzzy matching using similarity
+-- If no exact match, try fuzzy matching using similarity (if available)
             IF matched_product_id IS NULL THEN
-                SELECT id INTO matched_product_id
-                FROM products
-                WHERE user_id = NEW.user_id
-                  AND similarity(LOWER(TRIM(name)), LOWER(TRIM(NEW.name))) > 0.8
-                ORDER BY similarity(LOWER(TRIM(name)), LOWER(TRIM(NEW.name))) DESC
-                LIMIT 1;
+                BEGIN
+                    SELECT id INTO matched_product_id
+                    FROM products
+                    WHERE user_id = NEW.user_id
+                      AND similarity(LOWER(TRIM(name)), LOWER(TRIM(NEW.name))) > 0.8
+                    ORDER BY similarity(LOWER(TRIM(name)), LOWER(TRIM(NEW.name))) DESC
+                    LIMIT 1;
+
+EXCEPTION WHEN OTHERS THEN
+                    -- Similarity function not available, skip fuzzy matching
+                    NULL;
+
+END;
 
 END IF;
 
@@ -2790,7 +2879,8 @@ END IF;
 
 END IF;
 
--- Get current competitor price for this product and competitor
+-- PRICE PROCESSING (existing logic)
+    -- Get current competitor price for this product and competitor
     SELECT new_competitor_price INTO current_competitor_price
     FROM price_changes_competitors
     WHERE product_id = matched_product_id
@@ -2829,28 +2919,76 @@ END IF;
 
 END IF;
 
+-- STOCK PROCESSING (new logic)
+    -- Only process stock if we have stock data
+    IF NEW.stock_quantity IS NOT NULL OR NEW.stock_status IS NOT NULL THEN
+        -- Get current stock data for this product/competitor combination
+        SELECT 
+            new_stock_quantity,
+            new_stock_status,
+            new_availability_date
+        INTO 
+            current_stock_quantity,
+            current_stock_status,
+            current_availability_date
+        FROM stock_changes_competitors
+        WHERE user_id = NEW.user_id 
+          AND product_id = matched_product_id 
+          AND competitor_id = NEW.competitor_id
+        ORDER BY changed_at DESC
+        LIMIT 1;
+
+-- Standardize the new stock status
+        standardized_status := standardize_stock_status(NEW.stock_status);
+
+-- Only insert if stock has changed
+        IF (current_stock_quantity IS DISTINCT FROM NEW.stock_quantity) OR
+           (current_stock_status IS DISTINCT FROM standardized_status) OR
+           (current_availability_date IS DISTINCT FROM NEW.availability_date) THEN
+            
+            INSERT INTO stock_changes_competitors (
+                user_id,
+                product_id,
+                competitor_id,
+                old_stock_quantity,
+                new_stock_quantity,
+                old_stock_status,
+                new_stock_status,
+                old_availability_date,
+                new_availability_date,
+                stock_change_quantity,
+                changed_at,
+                url,
+                raw_stock_data
+            ) VALUES (
+                NEW.user_id,
+                matched_product_id,
+                NEW.competitor_id,
+                current_stock_quantity,
+                NEW.stock_quantity,
+                current_stock_status,
+                standardized_status,
+                current_availability_date,
+                NEW.availability_date,
+                COALESCE(NEW.stock_quantity, 0) - COALESCE(current_stock_quantity, 0),
+                NOW(),
+                NEW.url,
+                NEW.raw_stock_data
+            );
+
+END IF;
+
+END IF;
+
 -- Delete the processed temp record
     DELETE FROM temp_competitors_scraped_data WHERE id = NEW.id;
 
 RETURN NULL; -- Don't insert into temp table since we're deleting it
 EXCEPTION WHEN OTHERS THEN
-    -- If similarity function is not available, fall back to exact name matching only
-    IF SQLSTATE = '42883' THEN -- function does not exist
-        -- Retry with exact name matching only
-        IF matched_product_id IS NULL AND fuzzy_name_enabled AND has_name THEN
-            SELECT id INTO matched_product_id
-            FROM products
-            WHERE user_id = NEW.user_id
-              AND LOWER(TRIM(name)) = LOWER(TRIM(NEW.name))
-            LIMIT 1;
+    -- Log the error for debugging
+    RAISE NOTICE 'Error processing competitor data: %', SQLERRM;
 
-END IF;
-
--- Continue with the rest of the logic...
-        -- (This is a simplified fallback - in practice you'd want to handle this more gracefully)
-    END IF;
-
--- Re-raise other exceptions
+-- Re-raise the exception
     RAISE;
 
 END;
@@ -2892,24 +3030,45 @@ rounded_wholesale_price := ROUND(NEW.our_wholesale_price);
 
 END IF;
 
--- Try to find existing product by EAN first
-    IF NEW.ean IS NOT NULL AND NEW.ean != '' THEN
+-- ENHANCED MATCHING LOGIC
+    -- Try to find existing product by EAN first (exact match)
+    IF NEW.ean IS NOT NULL AND NEW.ean != '' AND NEW.ean != '-' THEN
         SELECT id INTO existing_product_id
         FROM products
         WHERE user_id = NEW.user_id
           AND ean = NEW.ean
         LIMIT 1;
 
+-- Log matching attempt for debugging
+        RAISE NOTICE 'EAN matching for %: found product %', NEW.ean, existing_product_id;
+
 END IF;
 
--- If no match by EAN, try by SKU and brand
-    IF existing_product_id IS NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+-- If no match by EAN, try by SKU and brand (exact match)
+    IF existing_product_id IS NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.sku != '-' AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN
         SELECT id INTO existing_product_id
         FROM products
         WHERE user_id = NEW.user_id
-          AND sku = NEW.sku
-          AND brand = NEW.brand
+          AND TRIM(sku) = TRIM(NEW.sku)
+          AND TRIM(brand) = TRIM(NEW.brand)
         LIMIT 1;
+
+-- Log matching attempt for debugging
+        RAISE NOTICE 'SKU+Brand matching for % + %: found product %', NEW.sku, NEW.brand, existing_product_id;
+
+END IF;
+
+-- If still no match, try with brand_id if we have it
+    IF existing_product_id IS NULL AND v_brand_id IS NOT NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.sku != '-' THEN
+        SELECT id INTO existing_product_id
+        FROM products
+        WHERE user_id = NEW.user_id
+          AND brand_id = v_brand_id
+          AND TRIM(sku) = TRIM(NEW.sku)
+        LIMIT 1;
+
+-- Log matching attempt for debugging
+        RAISE NOTICE 'SKU+BrandID matching for % + %: found product %', NEW.sku, v_brand_id, existing_product_id;
 
 END IF;
 
@@ -2935,6 +3094,9 @@ IF existing_product_id IS NOT NULL THEN
             currency_code = COALESCE(NEW.currency_code, currency_code),
             updated_at = NOW()
         WHERE id = existing_product_id;
+
+-- Log successful update
+        RAISE NOTICE 'Updated existing product % with new data', existing_product_id;
 
 ELSE
         -- Create new product with rounded prices
@@ -2963,6 +3125,9 @@ ELSE
             NEW.currency_code,
             NEW.url
         ) RETURNING id INTO existing_product_id;
+
+-- Log new product creation
+        RAISE NOTICE 'Created new product % for SKU % + Brand %', existing_product_id, NEW.sku, NEW.brand;
 
 END IF;
 
@@ -3059,6 +3224,9 @@ EXCEPTION WHEN OTHERS THEN
         processed_at = NOW() 
     WHERE id = NEW.id;
 
+-- Log the error for debugging
+    RAISE NOTICE 'Error processing integration data: %', SQLERRM;
+
 -- Delete error records as well to prevent temp table from filling up
     DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
 
@@ -3083,6 +3251,15 @@ existing_product RECORD;
 custom_fields_result JSONB;
 
 price_changed BOOLEAN := FALSE;
+
+-- Stock processing variables
+    current_stock_quantity INTEGER;
+
+current_stock_status TEXT;
+
+current_availability_date DATE;
+
+standardized_status TEXT;
 
 BEGIN
     -- Find or create brand if we have brand name
@@ -3159,7 +3336,8 @@ END IF;
 
 END IF;
 
--- Get last supplier prices for comparison
+-- PRICE PROCESSING (existing logic)
+    -- Get last supplier prices for comparison
     SELECT 
         new_supplier_price,
         new_our_wholesale_price,
@@ -3220,6 +3398,67 @@ END IF;
             NEW.currency_code,
             NEW.url
         );
+
+END IF;
+
+-- STOCK PROCESSING (new logic)
+    -- Only process stock if we have stock data
+    IF NEW.stock_quantity IS NOT NULL OR NEW.stock_status IS NOT NULL THEN
+        -- Get current stock data for this product/supplier combination
+        SELECT 
+            new_stock_quantity,
+            new_stock_status,
+            new_availability_date
+        INTO 
+            current_stock_quantity,
+            current_stock_status,
+            current_availability_date
+        FROM stock_changes_suppliers
+        WHERE user_id = NEW.user_id 
+          AND product_id = matched_product_id 
+          AND supplier_id = NEW.supplier_id
+        ORDER BY changed_at DESC
+        LIMIT 1;
+
+-- Standardize the new stock status
+        standardized_status := standardize_stock_status(NEW.stock_status);
+
+-- Only insert if stock has changed
+        IF (current_stock_quantity IS DISTINCT FROM NEW.stock_quantity) OR
+           (current_stock_status IS DISTINCT FROM standardized_status) OR
+           (current_availability_date IS DISTINCT FROM NEW.availability_date) THEN
+            
+            INSERT INTO stock_changes_suppliers (
+                user_id,
+                product_id,
+                supplier_id,
+                old_stock_quantity,
+                new_stock_quantity,
+                old_stock_status,
+                new_stock_status,
+                old_availability_date,
+                new_availability_date,
+                stock_change_quantity,
+                changed_at,
+                url,
+                raw_stock_data
+            ) VALUES (
+                NEW.user_id,
+                matched_product_id,
+                NEW.supplier_id,
+                current_stock_quantity,
+                NEW.stock_quantity,
+                current_stock_status,
+                standardized_status,
+                current_availability_date,
+                NEW.availability_date,
+                COALESCE(NEW.stock_quantity, 0) - COALESCE(current_stock_quantity, 0),
+                NOW(),
+                NEW.url,
+                NEW.raw_stock_data
+            );
+
+END IF;
 
 END IF;
 
@@ -3290,6 +3529,54 @@ RETURN NEW;
 END;
 
 $$;
+
+END;
+
+$$;
+
+END IF;
+
+-- Convert to lowercase for comparison
+    raw_status := lower(trim(raw_status));
+
+-- In stock variations (Swedish and English)
+    IF raw_status IN ('i lager', 'finns i lager', 'in stock', 'available', 'tillgänglig', 'på lager') THEN
+        RETURN 'in_stock';
+
+END IF;
+
+-- Out of stock variations
+    IF raw_status IN ('ej i lager', 'slut i lager', 'utgången produkt', 'out of stock', 'sold out', 'slutsåld') THEN
+        RETURN 'out_of_stock';
+
+END IF;
+
+-- Limited stock
+    IF raw_status LIKE '%få kvar%' OR raw_status LIKE '%limited%' OR raw_status LIKE '%begränsad%' OR raw_status LIKE '%få st%' THEN
+        RETURN 'limited_stock';
+
+END IF;
+
+-- Coming soon / future availability
+    IF raw_status LIKE '%snart%' OR raw_status LIKE '%kommer%' OR raw_status LIKE '%coming soon%' OR raw_status LIKE '%inkommer%' THEN
+        RETURN 'coming_soon';
+
+END IF;
+
+-- Back order / restocking
+    IF raw_status LIKE '%beställningsvara%' OR raw_status LIKE '%back order%' OR raw_status LIKE '%restocking%' THEN
+        RETURN 'back_order';
+
+END IF;
+
+-- Discontinued
+    IF raw_status LIKE '%utgången%' OR raw_status LIKE '%discontinued%' OR raw_status LIKE '%upphörd%' THEN
+        RETURN 'discontinued';
+
+END IF;
+
+-- Default to original status if no match
+    RETURN raw_status;
 
 END;
 
@@ -4232,6 +4519,54 @@ END;
 $$;
 
 --
+-- Name: current_competitor_stock; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.current_competitor_stock AS
+ SELECT DISTINCT ON (user_id, product_id, competitor_id) user_id,
+    product_id,
+    competitor_id,
+    integration_id,
+    new_stock_quantity AS current_stock_quantity,
+    new_stock_status AS current_stock_status,
+    new_availability_date AS current_availability_date,
+    stock_change_quantity AS last_stock_change,
+    changed_at AS last_updated,
+    url
+   FROM public.stock_changes_competitors
+  ORDER BY user_id, product_id, competitor_id, changed_at DESC;
+
+--
+-- Name: VIEW current_competitor_stock; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON VIEW public.current_competitor_stock IS 'Shows the most recent stock levels for each product/competitor combination';
+
+--
+-- Name: current_supplier_stock; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.current_supplier_stock AS
+ SELECT DISTINCT ON (user_id, product_id, supplier_id) user_id,
+    product_id,
+    supplier_id,
+    integration_id,
+    new_stock_quantity AS current_stock_quantity,
+    new_stock_status AS current_stock_status,
+    new_availability_date AS current_availability_date,
+    stock_change_quantity AS last_stock_change,
+    changed_at AS last_updated,
+    url
+   FROM public.stock_changes_suppliers
+  ORDER BY user_id, product_id, supplier_id, changed_at DESC;
+
+--
+-- Name: VIEW current_supplier_stock; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON VIEW public.current_supplier_stock IS 'Shows the most recent stock levels for each product/supplier combination';
+
+--
 -- Name: audit_logs_instance_id_idx; Type: INDEX; Schema: auth; Owner: -
 --
 
@@ -4944,6 +5279,126 @@ CREATE INDEX idx_scrapers_execution_time ON public.scrapers USING btree (executi
 --
 
 CREATE INDEX idx_scrapers_scraper_type ON public.scrapers USING btree (scraper_type);
+
+--
+-- Name: idx_stock_changes_competitors_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_changed_at ON public.stock_changes_competitors USING btree (changed_at DESC);
+
+--
+-- Name: idx_stock_changes_competitors_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_product_id ON public.stock_changes_competitors USING btree (product_id);
+
+--
+-- Name: idx_stock_changes_competitors_user_competitor; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_user_competitor ON public.stock_changes_competitors USING btree (user_id, competitor_id) WHERE (competitor_id IS NOT NULL);
+
+--
+-- Name: INDEX idx_stock_changes_competitors_user_competitor; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_competitors_user_competitor IS 'Optimizes competitor-based stock queries';
+
+--
+-- Name: idx_stock_changes_competitors_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_user_id ON public.stock_changes_competitors USING btree (user_id);
+
+--
+-- Name: INDEX idx_stock_changes_competitors_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_competitors_user_id IS 'Optimizes user-based stock queries';
+
+--
+-- Name: idx_stock_changes_competitors_user_integration; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_user_integration ON public.stock_changes_competitors USING btree (user_id, integration_id) WHERE (integration_id IS NOT NULL);
+
+--
+-- Name: INDEX idx_stock_changes_competitors_user_integration; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_competitors_user_integration IS 'Optimizes integration-based stock queries';
+
+--
+-- Name: idx_stock_changes_competitors_user_product_time; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_user_product_time ON public.stock_changes_competitors USING btree (user_id, product_id, changed_at DESC);
+
+--
+-- Name: INDEX idx_stock_changes_competitors_user_product_time; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_competitors_user_product_time IS 'Optimizes product stock history queries';
+
+--
+-- Name: idx_stock_changes_suppliers_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_changed_at ON public.stock_changes_suppliers USING btree (changed_at DESC);
+
+--
+-- Name: idx_stock_changes_suppliers_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_product_id ON public.stock_changes_suppliers USING btree (product_id);
+
+--
+-- Name: idx_stock_changes_suppliers_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_user_id ON public.stock_changes_suppliers USING btree (user_id);
+
+--
+-- Name: INDEX idx_stock_changes_suppliers_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_suppliers_user_id IS 'Optimizes user-based supplier stock queries';
+
+--
+-- Name: idx_stock_changes_suppliers_user_integration; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_user_integration ON public.stock_changes_suppliers USING btree (user_id, integration_id) WHERE (integration_id IS NOT NULL);
+
+--
+-- Name: INDEX idx_stock_changes_suppliers_user_integration; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_suppliers_user_integration IS 'Optimizes integration-based supplier stock queries';
+
+--
+-- Name: idx_stock_changes_suppliers_user_product_time; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_user_product_time ON public.stock_changes_suppliers USING btree (user_id, product_id, changed_at DESC);
+
+--
+-- Name: INDEX idx_stock_changes_suppliers_user_product_time; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_suppliers_user_product_time IS 'Optimizes product supplier stock history queries';
+
+--
+-- Name: idx_stock_changes_suppliers_user_supplier; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_user_supplier ON public.stock_changes_suppliers USING btree (user_id, supplier_id) WHERE (supplier_id IS NOT NULL);
+
+--
+-- Name: INDEX idx_stock_changes_suppliers_user_supplier; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_suppliers_user_supplier IS 'Optimizes supplier-based stock queries';
 
 --
 -- Name: idx_suppliers_is_active; Type: INDEX; Schema: public; Owner: -

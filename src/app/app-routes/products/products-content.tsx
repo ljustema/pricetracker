@@ -4,7 +4,7 @@ import type { ComplexFiltersState } from './products-client-wrapper'; // Import 
 
 import { useState, useEffect } from 'react';
 import type { Competitor } from "@/lib/services/competitor-service"; // Import Competitor type
-import type { Product } from "@/lib/services/product-service"; // Import the shared type
+import type { Product, StockChange } from "@/lib/services/product-service"; // Import the shared type
 import ProductCard from "@/components/products/product-card";
 import ProductsTable from "@/components/products/products-table";
 import ProductsFilter from "@/app/app-routes/products/products-filter";
@@ -38,6 +38,7 @@ export default function ProductsContent({
   const [totalProductCount, setTotalProductCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true); // Start loading initially
   const [error, setError] = useState<string | null>(null);
+  const [stockData, setStockData] = useState<Map<string, StockChange[]>>(new Map());
 
   // Use initial props for static data passed from server
   const competitors = initialCompetitors;
@@ -157,6 +158,43 @@ export default function ProductsContent({
         setProducts(apiProducts || []);
         setTotalProductCount(apiTotalCount || 0);
 
+        // Fetch stock data for the loaded products
+        if (apiProducts && apiProducts.length > 0) {
+          try {
+            const productIds = apiProducts.map((p: Product) => p.id);
+
+            const stockResponse = await fetch('/api/products/stock/batch', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...fetchHeaders
+              },
+              body: JSON.stringify({ productIds }),
+              cache: 'no-store',
+            });
+
+            if (stockResponse.ok) {
+              const stockChanges = await stockResponse.json();
+
+              // Group stock changes by product_id
+              const stockByProduct = new Map<string, StockChange[]>();
+              stockChanges.forEach((stockChange: StockChange) => {
+                if (!stockByProduct.has(stockChange.product_id)) {
+                  stockByProduct.set(stockChange.product_id, []);
+                }
+                stockByProduct.get(stockChange.product_id)!.push(stockChange);
+              });
+
+              setStockData(stockByProduct);
+            } else {
+              console.error("Failed to fetch stock data:", stockResponse.status);
+            }
+          } catch (stockError) {
+            console.error("Error fetching stock data:", stockError);
+            // Don't fail the whole component if stock data fails
+          }
+        }
+
       } catch (err) {
         console.error("Error fetching products content:", err);
         setError(err instanceof Error ? err.message : "An unknown error occurred loading product data.");
@@ -255,6 +293,7 @@ export default function ProductsContent({
             <ProductsTable
               products={products} // No need for assertion if state type is correct
               competitors={competitors} // Use prop directly
+              stockData={stockData} // Pass stock data
               onDelete={(productId) => console.log("Delete product:", productId)}
             />
           ) : (

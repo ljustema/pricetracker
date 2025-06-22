@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-06-17 15:51:06
+-- Generated: 2025-06-22 16:40:30
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -536,6 +536,136 @@ CREATE TABLE public.csv_uploads (
 );
 
 --
+-- Name: stock_changes_competitors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.stock_changes_competitors (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    competitor_id uuid,
+    integration_id uuid,
+    old_stock_quantity integer,
+    new_stock_quantity integer,
+    old_stock_status text,
+    new_stock_status text,
+    old_availability_date date,
+    new_availability_date date,
+    stock_change_quantity integer,
+    changed_at timestamp with time zone DEFAULT now(),
+    url text,
+    raw_stock_data jsonb,
+    CONSTRAINT stock_changes_source_check CHECK (((competitor_id IS NOT NULL) OR (integration_id IS NOT NULL)))
+);
+
+--
+-- Name: TABLE stock_changes_competitors; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.stock_changes_competitors IS 'Tracks stock level changes for competitor products over time';
+
+--
+-- Name: COLUMN stock_changes_competitors.stock_change_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_competitors.stock_change_quantity IS 'Calculated field: new_stock_quantity - old_stock_quantity';
+
+--
+-- Name: COLUMN stock_changes_competitors.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_competitors.raw_stock_data IS 'JSON data containing detailed stock information like product combinations/variants';
+
+--
+-- Name: COLUMN current_competitor_stock.current_stock_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.current_competitor_stock.current_stock_quantity IS 'Current stock quantity (most recent value)';
+
+--
+-- Name: COLUMN current_competitor_stock.current_stock_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.current_competitor_stock.current_stock_status IS 'Current stock status (most recent value)';
+
+--
+-- Name: COLUMN current_competitor_stock.last_stock_change; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.current_competitor_stock.last_stock_change IS 'Last recorded stock change quantity';
+
+--
+-- Name: COLUMN current_competitor_stock.last_updated; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.current_competitor_stock.last_updated IS 'When this stock level was last updated';
+
+--
+-- Name: stock_changes_suppliers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.stock_changes_suppliers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    supplier_id uuid,
+    integration_id uuid,
+    old_stock_quantity integer,
+    new_stock_quantity integer,
+    old_stock_status text,
+    new_stock_status text,
+    old_availability_date date,
+    new_availability_date date,
+    stock_change_quantity integer,
+    changed_at timestamp with time zone DEFAULT now(),
+    url text,
+    raw_stock_data jsonb,
+    CONSTRAINT stock_changes_suppliers_source_check CHECK (((supplier_id IS NOT NULL) OR (integration_id IS NOT NULL)))
+);
+
+--
+-- Name: TABLE stock_changes_suppliers; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.stock_changes_suppliers IS 'Tracks stock level changes for supplier products over time';
+
+--
+-- Name: COLUMN stock_changes_suppliers.stock_change_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_suppliers.stock_change_quantity IS 'Calculated field: new_stock_quantity - old_stock_quantity';
+
+--
+-- Name: COLUMN stock_changes_suppliers.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_suppliers.raw_stock_data IS 'JSON data containing detailed stock information';
+
+--
+-- Name: COLUMN current_supplier_stock.current_stock_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.current_supplier_stock.current_stock_quantity IS 'Current stock quantity (most recent value)';
+
+--
+-- Name: COLUMN current_supplier_stock.current_stock_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.current_supplier_stock.current_stock_status IS 'Current stock status (most recent value)';
+
+--
+-- Name: COLUMN current_supplier_stock.last_stock_change; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.current_supplier_stock.last_stock_change IS 'Last recorded stock change quantity';
+
+--
+-- Name: COLUMN current_supplier_stock.last_updated; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.current_supplier_stock.last_updated IS 'When this stock level was last updated';
+
+--
 -- Name: debug_logs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1032,8 +1162,36 @@ CREATE TABLE public.temp_competitors_scraped_data (
     ean text,
     currency_code text,
     raw_data jsonb,
+    stock_quantity integer,
+    stock_status text,
+    availability_date date,
+    raw_stock_data jsonb,
     CONSTRAINT temp_competitors_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
 );
+
+--
+-- Name: COLUMN temp_competitors_scraped_data.stock_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_competitors_scraped_data.stock_quantity IS 'Numeric stock quantity extracted from competitor site';
+
+--
+-- Name: COLUMN temp_competitors_scraped_data.stock_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_competitors_scraped_data.stock_status IS 'Text stock status (e.g., "I lager", "Ej i lager")';
+
+--
+-- Name: COLUMN temp_competitors_scraped_data.availability_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_competitors_scraped_data.availability_date IS 'Future availability date if product is out of stock';
+
+--
+-- Name: COLUMN temp_competitors_scraped_data.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_competitors_scraped_data.raw_stock_data IS 'Raw stock data from scraper including combinations and metadata';
 
 --
 -- Name: temp_integrations_scraped_data; Type: TABLE; Schema: public; Owner: -
@@ -1059,8 +1217,36 @@ CREATE TABLE public.temp_integrations_scraped_data (
     processed_at timestamp with time zone,
     currency_code text,
     url text,
+    stock_quantity integer,
+    stock_status text,
+    availability_date date,
+    raw_stock_data jsonb,
     CONSTRAINT temp_integrations_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
 );
+
+--
+-- Name: COLUMN temp_integrations_scraped_data.stock_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_integrations_scraped_data.stock_quantity IS 'Numeric stock quantity from integration';
+
+--
+-- Name: COLUMN temp_integrations_scraped_data.stock_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_integrations_scraped_data.stock_status IS 'Text stock status from integration';
+
+--
+-- Name: COLUMN temp_integrations_scraped_data.availability_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_integrations_scraped_data.availability_date IS 'Future availability date if product is out of stock';
+
+--
+-- Name: COLUMN temp_integrations_scraped_data.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_integrations_scraped_data.raw_stock_data IS 'Raw stock data from integration including detailed stock information';
 
 --
 -- Name: temp_suppliers_scraped_data; Type: TABLE; Schema: public; Owner: -
@@ -1082,14 +1268,17 @@ CREATE TABLE public.temp_suppliers_scraped_data (
     image_url text,
     minimum_order_quantity integer DEFAULT 1,
     lead_time_days integer,
-    stock_level integer,
+    stock_quantity integer,
     product_description text,
     category text,
     scraped_at timestamp with time zone DEFAULT now(),
     processed boolean DEFAULT false,
     created_at timestamp with time zone DEFAULT now(),
     supplier_recommended_price numeric(10,2),
-    raw_data jsonb
+    raw_data jsonb,
+    stock_status text,
+    availability_date date,
+    raw_stock_data jsonb
 );
 
 --
@@ -1099,10 +1288,34 @@ CREATE TABLE public.temp_suppliers_scraped_data (
 COMMENT ON COLUMN public.temp_suppliers_scraped_data.supplier_price IS 'Supplier cost price (what they charge us)';
 
 --
+-- Name: COLUMN temp_suppliers_scraped_data.stock_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.stock_quantity IS 'Numeric stock quantity from supplier (renamed from stock_level)';
+
+--
 -- Name: COLUMN temp_suppliers_scraped_data.supplier_recommended_price; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.temp_suppliers_scraped_data.supplier_recommended_price IS 'Supplier recommended retail price (what they suggest we charge customers)';
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.stock_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.stock_status IS 'Text stock status from supplier';
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.availability_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.availability_date IS 'Future availability date if product is out of stock';
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.raw_stock_data IS 'Raw stock data from supplier including detailed stock information';
 
 --
 -- Name: user_custom_fields; Type: TABLE; Schema: public; Owner: -
@@ -1696,6 +1909,20 @@ ALTER TABLE ONLY public.scrapers
     ADD CONSTRAINT scrapers_pkey PRIMARY KEY (id);
 
 --
+-- Name: stock_changes_competitors stock_changes_competitors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_competitors
+    ADD CONSTRAINT stock_changes_competitors_pkey PRIMARY KEY (id);
+
+--
+-- Name: stock_changes_suppliers stock_changes_suppliers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_suppliers
+    ADD CONSTRAINT stock_changes_suppliers_pkey PRIMARY KEY (id);
+
+--
 -- Name: suppliers suppliers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2023,6 +2250,62 @@ ALTER TABLE ONLY public.dismissed_duplicates
 
 ALTER TABLE ONLY public.dismissed_duplicates
     ADD CONSTRAINT dismissed_duplicates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: stock_changes_competitors fk_stock_competitors_competitor; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_competitors
+    ADD CONSTRAINT fk_stock_competitors_competitor FOREIGN KEY (competitor_id) REFERENCES public.competitors(id) ON DELETE CASCADE;
+
+--
+-- Name: stock_changes_competitors fk_stock_competitors_integration; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_competitors
+    ADD CONSTRAINT fk_stock_competitors_integration FOREIGN KEY (integration_id) REFERENCES public.integrations(id) ON DELETE CASCADE;
+
+--
+-- Name: stock_changes_competitors fk_stock_competitors_product; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_competitors
+    ADD CONSTRAINT fk_stock_competitors_product FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE;
+
+--
+-- Name: stock_changes_competitors fk_stock_competitors_user; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_competitors
+    ADD CONSTRAINT fk_stock_competitors_user FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+--
+-- Name: stock_changes_suppliers fk_stock_suppliers_integration; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_suppliers
+    ADD CONSTRAINT fk_stock_suppliers_integration FOREIGN KEY (integration_id) REFERENCES public.integrations(id) ON DELETE CASCADE;
+
+--
+-- Name: stock_changes_suppliers fk_stock_suppliers_product; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_suppliers
+    ADD CONSTRAINT fk_stock_suppliers_product FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE;
+
+--
+-- Name: stock_changes_suppliers fk_stock_suppliers_supplier; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_suppliers
+    ADD CONSTRAINT fk_stock_suppliers_supplier FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id) ON DELETE CASCADE;
+
+--
+-- Name: stock_changes_suppliers fk_stock_suppliers_user; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_suppliers
+    ADD CONSTRAINT fk_stock_suppliers_user FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 --
 -- Name: integration_runs integration_runs_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -2580,6 +2863,18 @@ ALTER TABLE public.scraper_runs ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.scrapers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: stock_changes_competitors; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.stock_changes_competitors ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: stock_changes_suppliers; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.stock_changes_suppliers ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: suppliers; Type: ROW SECURITY; Schema: public; Owner: -

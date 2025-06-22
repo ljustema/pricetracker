@@ -161,7 +161,7 @@ interface _ScrapedProductData {
       stock_type: number;
       empty_stock_text?: string;
     }> | null;
-    raw_data: Record<string, any> | null;
+    raw_data: Record<string, unknown> | null;
   } | null;
   // Add other fields as needed
 }

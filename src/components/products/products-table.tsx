@@ -3,8 +3,9 @@
 import Link from "next/link";
 import Image from "next/image";
 import DeleteButton from "@/components/ui/delete-button";
-import type { Product } from "@/lib/services/product-service"; // Import the shared type
+import type { Product, StockChange } from "@/lib/services/product-service"; // Import the shared type
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter"; // Import our new hook
+import { StockBadgeCompact } from "@/components/ui/stock-badge";
 
 // Removed unused CompetitorPrice interface
 
@@ -13,10 +14,11 @@ import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter"; // Import o
 interface ProductsTableProps {
   products: Product[];
   competitors: { id: string; name: string }[];
+  stockData?: Map<string, StockChange[]>;
   onDelete?: (productId: string) => void;
 }
 
-export default function ProductsTable({ products, competitors, onDelete }: ProductsTableProps) {
+export default function ProductsTable({ products, competitors, stockData, onDelete }: ProductsTableProps) {
   const { formatPrice } = useCurrencyFormatter();
 
   // Ensure products have competitor_prices and source_prices
@@ -103,6 +105,16 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                 className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
               >
                 {competitor.name}
+              </th>
+            ))}
+            {/* Stock columns for each competitor */}
+            {sortedCompetitors.map((competitor) => (
+              <th
+                key={`${competitor.id}-stock`}
+                scope="col"
+                className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+              >
+                {competitor.name} Stock
               </th>
             ))}
             <th scope="col" className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
@@ -255,6 +267,28 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                           </span>
                         )}
                       </div>
+                    ) : (
+                      <div className="text-sm text-gray-500">-</div>
+                    )}
+                  </td>
+                );
+              })}
+              {/* Stock cells for each competitor */}
+              {sortedCompetitors.map((competitor) => {
+                // Get stock data for this product and competitor
+                const productStockData = stockData?.get(product.id) || [];
+                const competitorStock = productStockData.find(
+                  (stock) => stock.competitor_id === competitor.id || stock.integration_id === competitor.id
+                );
+
+                return (
+                  <td key={`${competitor.id}-stock`} className="whitespace-nowrap px-6 py-4">
+                    {competitorStock ? (
+                      <StockBadgeCompact
+                        stockQuantity={competitorStock.current_stock_quantity ?? null}
+                        stockStatus={competitorStock.current_stock_status ?? null}
+                        availabilityDate={competitorStock.current_availability_date ?? null}
+                      />
                     ) : (
                       <div className="text-sm text-gray-500">-</div>
                     )}

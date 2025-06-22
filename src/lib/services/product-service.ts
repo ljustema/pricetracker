@@ -26,6 +26,54 @@ export interface Product {
       source_name: string;
     }
   }; // New field for source prices with type information
+  competitor_stock?: { [key: string]: StockLevel }; // Added field for competitor stock levels { competitor_id: stock_data }
+  source_stock?: {
+    [key: string]: {
+      stock_quantity: number | null;
+      stock_status: string | null;
+      availability_date: string | null;
+      last_stock_change: number | null;
+      last_updated: string;
+      source_type: 'competitor' | 'integration';
+      source_name: string;
+    }
+  }; // New field for source stock with type information
+  currency_code?: string; // Add currency_code field
+  url?: string; // Add url field
+}
+
+export interface StockLevel {
+  stock_quantity: number | null;
+  stock_status: string | null;
+  availability_date: string | null;
+  last_stock_change: number | null;
+  last_updated: string;
+}
+
+export interface StockChange {
+  id: string;
+  product_id: string;
+  competitor_id?: string;
+  integration_id?: string;
+  source_id?: string; // Either competitor_id or integration_id
+  source_name?: string; // Name of the competitor or integration
+  source_type?: 'competitor' | 'integration';
+  current_stock_quantity?: number | null;
+  current_stock_status?: string | null;
+  current_availability_date?: string | null;
+  last_stock_change?: number | null;
+  changed_at: string;
+  source_website?: string;
+  url?: string; // URL to the product on the competitor's website
+  competitors?: {
+    id?: string;
+    name: string;
+    website?: string;
+  };
+  source?: {
+    name: string;
+    website?: string;
+  };
 }
 
 export interface ScrapedProduct {
@@ -501,5 +549,89 @@ export async function getFilteredProducts(
   } else {
     console.error("Unexpected response structure from get_products_filtered RPC:", data);
     throw new Error("Received unexpected data structure from the database function.");
+  }
+}
+
+/**
+ * Get the latest competitor and integration stock levels for a product
+ */
+export async function getLatestCompetitorStock(
+  userId: string,
+  productId: string
+): Promise<StockChange[]> {
+  const supabase = createSupabaseAdminClient();
+  const uuid = ensureUUID(userId);
+
+  // Use the database function that handles both competitor and integration stock
+  try {
+    const { data, error } = await supabase
+      .rpc('get_latest_competitor_stock', {
+        p_user_id: uuid,
+        p_product_id: productId
+      });
+
+    if (error) {
+      console.error("Error fetching latest stock:", error);
+      // Fall back to direct query
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from("stock_changes_competitors")
+        .select(`
+          *,
+          competitors(name, website)
+        `)
+        .eq("user_id", uuid)
+        .eq("product_id", productId)
+        .order("changed_at", { ascending: false });
+
+      if (fallbackError) {
+        console.error("Error in fallback latest stock query:", fallbackError);
+        return [];
+      }
+
+      // Get only the latest stock change for each competitor
+      const latestStock = new Map<string, StockChange>();
+      fallbackData.forEach((stockChange: StockChange) => {
+        const sourceId = stockChange.competitor_id || stockChange.integration_id;
+        if (sourceId && !latestStock.has(sourceId)) {
+          latestStock.set(sourceId, stockChange);
+        }
+      });
+
+      return Array.from(latestStock.values());
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error("Unexpected error fetching latest stock:", error);
+    return [];
+  }
+}
+
+/**
+ * Get stock changes for multiple products in a single batch query
+ */
+export async function getLatestCompetitorStockBatch(
+  userId: string,
+  productIds: string[]
+): Promise<StockChange[]> {
+  const supabase = createSupabaseAdminClient();
+  const uuid = ensureUUID(userId);
+
+  try {
+    const { data, error } = await supabase
+      .rpc('get_latest_competitor_stock_batch', {
+        p_user_id: uuid,
+        p_product_ids: productIds
+      });
+
+    if (error) {
+      console.error("Error fetching batch stock:", error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error("Unexpected error fetching batch stock:", error);
+    return [];
   }
 }
