@@ -147,6 +147,22 @@ interface _ScrapedProductData {
   ean?: string;
   competitor_id?: string; // Added competitor_id field
   raw_data?: Record<string, string | number | boolean | null> | null; // Custom fields data
+  // Stock tracking fields
+  stock_data?: {
+    quantity: number | null;
+    status: string | null;
+    availability_date: Date | null;
+    total_stock: number | null;
+    combinations_stock: Array<{
+      article_number: string;
+      stock: number;
+      price: number;
+      campaign_price?: number;
+      stock_type: number;
+      empty_stock_text?: string;
+    }> | null;
+    raw_data: Record<string, any> | null;
+  } | null;
   // Add other fields as needed
 }
 
@@ -1538,6 +1554,11 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
         brand: p.brand,
         ean: p.ean,
         raw_data: p.raw_data || null, // Include custom fields data
+        // Stock tracking fields
+        stock_quantity: p.stock_data?.quantity || null,
+        stock_status: p.stock_data?.status || null,
+        availability_date: p.stock_data?.availability_date || null,
+        raw_stock_data: p.stock_data?.raw_data || null,
         scraped_at: new Date().toISOString(),
     }));
 
