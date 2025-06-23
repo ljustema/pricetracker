@@ -4,10 +4,11 @@ import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import Image from "next/image";
 import Link from "next/link";
 import DeleteButton from "@/components/ui/delete-button";
-import { PriceChange } from "@/lib/services/product-service";
+import { PriceChange, StockChange } from "@/lib/services/product-service";
 import { SupplierPriceChange } from "@/lib/services/supplier-service";
 import PriceHistoryChart from "@/components/products/PriceHistoryChart";
 import ProductCustomFields from "@/components/products/ProductCustomFields";
+import { StockBadgeDetailed } from "@/components/ui/stock-badge";
 
 interface Product {
   id: string;
@@ -29,10 +30,13 @@ interface ClientProductPageProps {
   retailPrices: PriceChange[];
   retailPriceHistory: PriceChange[];
   supplierPrices: SupplierPriceChange[];
+  stockData: StockChange[];
 }
 
-export default function ClientProductPage({ product, retailPrices, retailPriceHistory, supplierPrices }: ClientProductPageProps) {
+export default function ClientProductPage({ product, retailPrices, retailPriceHistory, supplierPrices, stockData }: ClientProductPageProps) {
   const { formatPrice } = useCurrencyFormatter();
+
+
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -206,6 +210,12 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                         scope="col"
                         className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
                       >
+                        Stock
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
+                      >
                         Difference
                       </th>
                       <th
@@ -232,6 +242,12 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                       const priceDiff = product.our_retail_price && currentPrice
                         ? ((currentPrice - product.our_retail_price) / product.our_retail_price) * 100
                         : 0;
+
+                      // Find matching stock data for this competitor/integration
+                      const sourceId = priceChange.competitor_id || priceChange.integration_id;
+                      const matchingStock = stockData.find(stock =>
+                        stock.source_id === sourceId
+                      );
 
                       return (
                         <tr key={priceChange.id}>
@@ -269,6 +285,17 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                             </div>
                           </td>
                           <td className="whitespace-nowrap px-3 py-4 text-sm">
+                            {matchingStock ? (
+                              <StockBadgeDetailed
+                                stockQuantity={matchingStock.current_stock_quantity ?? null}
+                                stockStatus={matchingStock.current_stock_status ?? null}
+                                availabilityDate={matchingStock.current_availability_date ?? null}
+                              />
+                            ) : (
+                              <div className="text-sm text-gray-500">-</div>
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-4 text-sm">
                             {product.our_retail_price ? (
                               <span
                                 className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
@@ -287,7 +314,18 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                             )}
                           </td>
                           <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                            {new Date(priceChange.changed_at).toLocaleDateString()}
+                            <div className="space-y-1">
+                              <div>
+                                <span className="text-xs text-gray-400">Price:</span>{' '}
+                                {new Date(priceChange.changed_at).toLocaleDateString()}
+                              </div>
+                              {matchingStock && (
+                                <div>
+                                  <span className="text-xs text-gray-400">Stock:</span>{' '}
+                                  {new Date(matchingStock.changed_at).toLocaleDateString()}
+                                </div>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );

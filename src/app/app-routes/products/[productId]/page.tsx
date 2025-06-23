@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth/options";
 import { redirect } from "next/navigation";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import crypto from 'crypto';
-import { PriceChange as ServicePriceChange } from "@/lib/services/product-service";
+import { PriceChange as ServicePriceChange, StockChange } from "@/lib/services/product-service";
 import { SupplierPriceChange } from "@/lib/services/supplier-service";
 import ClientProductPage from "./client-page";
 
@@ -135,7 +135,7 @@ export default async function ProductPage({ params }: ProductPageProps) {
   }
 
   // Import the product service and supplier service
-  const { getLatestCompetitorPrices: getLatestPrices, getProductPriceHistory } = await import('@/lib/services/product-service');
+  const { getLatestCompetitorPrices: getLatestPrices, getProductPriceHistory, getLatestCompetitorStock } = await import('@/lib/services/product-service');
   const { getSupplierPriceChanges } = await import('@/lib/services/supplier-service');
 
   // Fetch latest retail prices for this product from all sources (competitors and integrations)
@@ -163,10 +163,19 @@ export default async function ProductPage({ params }: ProductPageProps) {
     console.error("Error fetching supplier prices:", error);
   }
 
+  // Fetch stock data for this product
+  let stockData: StockChange[] = [];
+  try {
+    stockData = await getLatestCompetitorStock(userId, productId);
+  } catch (error) {
+    console.error("Error fetching stock data:", error);
+  }
+
   return <ClientProductPage
     product={product}
     retailPrices={retailPrices}
     retailPriceHistory={retailPriceHistory}
     supplierPrices={supplierPrices}
+    stockData={stockData}
   />;
 }

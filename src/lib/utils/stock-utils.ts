@@ -13,10 +13,12 @@ export interface StockDisplayInfo {
  * Get display information for stock quantity and status
  */
 export function getStockDisplay(
-  stockQuantity: number | null, 
+  stockQuantity: number | null,
   stockStatus: string | null,
   availabilityDate?: string | null
 ): StockDisplayInfo {
+  // Debug logging
+  console.log('getStockDisplay called with:', { stockQuantity, stockStatus, availabilityDate });
   // Handle null/undefined stock
   if (stockQuantity === null && !stockStatus) {
     return { 
@@ -79,9 +81,9 @@ export function getStockDisplay(
         icon: "✅"
       };
     } else {
-      return { 
-        text: `${stockQuantity}+ in stock`, 
-        color: "green", 
+      return {
+        text: `${stockQuantity} in stock`,
+        color: "green",
         badge: "In Stock",
         icon: "✅"
       };
@@ -113,9 +115,19 @@ export function getStockDisplay(
           icon: "⚠️"
         };
       case 'back_order':
-        return { 
-          text: "Back order", 
-          color: "orange", 
+        // If we have a specific quantity for back orders, show it
+        if (stockQuantity !== null && stockQuantity < 0) {
+          const absStock = Math.abs(stockQuantity);
+          return {
+            text: `Pre-order (${absStock})`,
+            color: "orange",
+            badge: "Pre-order",
+            icon: "📋"
+          };
+        }
+        return {
+          text: "Back order",
+          color: "orange",
           badge: "Back Order",
           icon: "📋"
         };

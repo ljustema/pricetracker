@@ -588,12 +588,53 @@ export async function getLatestCompetitorStock(
         return [];
       }
 
-      // Get only the latest stock change for each competitor
+      // Get only the latest stock change for each competitor and add missing fields
       const latestStock = new Map<string, StockChange>();
-      fallbackData.forEach((stockChange: StockChange) => {
+      fallbackData.forEach((stockChange: {
+        id: string;
+        user_id: string;
+        product_id: string;
+        competitor_id?: string;
+        integration_id?: string;
+        old_stock_quantity?: number | null;
+        new_stock_quantity?: number | null;
+        old_stock_status?: string | null;
+        new_stock_status?: string | null;
+        old_availability_date?: string | null;
+        new_availability_date?: string | null;
+        stock_change_quantity?: number | null;
+        changed_at: string;
+        url?: string | null;
+        raw_stock_data?: Record<string, unknown> | null;
+        competitors?: {
+          name: string;
+          website?: string;
+        } | null;
+      }) => {
         const sourceId = stockChange.competitor_id || stockChange.integration_id;
         if (sourceId && !latestStock.has(sourceId)) {
-          latestStock.set(sourceId, stockChange);
+          // Add the missing fields that the database function would normally provide
+          const enhancedStockChange: StockChange = {
+            id: stockChange.id,
+            product_id: stockChange.product_id,
+            competitor_id: stockChange.competitor_id,
+            integration_id: stockChange.integration_id,
+            source_id: sourceId,
+            source_name: stockChange.competitors?.name || 'Unknown',
+            source_type: stockChange.competitor_id ? 'competitor' : 'integration',
+            source_website: stockChange.competitors?.website || '',
+            current_stock_quantity: stockChange.new_stock_quantity,
+            current_stock_status: stockChange.new_stock_status,
+            current_availability_date: stockChange.new_availability_date,
+            last_stock_change: stockChange.stock_change_quantity,
+            changed_at: stockChange.changed_at,
+            url: stockChange.url || undefined,
+            competitors: stockChange.competitors ? {
+              name: stockChange.competitors.name,
+              website: stockChange.competitors.website
+            } : undefined
+          };
+          latestStock.set(sourceId, enhancedStockChange);
         }
       });
 
