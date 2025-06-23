@@ -418,8 +418,24 @@ async function runGoogleFeedTest(integration: Integration, testRunLimit: number)
     throw new Error('No product items found in XML feed');
   }
 
-  // Get a sample of products for the test
-  const sampleItems = items.slice(0, testRunLimit);
+  // Get a random sample of products for the test
+  const sampleItems = [];
+  const totalItems = items.length;
+  const sampleSize = Math.min(testRunLimit, totalItems);
+
+  // Create array of random indices
+  const randomIndices = [];
+  while (randomIndices.length < sampleSize) {
+    const randomIndex = Math.floor(Math.random() * totalItems);
+    if (!randomIndices.includes(randomIndex)) {
+      randomIndices.push(randomIndex);
+    }
+  }
+
+  // Get items at random indices
+  for (const index of randomIndices) {
+    sampleItems.push(items[index]);
+  }
   const sampleProducts = sampleItems.map((item, index) => {
     // Helper function to get value from XML item
     const getValue = (obj: Record<string, unknown> | null, key: string): string | null => {
@@ -455,7 +471,7 @@ async function runGoogleFeedTest(integration: Integration, testRunLimit: number)
       return null;
     };
 
-    const priceStr = getValue(item, 'g:price') || getValue(item, 'g:sale_price');
+    const priceStr = getValue(item, 'g:sale_price') || getValue(item, 'g:price');
     const costStr = getValue(item, 'g:cost_of_goods_sold');
 
     return {

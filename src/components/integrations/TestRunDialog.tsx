@@ -65,9 +65,11 @@ export function TestRunDialog({ open, onOpenChange, integration, onStartFullSync
   useEffect(() => {
     if (!testRunId) return;
 
-    const pollInterval = setInterval(async () => {
+    setPolling(true);
+    let pollCount = 0;
+
+    const poll = async () => {
       try {
-        setPolling(true);
         const response = await fetch(`/api/integrations/test-run/${testRunId}`);
 
         if (!response.ok) {
@@ -83,16 +85,36 @@ export function TestRunDialog({ open, onOpenChange, integration, onStartFullSync
             products: data.products || [],
             error: data.error_message,
           });
-          clearInterval(pollInterval);
           setPolling(false);
+          return true; // Stop polling
         }
+
+        return false; // Continue polling
       } catch (error) {
         console.error('Error polling test run status:', error);
-        // Don't clear the interval on error, keep trying
+        return false; // Continue polling on error
       }
-    }, 30000); // Poll every 30 seconds
+    };
 
-    return () => clearInterval(pollInterval);
+    // Initial poll
+    poll().then(shouldStop => {
+      if (shouldStop) return;
+
+      // Set up interval polling with adaptive timing
+      const pollInterval = setInterval(async () => {
+        pollCount++;
+        const shouldStop = await poll();
+
+        if (shouldStop) {
+          clearInterval(pollInterval);
+        }
+      }, pollCount < 4 ? 5000 : 15000); // Poll every 5s for first 4 attempts, then every 15s
+
+      // Cleanup function
+      return () => clearInterval(pollInterval);
+    });
+
+    return () => setPolling(false);
   }, [testRunId]);
 
   // Start a test run
@@ -217,7 +239,7 @@ export function TestRunDialog({ open, onOpenChange, integration, onStartFullSync
                   {loading || polling ? (
                     <>
                       <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                      {loading ? 'Starting Test Run...' : 'Fetching Products...'}
+                      {loading ? 'Creating Test Run...' : 'Test Run in Progress...'}
                     </>
                   ) : (
                     'Start Test Run'
@@ -228,26 +250,49 @@ export function TestRunDialog({ open, onOpenChange, integration, onStartFullSync
 
             {(loading || polling) && (
               <div className="space-y-4 mt-4">
-                <div className="flex items-center space-x-4">
-                  <Skeleton className="h-12 w-12 rounded-full" />
-                  <div className="space-y-2">
-                    <Skeleton className="h-4 w-[250px]" />
-                    <Skeleton className="h-4 w-[200px]" />
+                <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+                  <div className="flex items-center space-x-3">
+                    <RefreshCw className="h-5 w-5 text-blue-500 animate-spin" />
+                    <div>
+                      <h3 className="font-medium text-blue-800">
+                        {loading ? 'Creating Test Run...' : 'Waiting for Worker...'}
+                      </h3>
+                      <p className="text-sm text-blue-700 mt-1">
+                        {loading
+                          ? 'Setting up your test run request...'
+                          : 'Your test run is queued and waiting for an available worker to process it. This usually takes 30-60 seconds.'
+                        }
+                      </p>
+                    </div>
                   </div>
+
+                  {polling && (
+                    <div className="mt-3 space-y-2">
+                      <div className="text-xs text-blue-600 font-medium">Progress:</div>
+                      <div className="flex items-center space-x-2 text-xs text-blue-600">
+                        <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                        <span>Test run created</span>
+                      </div>
+                      <div className="flex items-center space-x-2 text-xs text-blue-600">
+                        <RefreshCw className="w-2 h-2 animate-spin" />
+                        <span>Waiting for worker to pick up the job...</span>
+                      </div>
+                      <div className="flex items-center space-x-2 text-xs text-gray-400">
+                        <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
+                        <span>Fetching products from your feed</span>
+                      </div>
+                      <div className="flex items-center space-x-2 text-xs text-gray-400">
+                        <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
+                        <span>Processing and displaying results</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center space-x-4">
-                  <Skeleton className="h-12 w-12 rounded-full" />
-                  <div className="space-y-2">
-                    <Skeleton className="h-4 w-[250px]" />
-                    <Skeleton className="h-4 w-[200px]" />
-                  </div>
-                </div>
-                <div className="flex items-center space-x-4">
-                  <Skeleton className="h-12 w-12 rounded-full" />
-                  <div className="space-y-2">
-                    <Skeleton className="h-4 w-[250px]" />
-                    <Skeleton className="h-4 w-[200px]" />
-                  </div>
+
+                <div className="text-center">
+                  <p className="text-sm text-gray-500">
+                    Please wait and do not close this dialog. The test will complete automatically.
+                  </p>
                 </div>
               </div>
             )}
