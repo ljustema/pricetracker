@@ -440,13 +440,34 @@ async function runGoogleFeedTest(integration: Integration, testRunLimit: number)
       return value.toString().trim();
     };
 
+    // Helper function to parse price from string (e.g., "350 SEK" -> 350)
+    const parsePrice = (priceStr: string | null): number | null => {
+      if (!priceStr) return null;
+
+      // Extract numeric value from price string
+      const match = priceStr.match(/[\d,]+\.?\d*/);
+      if (match) {
+        const numericValue = match[0].replace(/,/g, '');
+        const parsed = parseFloat(numericValue);
+        return isNaN(parsed) ? null : parsed;
+      }
+
+      return null;
+    };
+
+    const priceStr = getValue(item, 'g:price') || getValue(item, 'g:sale_price');
+    const costStr = getValue(item, 'g:cost_of_goods_sold');
+
     return {
       id: getValue(item, 'g:id') || `item-${index}`,
       name: getValue(item, 'title') || 'Unknown Product',
-      price: getValue(item, 'g:price') || getValue(item, 'g:sale_price') || 'N/A',
-      brand: getValue(item, 'g:brand') || 'N/A',
-      sku: getValue(item, 'g:mpn') || 'N/A',
-      ean: getValue(item, 'g:gtin') || 'N/A'
+      price: parsePrice(priceStr) || 0,
+      wholesale_price: parsePrice(costStr),
+      reference: getValue(item, 'g:mpn') || '',
+      ean13: getValue(item, 'g:gtin') || '',
+      manufacturer_name: getValue(item, 'g:brand') || '',
+      image_url: getValue(item, 'g:image_link') || '',
+      active: true // Google Feed products are typically active
     };
   });
 
