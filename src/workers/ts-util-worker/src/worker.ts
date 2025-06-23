@@ -419,12 +419,12 @@ async function runGoogleFeedTest(integration: Integration, testRunLimit: number)
   }
 
   // Get a random sample of products for the test
-  const sampleItems = [];
+  const sampleItems: Record<string, unknown>[] = [];
   const totalItems = items.length;
   const sampleSize = Math.min(testRunLimit, totalItems);
 
   // Create array of random indices
-  const randomIndices = [];
+  const randomIndices: number[] = [];
   while (randomIndices.length < sampleSize) {
     const randomIndex = Math.floor(Math.random() * totalItems);
     if (!randomIndices.includes(randomIndex)) {
