@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-06-22 16:40:30
+-- Generated: 2025-06-23 15:56:10
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -536,136 +536,6 @@ CREATE TABLE public.csv_uploads (
 );
 
 --
--- Name: stock_changes_competitors; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.stock_changes_competitors (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    product_id uuid NOT NULL,
-    competitor_id uuid,
-    integration_id uuid,
-    old_stock_quantity integer,
-    new_stock_quantity integer,
-    old_stock_status text,
-    new_stock_status text,
-    old_availability_date date,
-    new_availability_date date,
-    stock_change_quantity integer,
-    changed_at timestamp with time zone DEFAULT now(),
-    url text,
-    raw_stock_data jsonb,
-    CONSTRAINT stock_changes_source_check CHECK (((competitor_id IS NOT NULL) OR (integration_id IS NOT NULL)))
-);
-
---
--- Name: TABLE stock_changes_competitors; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.stock_changes_competitors IS 'Tracks stock level changes for competitor products over time';
-
---
--- Name: COLUMN stock_changes_competitors.stock_change_quantity; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.stock_changes_competitors.stock_change_quantity IS 'Calculated field: new_stock_quantity - old_stock_quantity';
-
---
--- Name: COLUMN stock_changes_competitors.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.stock_changes_competitors.raw_stock_data IS 'JSON data containing detailed stock information like product combinations/variants';
-
---
--- Name: COLUMN current_competitor_stock.current_stock_quantity; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.current_competitor_stock.current_stock_quantity IS 'Current stock quantity (most recent value)';
-
---
--- Name: COLUMN current_competitor_stock.current_stock_status; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.current_competitor_stock.current_stock_status IS 'Current stock status (most recent value)';
-
---
--- Name: COLUMN current_competitor_stock.last_stock_change; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.current_competitor_stock.last_stock_change IS 'Last recorded stock change quantity';
-
---
--- Name: COLUMN current_competitor_stock.last_updated; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.current_competitor_stock.last_updated IS 'When this stock level was last updated';
-
---
--- Name: stock_changes_suppliers; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.stock_changes_suppliers (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    product_id uuid NOT NULL,
-    supplier_id uuid,
-    integration_id uuid,
-    old_stock_quantity integer,
-    new_stock_quantity integer,
-    old_stock_status text,
-    new_stock_status text,
-    old_availability_date date,
-    new_availability_date date,
-    stock_change_quantity integer,
-    changed_at timestamp with time zone DEFAULT now(),
-    url text,
-    raw_stock_data jsonb,
-    CONSTRAINT stock_changes_suppliers_source_check CHECK (((supplier_id IS NOT NULL) OR (integration_id IS NOT NULL)))
-);
-
---
--- Name: TABLE stock_changes_suppliers; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.stock_changes_suppliers IS 'Tracks stock level changes for supplier products over time';
-
---
--- Name: COLUMN stock_changes_suppliers.stock_change_quantity; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.stock_changes_suppliers.stock_change_quantity IS 'Calculated field: new_stock_quantity - old_stock_quantity';
-
---
--- Name: COLUMN stock_changes_suppliers.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.stock_changes_suppliers.raw_stock_data IS 'JSON data containing detailed stock information';
-
---
--- Name: COLUMN current_supplier_stock.current_stock_quantity; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.current_supplier_stock.current_stock_quantity IS 'Current stock quantity (most recent value)';
-
---
--- Name: COLUMN current_supplier_stock.current_stock_status; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.current_supplier_stock.current_stock_status IS 'Current stock status (most recent value)';
-
---
--- Name: COLUMN current_supplier_stock.last_stock_change; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.current_supplier_stock.last_stock_change IS 'Last recorded stock change quantity';
-
---
--- Name: COLUMN current_supplier_stock.last_updated; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.current_supplier_stock.last_updated IS 'When this stock level was last updated';
-
---
 -- Name: debug_logs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1074,6 +944,86 @@ COMMENT ON COLUMN public.scrapers.last_products_per_second IS 'Products per seco
 --
 
 COMMENT ON COLUMN public.scrapers.scrape_only_own_products IS 'Flag to only scrape products matching the user''s own product catalog (based on EAN/SKU/Brand matching)';
+
+--
+-- Name: stock_changes_competitors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.stock_changes_competitors (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    competitor_id uuid,
+    integration_id uuid,
+    old_stock_quantity integer,
+    new_stock_quantity integer,
+    old_stock_status text,
+    new_stock_status text,
+    old_availability_date date,
+    new_availability_date date,
+    stock_change_quantity integer,
+    changed_at timestamp with time zone DEFAULT now(),
+    raw_stock_data jsonb,
+    CONSTRAINT stock_changes_source_check CHECK (((competitor_id IS NOT NULL) OR (integration_id IS NOT NULL)))
+);
+
+--
+-- Name: TABLE stock_changes_competitors; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.stock_changes_competitors IS 'Tracks stock level changes for competitor products over time';
+
+--
+-- Name: COLUMN stock_changes_competitors.stock_change_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_competitors.stock_change_quantity IS 'Calculated field: new_stock_quantity - old_stock_quantity';
+
+--
+-- Name: COLUMN stock_changes_competitors.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_competitors.raw_stock_data IS 'JSON data containing detailed stock information like product combinations/variants';
+
+--
+-- Name: stock_changes_suppliers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.stock_changes_suppliers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    supplier_id uuid,
+    integration_id uuid,
+    old_stock_quantity integer,
+    new_stock_quantity integer,
+    old_stock_status text,
+    new_stock_status text,
+    old_availability_date date,
+    new_availability_date date,
+    stock_change_quantity integer,
+    changed_at timestamp with time zone DEFAULT now(),
+    raw_stock_data jsonb,
+    CONSTRAINT stock_changes_suppliers_source_check CHECK (((supplier_id IS NOT NULL) OR (integration_id IS NOT NULL)))
+);
+
+--
+-- Name: TABLE stock_changes_suppliers; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.stock_changes_suppliers IS 'Tracks stock level changes for supplier products over time';
+
+--
+-- Name: COLUMN stock_changes_suppliers.stock_change_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_suppliers.stock_change_quantity IS 'Calculated field: new_stock_quantity - old_stock_quantity';
+
+--
+-- Name: COLUMN stock_changes_suppliers.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_suppliers.raw_stock_data IS 'JSON data containing detailed stock information';
 
 --
 -- Name: suppliers; Type: TABLE; Schema: public; Owner: -

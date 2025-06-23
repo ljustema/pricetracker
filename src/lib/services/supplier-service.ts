@@ -33,17 +33,17 @@ export interface SupplierPriceChange {
   product_id: string;
   supplier_id?: string;
   integration_id?: string;
-  old_supplier_price?: number;
-  new_supplier_price?: number;
-  old_supplier_recommended_price?: number;
-  new_supplier_recommended_price?: number;
-  old_our_wholesale_price?: number;
-  new_our_wholesale_price?: number;
-  price_change_percentage?: number;
+  old_supplier_price?: number | string; // Can be string from DB
+  new_supplier_price?: number | string; // Can be string from DB
+  old_supplier_recommended_price?: number | string; // Can be string from DB
+  new_supplier_recommended_price?: number | string; // Can be string from DB
+  old_our_wholesale_price?: number | string; // Can be string from DB
+  new_our_wholesale_price?: number | string; // Can be string from DB
+  price_change_percentage?: number | string; // Can be string from DB
   currency_code: string;
   url?: string;
-  minimum_order_quantity?: number;
-  lead_time_days?: number;
+  minimum_order_quantity?: number | string; // Can be string from DB
+  lead_time_days?: number | string; // Can be string from DB
   changed_at: string;
   change_source: 'manual' | 'csv' | 'scraper' | 'integration';
   suppliers?: {

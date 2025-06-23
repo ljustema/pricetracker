@@ -27,38 +27,13 @@ interface ChartDataPoint {
   date: string;
   formattedDate: string;
   competitorPrice: number | null;
+  competitorName: string | null; // Track which competitor has the lowest price
   integrationPrice: number | null;
   supplierPrice: number | null;
   ourPrice: number | null;
 }
 
 type ChartMode = 'retail' | 'supplier';
-
-// Custom dot component to show different colors based on price comparison
-const CustomDot = (props: { cx?: number; cy?: number; payload?: ChartDataPoint }) => {
-  const { cx, cy, payload } = props;
-
-  // Only render dots at price change points
-  if (!payload || !payload.integrationPrice || !payload.competitorPrice) {
-    return null;
-  }
-
-  // Determine color based on price comparison
-  const color = payload.integrationPrice < payload.competitorPrice
-    ? "#10b981" // Green when cheaper
-    : "#ef4444"; // Red when more expensive
-
-  return (
-    <circle
-      cx={cx}
-      cy={cy}
-      r={4}
-      fill={color}
-      stroke="white"
-      strokeWidth={1}
-    />
-  );
-};
 
 const PriceHistoryChart = ({
   retailPriceHistory = [],
@@ -100,7 +75,10 @@ const PriceHistoryChart = ({
 
       // Get the date range
       const allChanges = [...competitorPrices, ...integrationPrices];
-      if (allChanges.length === 0) return { chartData: [] };
+
+      if (allChanges.length === 0) {
+        return { chartData: [] };
+      }
 
       const startDate = new Date(Math.min(...allChanges.map(c => new Date(c.changed_at).getTime())));
       const endDate = new Date();
@@ -119,15 +97,23 @@ const PriceHistoryChart = ({
 
       // Track the latest prices
       let lastCompetitorPrice: number | null = null;
+      let lastCompetitorName: string | null = null;
       let lastIntegrationPrice: number | null = null;
 
-      // Create a map of competitor prices by date - keep the LOWEST price for each date
-      const competitorPricesByDate = new Map<string, number>();
+      // Create a map of competitor prices by date with competitor info
+      const competitorPricesByDate = new Map<string, { price: number; name: string }[]>();
       competitorPrices.forEach(change => {
         const dateStr = new Date(change.changed_at).toISOString().split('T')[0];
         const price = change.new_competitor_price;
-        if (price && (!competitorPricesByDate.has(dateStr) || price < competitorPricesByDate.get(dateStr)!)) {
-          competitorPricesByDate.set(dateStr, price);
+        // Convert string to number if needed
+        const numericPrice = typeof price === 'string' ? parseFloat(price) : price;
+        const competitorName = change.source_name || change.competitors?.name || 'Unknown Competitor';
+
+        if (numericPrice) {
+          if (!competitorPricesByDate.has(dateStr)) {
+            competitorPricesByDate.set(dateStr, []);
+          }
+          competitorPricesByDate.get(dateStr)!.push({ price: numericPrice, name: competitorName });
         }
       });
 
@@ -136,24 +122,46 @@ const PriceHistoryChart = ({
       integrationPrices.forEach(change => {
         const dateStr = new Date(change.changed_at).toISOString().split('T')[0];
         const price = change.new_our_retail_price;
-        if (price) {
-          integrationPricesByDate.set(dateStr, price);
+        // Convert string to number if needed
+        const numericPrice = typeof price === 'string' ? parseFloat(price) : price;
+        if (numericPrice) {
+          integrationPricesByDate.set(dateStr, numericPrice);
         }
       });
 
       // First, find the earliest integration price and backfill it to the start
       if (integrationPrices.length > 0) {
         const earliestIntegrationPrice = integrationPrices[0].new_our_retail_price;
-        if (earliestIntegrationPrice) {
-          lastIntegrationPrice = earliestIntegrationPrice;
+        // Convert string to number if needed
+        const numericPrice = typeof earliestIntegrationPrice === 'string' ? parseFloat(earliestIntegrationPrice) : earliestIntegrationPrice;
+        if (numericPrice) {
+          lastIntegrationPrice = numericPrice;
         }
       }
 
+      // Track current prices for all competitors
+      const currentCompetitorPrices = new Map<string, { price: number; name: string }>();
+
       // Create data points for each date
       allDates.forEach(dateStr => {
-        // Get competitor price for this date or use the last known price
+        // Check if there are new competitor prices for this date
         if (competitorPricesByDate.has(dateStr)) {
-          lastCompetitorPrice = competitorPricesByDate.get(dateStr)!;
+          const dayPrices = competitorPricesByDate.get(dateStr)!;
+          // Update current prices for competitors that changed on this date
+          dayPrices.forEach(priceEntry => {
+            const competitorKey = priceEntry.name;
+            currentCompetitorPrices.set(competitorKey, priceEntry);
+          });
+        }
+
+        // Find the current lowest competitor price from all active competitors
+        if (currentCompetitorPrices.size > 0) {
+          const allCurrentPrices = Array.from(currentCompetitorPrices.values());
+          const lowestPriceEntry = allCurrentPrices.reduce((lowest, current) =>
+            current.price < lowest.price ? current : lowest
+          );
+          lastCompetitorPrice = lowestPriceEntry.price;
+          lastCompetitorName = lowestPriceEntry.name;
         }
 
         // Get integration price for this date or use the last known price
@@ -170,6 +178,7 @@ const PriceHistoryChart = ({
           date: dateStr,
           formattedDate,
           competitorPrice: lastCompetitorPrice,
+          competitorName: lastCompetitorName,
           integrationPrice: lastIntegrationPrice,
           supplierPrice: null,
           ourPrice: lastIntegrationPrice
@@ -207,8 +216,10 @@ const PriceHistoryChart = ({
       supplierPrices.forEach(change => {
         const dateStr = new Date(change.changed_at).toISOString().split('T')[0];
         const price = change.new_supplier_price;
-        if (price && (!supplierPricesByDate.has(dateStr) || price < supplierPricesByDate.get(dateStr)!)) {
-          supplierPricesByDate.set(dateStr, price);
+        // Convert string to number if needed
+        const numericPrice = typeof price === 'string' ? parseFloat(price) : price;
+        if (numericPrice && (!supplierPricesByDate.has(dateStr) || numericPrice < supplierPricesByDate.get(dateStr)!)) {
+          supplierPricesByDate.set(dateStr, numericPrice);
         }
       });
 
@@ -225,6 +236,7 @@ const PriceHistoryChart = ({
           date: dateStr,
           formattedDate,
           competitorPrice: null,
+          competitorName: null,
           integrationPrice: null,
           supplierPrice: lastSupplierPrice,
           ourPrice: lastOurWholesalePrice
@@ -235,75 +247,16 @@ const PriceHistoryChart = ({
     }
   }, [retailPriceHistory, supplierPriceHistory, chartMode, ourWholesalePrice]);
 
-  // Define a type for the tooltip entry
-  interface TooltipEntry {
-    dataKey: string;
-    name: string;
-    value: number | null;
-    payload: ChartDataPoint;
-  }
 
-  // Custom tooltip to format prices
-  const CustomTooltip = ({
-    active,
-    payload,
-    label
-  }: {
-    active?: boolean;
-    payload?: TooltipEntry[];
-    label?: string
-  }) => {
-    if (active && payload && payload.length) {
-      // Find the data point for this date
-      const dataPoint = chartData.find(point => point.date === label);
-
-      if (!dataPoint) return null;
-
-      // Calculate if our price is lower
-      const isOurPriceLower = dataPoint.integrationPrice !== null &&
-                             dataPoint.competitorPrice !== null &&
-                             dataPoint.integrationPrice < dataPoint.competitorPrice;
-
-      return (
-        <div className="bg-white p-3 border border-gray-200 shadow-sm rounded-md">
-          <p className="font-medium">{dataPoint.formattedDate}</p>
-          {payload.map((entry, index) => {
-            // Set the correct color for each entry
-            let color;
-            if (entry.dataKey === "integrationPrice") {
-              // For integration prices, use green when cheaper, red when more expensive
-              color = isOurPriceLower ? "#10b981" : "#ef4444";
-            } else {
-              // For competitor prices, use blue
-              color = "#6366f1";
-            }
-
-            return entry.value !== null && (
-              <p key={index} style={{ color }}>
-                {entry.name}: {formatPrice(entry.value)}
-              </p>
-            );
-          })}
-          {dataPoint.integrationPrice !== null && dataPoint.competitorPrice !== null && (
-            <p className={`text-xs mt-1 ${isOurPriceLower ? "text-green-600" : "text-red-600"}`}>
-              {isOurPriceLower
-                ? `${((1 - (dataPoint.integrationPrice / dataPoint.competitorPrice)) * 100).toFixed(1)}% cheaper than competitors`
-                : `${(((dataPoint.integrationPrice / dataPoint.competitorPrice) - 1) * 100).toFixed(1)}% more expensive than competitors`}
-            </p>
-          )}
-        </div>
-      );
-    }
-    return null;
-  };
 
   // We no longer need to track the last known prices since we removed the reference line
 
   // Chart data is ready for rendering
 
   // Check if we have data for the current mode
-  const hasData = (chartMode === 'retail' && retailPriceHistory.length > 0) ||
-                  (chartMode === 'supplier' && supplierPriceHistory.length > 0);
+  const hasData = chartData.length > 0;
+
+
 
   return (
     <div className="w-full mt-4">
@@ -344,83 +297,89 @@ const PriceHistoryChart = ({
         >
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis
-            dataKey="date"
-            tickFormatter={(dateStr) => {
-              const date = new Date(dateStr);
-              return `${date.getDate()}/${date.getMonth() + 1}`;
-            }}
-            interval="preserveStartEnd"
-            minTickGap={40}
+            dataKey="formattedDate"
           />
           <YAxis
             tickFormatter={(value) => formatPrice(value)}
-            domain={['auto', 'auto']}
-            padding={{ top: 40 }}
           />
-          <Tooltip content={<CustomTooltip />} />
+          <Tooltip
+            content={(props) => {
+              if (!props.active || !props.payload || !props.payload.length) {
+                return null;
+              }
+
+              // Get the data point from the payload
+              const dataPoint = props.payload[0]?.payload;
+              if (!dataPoint) return null;
+
+              // Calculate if our price is lower
+              const isOurPriceLower = dataPoint.integrationPrice !== null &&
+                                     dataPoint.competitorPrice !== null &&
+                                     dataPoint.integrationPrice < dataPoint.competitorPrice;
+
+              return (
+                <div className="bg-white p-3 border border-gray-200 shadow-sm rounded-md">
+                  <p className="font-medium">{dataPoint.formattedDate}</p>
+                  {props.payload.map((entry, index) => {
+                    // Set the correct color for each entry
+                    let color;
+                    let displayName = entry.name || '';
+
+                    if (entry.dataKey === "integrationPrice") {
+                      // For integration prices, use green when cheaper, red when more expensive
+                      color = isOurPriceLower ? "#10b981" : "#ef4444";
+                      displayName = "Our Price";
+                    } else if (entry.dataKey === "competitorPrice") {
+                      // For competitor prices, use blue and show competitor name
+                      color = "#6366f1";
+                      displayName = dataPoint.competitorName ? `${dataPoint.competitorName}` : "Competitor Price";
+                    } else if (entry.dataKey === "supplierPrice") {
+                      color = "#8b5cf6";
+                      displayName = "Supplier Price";
+                    } else {
+                      color = "#6366f1";
+                    }
+
+                    return entry.value !== null && entry.value !== undefined && (
+                      <p key={index} style={{ color }}>
+                        {displayName}: {formatPrice(Number(entry.value))}
+                      </p>
+                    );
+                  })}
+                  {dataPoint.integrationPrice !== null && dataPoint.competitorPrice !== null && (
+                    <p className={`text-xs mt-1 ${isOurPriceLower ? "text-green-600" : "text-red-600"}`}>
+                      {isOurPriceLower
+                        ? `${((1 - (dataPoint.integrationPrice / dataPoint.competitorPrice)) * 100).toFixed(1)}% cheaper than ${dataPoint.competitorName || 'competitors'}`
+                        : `${(((dataPoint.integrationPrice / dataPoint.competitorPrice) - 1) * 100).toFixed(1)}% more expensive than ${dataPoint.competitorName || 'competitors'}`}
+                    </p>
+                  )}
+                </div>
+              );
+            }}
+          />
           <Legend />
 
-          {chartMode === 'retail' ? (
-            <>
-              {/* Competitor price line for retail mode */}
-              <Line
-                type="monotone"
-                dataKey="competitorPrice"
-                name="Lowest Competitor Price"
-                stroke="#6366f1" // Indigo/blue line for competitor prices
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 6 }}
-                connectNulls
-                isAnimationActive={false}
-              />
+          {/* Competitor price line for retail mode */}
+          <Line
+            type="monotone"
+            dataKey="competitorPrice"
+            name="Competitor Price"
+            stroke="#6366f1"
+            strokeWidth={2}
+            dot={false}
+            connectNulls={false}
+          />
 
-              {/* Our retail price line */}
-              <Line
-                type="monotone"
-                dataKey="integrationPrice"
-                name="Our Retail Price"
-                stroke="#10b981" // Green for our price
-                strokeDasharray="5 5"
-                strokeWidth={2}
-                dot={<CustomDot />}
-                activeDot={{ r: 6 }}
-                connectNulls
-                isAnimationActive={false}
-              />
-            </>
-          ) : (
-            <>
-              {/* Supplier price line for supplier mode */}
-              <Line
-                type="monotone"
-                dataKey="supplierPrice"
-                name="Lowest Supplier Price"
-                stroke="#6366f1" // Indigo/blue line for supplier prices
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 6 }}
-                connectNulls
-                isAnimationActive={false}
-              />
-
-              {/* Our wholesale price line */}
-              <Line
-                type="monotone"
-                dataKey="ourPrice"
-                name="Our Wholesale Price"
-                stroke="#10b981" // Green for our price
-                strokeDasharray="5 5"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 6 }}
-                connectNulls
-                isAnimationActive={false}
-              />
-            </>
-          )}
-
-          {/* We no longer use the product's ourPrice as a fallback */}
+          {/* Our retail price line */}
+          <Line
+            type="monotone"
+            dataKey="integrationPrice"
+            name="Our Price"
+            stroke="#10b981"
+            strokeWidth={2}
+            dot={false}
+            connectNulls={false}
+          />
         </LineChart>
       </ResponsiveContainer>
         </div>

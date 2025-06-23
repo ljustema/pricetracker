@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-06-22 16:40:30
+-- Generated: 2025-06-23 15:56:10
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -1230,6 +1230,7 @@ similarity_threshold := COALESCE((settings->>'min_similarity_score')::INTEGER, 8
         SELECT id INTO product_id
         FROM products
         WHERE user_id = p_user_id AND ean = p_ean
+        ORDER BY created_at ASC
         LIMIT 1;
 
 IF product_id IS NOT NULL THEN
@@ -1248,6 +1249,7 @@ END IF;
             WHERE user_id = p_user_id 
               AND brand_id = p_brand_id 
               AND sku = p_sku
+            ORDER BY created_at ASC
             LIMIT 1;
 
 IF product_id IS NOT NULL THEN
@@ -1264,6 +1266,7 @@ END IF;
             WHERE user_id = p_user_id 
               AND brand = p_brand 
               AND sku = p_sku
+            ORDER BY created_at ASC
             LIMIT 1;
 
 IF product_id IS NOT NULL THEN
@@ -1284,6 +1287,7 @@ IF normalized_sku IS NOT NULL THEN
                 WHERE user_id = p_user_id 
                   AND brand_id = p_brand_id 
                   AND normalize_sku(sku) = normalized_sku
+                ORDER BY created_at ASC
                 LIMIT 1;
 
 IF product_id IS NOT NULL THEN
@@ -1300,6 +1304,7 @@ END IF;
                 WHERE user_id = p_user_id 
                   AND brand = p_brand 
                   AND normalize_sku(sku) = normalized_sku
+                ORDER BY created_at ASC
                 LIMIT 1;
 
 IF product_id IS NOT NULL THEN
@@ -1331,9 +1336,10 @@ END IF;
               (LENGTH(name) >= 10 AND LOWER(p_name) LIKE '%' || LOWER(name) || '%')
           )
         ORDER BY 
-            -- Prefer exact matches, then by similarity
+            -- Prefer exact matches, then by similarity, then by creation date
             CASE WHEN LOWER(name) = LOWER(p_name) THEN 0 ELSE 1 END,
-            levenshtein(LOWER(name), LOWER(p_name))
+            levenshtein(LOWER(name), LOWER(p_name)),
+            created_at ASC
         LIMIT 1;
 
 IF product_id IS NOT NULL THEN
@@ -2749,70 +2755,25 @@ END IF;
         matched_product_id := NEW.product_id;
 
 ELSE
-        -- ENHANCED MATCHING LOGIC
-        -- Try to find existing product by EAN first (if EAN priority is enabled and we have EAN)
-        IF (user_matching_rules->>'ean_priority')::boolean = true AND has_ean THEN
-            SELECT id INTO matched_product_id
-            FROM products
-            WHERE user_id = NEW.user_id
-              AND ean = NEW.ean
-            LIMIT 1;
+        -- Find or create brand if we have brand name (needed for fuzzy matching)
+        IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
+            SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
 
 END IF;
 
--- If no match by EAN, try by SKU and brand (if SKU+Brand fallback is enabled and we have both)
-        IF matched_product_id IS NULL AND 
-           (user_matching_rules->>'sku_brand_fallback')::boolean = true AND 
-           has_brand_sku THEN
-            
-            -- Try exact brand + exact SKU first
-            SELECT id INTO matched_product_id
-            FROM products
-            WHERE user_id = NEW.user_id
-              AND TRIM(sku) = TRIM(NEW.sku)
-              AND TRIM(brand) = TRIM(NEW.brand)
-            LIMIT 1;
-
-END IF;
-
--- If no match and fuzzy name matching is enabled, try name matching
-        IF matched_product_id IS NULL AND fuzzy_name_enabled AND has_name THEN
-            -- Try exact name match first (case insensitive)
-            SELECT id INTO matched_product_id
-            FROM products
-            WHERE user_id = NEW.user_id
-              AND LOWER(TRIM(name)) = LOWER(TRIM(NEW.name))
-            LIMIT 1;
-
--- If no exact match, try fuzzy matching using similarity (if available)
-            IF matched_product_id IS NULL THEN
-                BEGIN
-                    SELECT id INTO matched_product_id
-                    FROM products
-                    WHERE user_id = NEW.user_id
-                      AND similarity(LOWER(TRIM(name)), LOWER(TRIM(NEW.name))) > 0.8
-                    ORDER BY similarity(LOWER(TRIM(name)), LOWER(TRIM(NEW.name))) DESC
-                    LIMIT 1;
-
-EXCEPTION WHEN OTHERS THEN
-                    -- Similarity function not available, skip fuzzy matching
-                    NULL;
-
-END;
-
-END IF;
-
-END IF;
+-- Use the enhanced fuzzy matching function
+        SELECT find_product_with_fuzzy_matching(
+            NEW.user_id,
+            NEW.ean,
+            NEW.brand,
+            NEW.sku,
+            NEW.name,
+            v_brand_id
+        ) INTO matched_product_id;
 
 -- If no match found, create new product (we have sufficient data)
         IF matched_product_id IS NULL THEN
-            -- Find or create brand if we have brand name
-            IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
-                SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
-
-END IF;
-
--- Create new product
+            -- Create new product
             INSERT INTO products (
                 user_id,
                 name,
@@ -2837,13 +2798,6 @@ END IF;
 
 ELSE
             -- Update existing product with missing information only
-            -- Find or create brand if we have brand name
-            IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
-                SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
-
-END IF;
-
--- Update existing product ONLY with missing information (don't overwrite existing data)
             -- For competitors: only fill in NULL or empty fields
             UPDATE products SET
                 name = CASE WHEN (name IS NULL OR name = '') AND NEW.name IS NOT NULL AND NEW.name != '' THEN NEW.name ELSE name END,
@@ -2919,7 +2873,7 @@ END IF;
 
 END IF;
 
--- STOCK PROCESSING (new logic)
+-- STOCK PROCESSING (updated to not include URL)
     -- Only process stock if we have stock data
     IF NEW.stock_quantity IS NOT NULL OR NEW.stock_status IS NOT NULL THEN
         -- Get current stock data for this product/competitor combination
@@ -2958,7 +2912,6 @@ END IF;
                 new_availability_date,
                 stock_change_quantity,
                 changed_at,
-                url,
                 raw_stock_data
             ) VALUES (
                 NEW.user_id,
@@ -2972,7 +2925,6 @@ END IF;
                 NEW.availability_date,
                 COALESCE(NEW.stock_quantity, 0) - COALESCE(current_stock_quantity, 0),
                 NOW(),
-                NEW.url,
                 NEW.raw_stock_data
             );
 
@@ -4517,54 +4469,6 @@ RETURN NEW;
 END;
 
 $$;
-
---
--- Name: current_competitor_stock; Type: VIEW; Schema: public; Owner: -
---
-
-CREATE VIEW public.current_competitor_stock AS
- SELECT DISTINCT ON (user_id, product_id, competitor_id) user_id,
-    product_id,
-    competitor_id,
-    integration_id,
-    new_stock_quantity AS current_stock_quantity,
-    new_stock_status AS current_stock_status,
-    new_availability_date AS current_availability_date,
-    stock_change_quantity AS last_stock_change,
-    changed_at AS last_updated,
-    url
-   FROM public.stock_changes_competitors
-  ORDER BY user_id, product_id, competitor_id, changed_at DESC;
-
---
--- Name: VIEW current_competitor_stock; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON VIEW public.current_competitor_stock IS 'Shows the most recent stock levels for each product/competitor combination';
-
---
--- Name: current_supplier_stock; Type: VIEW; Schema: public; Owner: -
---
-
-CREATE VIEW public.current_supplier_stock AS
- SELECT DISTINCT ON (user_id, product_id, supplier_id) user_id,
-    product_id,
-    supplier_id,
-    integration_id,
-    new_stock_quantity AS current_stock_quantity,
-    new_stock_status AS current_stock_status,
-    new_availability_date AS current_availability_date,
-    stock_change_quantity AS last_stock_change,
-    changed_at AS last_updated,
-    url
-   FROM public.stock_changes_suppliers
-  ORDER BY user_id, product_id, supplier_id, changed_at DESC;
-
---
--- Name: VIEW current_supplier_stock; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON VIEW public.current_supplier_stock IS 'Shows the most recent stock levels for each product/supplier combination';
 
 --
 -- Name: audit_logs_instance_id_idx; Type: INDEX; Schema: auth; Owner: -

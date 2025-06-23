@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import Image from "next/image";
 import Link from "next/link";
@@ -35,6 +36,7 @@ interface ClientProductPageProps {
 
 export default function ClientProductPage({ product, retailPrices, retailPriceHistory, supplierPrices, stockData }: ClientProductPageProps) {
   const { formatPrice } = useCurrencyFormatter();
+  const [showAllPriceChanges, setShowAllPriceChanges] = useState(false);
 
 
 
@@ -89,8 +91,9 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                   alt={product.name}
                   width={500}
                   height={300}
-                  className="h-auto w-full object-contain"
-                  style={{ maxHeight: '300px' }}
+                  className="w-full object-contain"
+                  style={{ width: "auto", height: "auto", maxHeight: '300px' }}
+                  priority // Add priority for LCP optimization
                   unoptimized // Skip Next.js image optimization for external images
                   onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
                     console.error(`Failed to load image via proxy: ${product.image_url}`);
@@ -235,9 +238,12 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                       const productUrl = priceChange.url;
 
                       // Use the appropriate price field based on source type
-                      const currentPrice = priceChange.source_type === 'integration'
+                      const rawPrice = priceChange.source_type === 'integration'
                         ? priceChange.new_our_retail_price
                         : priceChange.new_competitor_price;
+
+                      // Convert to number if it's a string
+                      const currentPrice = typeof rawPrice === 'string' ? parseFloat(rawPrice) : rawPrice;
 
                       const priceDiff = product.our_retail_price && currentPrice
                         ? ((currentPrice - product.our_retail_price) / product.our_retail_price) * 100
@@ -356,9 +362,19 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                 ourWholesalePrice={product.our_wholesale_price}
               />
 
-              <h3 className="mt-6 mb-2 text-lg font-medium">Recent Retail Price Changes</h3>
-              <div className="space-y-4">
-                {retailPriceHistory.slice(0, 5).map((change: PriceChange) => {
+              <div className="mt-6 flex items-center justify-between">
+                <h3 className="text-lg font-medium">Recent Retail Price Changes</h3>
+                {retailPriceHistory.length > 5 && (
+                  <button
+                    onClick={() => setShowAllPriceChanges(!showAllPriceChanges)}
+                    className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                  >
+                    {showAllPriceChanges ? 'Show Less' : `Show All (${retailPriceHistory.length})`}
+                  </button>
+                )}
+              </div>
+              <div className="space-y-4 mt-2">
+                {(showAllPriceChanges ? retailPriceHistory : retailPriceHistory.slice(0, 5)).map((change: PriceChange) => {
                   // Use source information if available, fall back to competitors
                   const sourceName = change.source_name || change.competitors?.name || "Unknown";
                   const sourceType = change.source_type || "competitor";
@@ -386,12 +402,16 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                       <div className="text-right">
                         <div className="flex items-center space-x-1">
                           {(() => {
-                            const oldPrice = change.source_type === 'integration'
+                            const rawOldPrice = change.source_type === 'integration'
                               ? change.old_our_retail_price
                               : change.old_competitor_price;
-                            const newPrice = change.source_type === 'integration'
+                            const rawNewPrice = change.source_type === 'integration'
                               ? change.new_our_retail_price
                               : change.new_competitor_price;
+
+                            // Convert to numbers if they're strings
+                            const oldPrice = typeof rawOldPrice === 'string' ? parseFloat(rawOldPrice) : rawOldPrice;
+                            const newPrice = typeof rawNewPrice === 'string' ? parseFloat(rawNewPrice) : rawNewPrice;
 
                             return (
                               <>
@@ -417,13 +437,13 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
 
                         <span
                           className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                            changePercent > 0
+                            (typeof changePercent === 'number' ? changePercent : parseFloat(changePercent)) > 0
                               ? "bg-red-100 text-red-800"
                               : "bg-green-100 text-green-800"
                           }`}
                         >
-                          {changePercent > 0 ? "+" : ""}
-                          {changePercent.toFixed(2)}%
+                          {(typeof changePercent === 'number' ? changePercent : parseFloat(changePercent)) > 0 ? "+" : ""}
+                          {(typeof changePercent === 'number' ? changePercent : parseFloat(changePercent)).toFixed(2)}%
                         </span>
                       </div>
                     </div>
@@ -489,9 +509,12 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
 
                       // For integration records, show our wholesale price changes
                       // For supplier records, show supplier cost prices
-                      const displayPrice = isIntegrationRecord
+                      const rawDisplayPrice = isIntegrationRecord
                         ? supplierPrice.new_our_wholesale_price
                         : supplierPrice.new_supplier_price;
+
+                      // Convert to number if it's a string
+                      const displayPrice = typeof rawDisplayPrice === 'string' ? parseFloat(rawDisplayPrice) : rawDisplayPrice;
 
                       const costDiff = product.our_wholesale_price && displayPrice
                         ? ((displayPrice - product.our_wholesale_price) / product.our_wholesale_price) * 100
@@ -516,7 +539,11 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                           </td>
                           <td className="whitespace-nowrap px-3 py-4 text-sm">
                             <div className="text-gray-900">
-                              {supplierPrice.new_supplier_recommended_price ? formatPrice(supplierPrice.new_supplier_recommended_price) : "N/A"}
+                              {supplierPrice.new_supplier_recommended_price ? formatPrice(
+                                typeof supplierPrice.new_supplier_recommended_price === 'string'
+                                  ? parseFloat(supplierPrice.new_supplier_recommended_price)
+                                  : supplierPrice.new_supplier_recommended_price
+                              ) : "N/A"}
                             </div>
                           </td>
                           <td className="whitespace-nowrap px-3 py-4 text-sm">

@@ -282,9 +282,9 @@ function SupplierPriceHistory({ priceChanges }: SupplierPriceHistoryProps) {
                         {change.old_supplier_price} → {change.new_supplier_price} {change.currency_code}
                         {change.price_change_percentage && (
                           <span className={`ml-2 text-xs ${
-                            change.price_change_percentage > 0 ? 'text-red-600' : 'text-green-600'
+                            Number(change.price_change_percentage) > 0 ? 'text-red-600' : 'text-green-600'
                           }`}>
-                            ({change.price_change_percentage > 0 ? '+' : ''}{change.price_change_percentage.toFixed(1)}%)
+                            ({Number(change.price_change_percentage) > 0 ? '+' : ''}{Number(change.price_change_percentage).toFixed(1)}%)
                           </span>
                         )}
                       </>

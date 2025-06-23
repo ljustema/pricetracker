@@ -554,12 +554,12 @@ export class IntegrationSyncService {
       // Update run status to failed
       await this.updateRunStatus('failed', {}, errorMessage);
 
-      // Update integration status
+      // Update integration status - keep it active so it can be rescheduled
       await updateIntegrationStatus(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.supabase as any,
         this.integrationId,
-        'error',
+        'active',
         'failed'
       );
 

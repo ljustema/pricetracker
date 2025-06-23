@@ -58,11 +58,11 @@ export interface PriceChange {
   source_id?: string; // Either competitor_id or integration_id
   source_name?: string; // Name of the competitor or integration
   source_type?: 'competitor' | 'integration';
-  old_competitor_price?: number; // For competitor price changes
-  new_competitor_price?: number; // For competitor price changes
-  old_our_retail_price?: number; // For our retail price changes (integrations)
-  new_our_retail_price?: number; // For our retail price changes (integrations)
-  price_change_percentage: number;
+  old_competitor_price?: number | string; // For competitor price changes - can be string from DB
+  new_competitor_price?: number | string; // For competitor price changes - can be string from DB
+  old_our_retail_price?: number | string; // For our retail price changes (integrations) - can be string from DB
+  new_our_retail_price?: number | string; // For our retail price changes (integrations) - can be string from DB
+  price_change_percentage: number | string; // Can be string from DB
   changed_at: string;
   url?: string; // URL to the product on the competitor's website
   currency_code?: string;

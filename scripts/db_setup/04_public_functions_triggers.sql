@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-06-22 16:40:30
+-- Generated: 2025-06-23 15:56:10
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -948,21 +948,30 @@ BEGIN
             ELSE 'unknown'
         END as source_type,
         COALESCE(c.name, i.name, 'Unknown') as source_name,
-        COALESCE(c.website, i.website, '') as source_website,
+        COALESCE(c.website, '') as source_website,
         COALESCE(sc.competitor_id, sc.integration_id) as source_id,
-        sc.url
+        COALESCE(pc.url, '') as url  -- Get URL from price_changes_competitors
     FROM stock_changes_competitors sc
     LEFT JOIN competitors c ON sc.competitor_id = c.id
     LEFT JOIN integrations i ON sc.integration_id = i.id
+    LEFT JOIN LATERAL (
+        SELECT pc.url
+        FROM price_changes_competitors pc
+        WHERE pc.user_id = p_user_id
+          AND pc.product_id = p_product_id
+          AND COALESCE(pc.competitor_id, pc.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
+        ORDER BY pc.changed_at DESC
+        LIMIT 1
+    ) pc ON true
     WHERE sc.user_id = p_user_id
       AND sc.product_id = p_product_id
       AND sc.id IN (
           -- Get the latest stock record for each competitor/integration
-          SELECT DISTINCT ON (competitor_id, integration_id) id
+          SELECT DISTINCT ON (sc2.competitor_id, sc2.integration_id) sc2.id
           FROM stock_changes_competitors sc2
           WHERE sc2.user_id = p_user_id
             AND sc2.product_id = p_product_id
-          ORDER BY competitor_id, integration_id, changed_at DESC
+          ORDER BY sc2.competitor_id, sc2.integration_id, sc2.changed_at DESC
       )
     ORDER BY sc.changed_at DESC;
 
@@ -997,21 +1006,30 @@ BEGIN
             ELSE 'unknown'
         END as source_type,
         COALESCE(c.name, i.name, 'Unknown') as source_name,
-        COALESCE(c.website, i.website, '') as source_website,
+        COALESCE(c.website, '') as source_website,
         COALESCE(sc.competitor_id, sc.integration_id) as source_id,
-        sc.url
+        COALESCE(pc.url, '') as url  -- Get URL from price_changes_competitors
     FROM stock_changes_competitors sc
     LEFT JOIN competitors c ON sc.competitor_id = c.id
     LEFT JOIN integrations i ON sc.integration_id = i.id
+    LEFT JOIN LATERAL (
+        SELECT pc.url
+        FROM price_changes_competitors pc
+        WHERE pc.user_id = p_user_id
+          AND pc.product_id = sc.product_id
+          AND COALESCE(pc.competitor_id, pc.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
+        ORDER BY pc.changed_at DESC
+        LIMIT 1
+    ) pc ON true
     WHERE sc.user_id = p_user_id
       AND sc.product_id = ANY(p_product_ids)
       AND sc.id IN (
           -- Get the latest stock record for each product/competitor/integration combination
-          SELECT DISTINCT ON (product_id, competitor_id, integration_id) id
+          SELECT DISTINCT ON (sc2.product_id, sc2.competitor_id, sc2.integration_id) sc2.id
           FROM stock_changes_competitors sc2
           WHERE sc2.user_id = p_user_id
             AND sc2.product_id = ANY(p_product_ids)
-          ORDER BY product_id, competitor_id, integration_id, changed_at DESC
+          ORDER BY sc2.product_id, sc2.competitor_id, sc2.integration_id, sc2.changed_at DESC
       )
     ORDER BY sc.product_id, sc.changed_at DESC;
 
