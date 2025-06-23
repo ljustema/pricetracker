@@ -62,9 +62,17 @@ export async function POST(request: NextRequest) {
     }
 
     // For non-manual platforms, require API credentials
-    if (body.platform !== 'manual' && (!body.api_url || !body.api_key)) {
+    if (body.platform !== 'manual' && !body.api_url) {
       return NextResponse.json(
-        { error: 'Missing required fields for automated integration: api_url, api_key' },
+        { error: 'Missing required field: api_url' },
+        { status: 400 }
+      );
+    }
+
+    // For platforms other than manual and google-feed, require API key
+    if (body.platform !== 'manual' && body.platform !== 'google-feed' && !body.api_key) {
+      return NextResponse.json(
+        { error: 'Missing required field: api_key' },
         { status: 400 }
       );
     }
@@ -77,7 +85,7 @@ export async function POST(request: NextRequest) {
       name: body.name,
       api_url: body.api_url || null,
       api_key: body.api_key || null,
-      status: body.platform === 'manual' ? 'active' : 'pending_setup', // Manual integrations are immediately active
+      status: (body.platform === 'manual' || body.platform === 'google-feed') ? 'active' : 'pending_setup', // Manual and Google Feed integrations are immediately active
       sync_frequency: body.platform === 'manual' ? 'manual' : (body.sync_frequency || 'daily'),
       configuration: body.configuration || null,
     };

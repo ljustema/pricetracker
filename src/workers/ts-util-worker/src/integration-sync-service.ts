@@ -1,4 +1,5 @@
 import { updateIntegrationStatus } from './integration-service';
+import { XMLParser } from 'fast-xml-parser';
 
 interface SyncResult {
   success: boolean;
@@ -378,6 +379,247 @@ export class IntegrationSyncService {
   }
 
   /**
+   * Execute the sync process for a Google Feed XML integration
+   */
+  private async syncGoogleFeed(integration: Integration): Promise<SyncResult> {
+    let productsProcessed = 0;
+    let productsUpdated = 0;
+    let productsCreated = 0;
+
+    this.log('info', 'FEED_FETCH', `Fetching Google Feed XML from: ${integration.api_url}`);
+
+    try {
+      // Fetch the XML feed
+      const response = await fetch(integration.api_url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch XML feed: ${response.status} ${response.statusText}`);
+      }
+
+      const xmlContent = await response.text();
+      this.log('info', 'FEED_PARSE', 'Parsing XML feed content');
+
+      // Parse XML with fast-xml-parser
+      const parser = new XMLParser({
+        ignoreAttributes: false,
+        attributeNamePrefix: '_',
+        parseAttributeValue: true,
+        processEntities: false,
+        htmlEntities: false,
+      });
+
+      const parsedXml = parser.parse(xmlContent);
+
+      // Extract items from the XML structure
+      let items: Record<string, unknown>[] = [];
+
+      if (parsedXml.rss?.channel?.item) {
+        items = Array.isArray(parsedXml.rss.channel.item)
+          ? parsedXml.rss.channel.item
+          : [parsedXml.rss.channel.item];
+      } else if (parsedXml.feed?.entry) {
+        items = Array.isArray(parsedXml.feed.entry)
+          ? parsedXml.feed.entry
+          : [parsedXml.feed.entry];
+      } else if (parsedXml.channel?.item) {
+        items = Array.isArray(parsedXml.channel.item)
+          ? parsedXml.channel.item
+          : [parsedXml.channel.item];
+      } else {
+        throw new Error('No product items found in XML feed. Expected RSS/channel/item or feed/entry structure.');
+      }
+
+      this.log('info', 'FEED_ITEMS', `Found ${items.length} items in XML feed`);
+
+      if (items.length === 0) {
+        throw new Error('No product items found in XML feed');
+      }
+
+      // Process items in batches
+      const batchSize = 500;
+      const totalBatches = Math.ceil(items.length / batchSize);
+
+      for (let i = 0; i < items.length; i += batchSize) {
+        const batch = items.slice(i, i + batchSize);
+        const batchNumber = Math.floor(i / batchSize) + 1;
+
+        this.log('info', 'BATCH_PROCESSING', `Processing batch ${batchNumber}/${totalBatches} (${batch.length} items)`);
+
+        await this.processGoogleFeedBatch(batch, batchNumber, totalBatches);
+
+        productsProcessed += batch.length;
+
+        // Update progress
+        await this.updateRunStatus('processing', { productsProcessed });
+      }
+
+      // Process all staged data
+      this.log('info', 'FINAL_PROCESSING', 'Processing all staged products');
+
+      const { data: processResult, error: processError } = await this.supabase
+        .rpc('process_pending_integration_products', { run_id: this.runId });
+
+      if (processError) {
+        const errorMessage = processError && typeof processError === 'object' && 'message' in processError ? (processError as { message: string }).message : 'Unknown error';
+        this.log('error', 'PROCESSING_ERROR', `Error processing products: ${errorMessage}`);
+      } else {
+        this.log('info', 'PROCESSING_COMPLETE', `Processing complete: ${JSON.stringify(processResult)}`);
+      }
+
+      // Get final statistics
+      const { data: stats, error: statsError } = await this.supabase
+        .from('temp_integrations_scraped_data')
+        .select('status')
+        .eq('integration_run_id', this.runId);
+
+      if (!statsError && stats) {
+        const statsArray = stats as { status: string }[];
+        const processed = statsArray.filter((p) => p.status === 'processed').length;
+        productsCreated = processed; // Assume all are new for now
+        productsUpdated = 0;
+
+        this.log('info', 'FINAL_STATS', `Final stats: Processed: ${processed}, Created: ${productsCreated}, Updated: ${productsUpdated}`);
+      }
+
+      return {
+        success: true,
+        productsProcessed,
+        productsUpdated,
+        productsCreated,
+        logDetails: this.logs,
+      };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.log('error', 'GOOGLE_FEED_ERROR', `Google Feed sync failed: ${errorMessage}`);
+      throw new Error(`Failed to sync Google Feed: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Process a batch of Google Feed XML items
+   */
+  private async processGoogleFeedBatch(batch: Record<string, unknown>[], batchNumber: number, totalBatches: number): Promise<void> {
+    const stagedProducts = batch.map(item => {
+      const extractedData = this.extractProductDataFromXmlItem(item);
+
+      // Skip items without required data
+      if (!extractedData.name || extractedData.name.trim() === '') {
+        return null;
+      }
+
+      return {
+        integration_run_id: this.runId,
+        integration_id: this.integrationId,
+        user_id: this.userId,
+        name: extractedData.name.trim(),
+        sku: extractedData.sku || null,
+        ean: extractedData.ean || null,
+        brand: extractedData.brand || null,
+        our_retail_price: extractedData.our_retail_price,
+        our_wholesale_price: extractedData.our_wholesale_price,
+        image_url: extractedData.image_url || null,
+        url: extractedData.url || null,
+        currency_code: extractedData.currency_code || 'SEK',
+        raw_data: item, // Store the entire XML item for reference
+        status: 'pending',
+        created_at: new Date().toISOString()
+      };
+    }).filter(product => product !== null); // Remove null entries
+
+    if (stagedProducts.length === 0) {
+      this.log('warn', 'BATCH_EMPTY', `Batch ${batchNumber} contained no valid products`);
+      return;
+    }
+
+    // Insert the batch into the temp_integrations_scraped_data table
+    const { error: insertError } = await this.supabase
+      .from('temp_integrations_scraped_data')
+      .insert(stagedProducts);
+
+    if (insertError) {
+      const errorMessage = insertError && typeof insertError === 'object' && 'message' in insertError ? (insertError as { message: string }).message : 'Unknown error';
+      this.log('error', 'STAGING_ERROR', `Error staging batch ${batchNumber}: ${errorMessage}`);
+      throw new Error(`Failed to stage products: ${errorMessage}`);
+    }
+
+    this.log('info', 'BATCH_STAGED', `Staged batch ${batchNumber}/${totalBatches} (${stagedProducts.length} products)`);
+  }
+
+  /**
+   * Extract product data from XML item based on Google Feed format
+   */
+  private extractProductDataFromXmlItem(item: Record<string, unknown>) {
+    // Helper function to get value from XML item, handling both direct values and CDATA
+    const getValue = (obj: Record<string, unknown> | null, key: string): string | null => {
+      if (!obj || typeof obj !== 'object') return null;
+
+      const value = obj[key];
+      if (value === undefined || value === null) return null;
+
+      // Handle CDATA sections and direct values
+      if (typeof value === 'string') {
+        return value.trim();
+      }
+
+      // Handle objects with text content
+      if (typeof value === 'object' && value && '#text' in value) {
+        const textValue = (value as Record<string, unknown>)['#text'];
+        return textValue ? textValue.toString().trim() : null;
+      }
+
+      return value.toString().trim();
+    };
+
+    // Helper function to parse price from string (e.g., "350 SEK" -> 350)
+    const parsePrice = (priceStr: string | null): number | null => {
+      if (!priceStr) return null;
+
+      // Extract numeric value from price string
+      const match = priceStr.match(/[\d,]+\.?\d*/);
+      if (match) {
+        const numericValue = match[0].replace(/,/g, '');
+        const parsed = parseFloat(numericValue);
+        return isNaN(parsed) ? null : parsed;
+      }
+
+      return null;
+    };
+
+    // Extract data according to the mapping specified in the user request
+    const title = getValue(item, 'title');
+    const link = getValue(item, 'link');
+    const imageLink = getValue(item, 'g:image_link');
+    const price = getValue(item, 'g:price');
+    const salePrice = getValue(item, 'g:sale_price'); // Use sale price if available
+    const costOfGoodsSold = getValue(item, 'g:cost_of_goods_sold');
+    const gtin = getValue(item, 'g:gtin');
+    const brand = getValue(item, 'g:brand');
+    const mpn = getValue(item, 'g:mpn');
+
+    // Determine which price to use (sale price takes priority)
+    const finalPrice = salePrice || price;
+    const retailPrice = parsePrice(finalPrice);
+    const wholesalePrice = parsePrice(costOfGoodsSold);
+
+    return {
+      name: title,
+      url: link,
+      image_url: imageLink,
+      our_retail_price: retailPrice,
+      our_wholesale_price: wholesalePrice,
+      ean: gtin,
+      brand: brand,
+      sku: mpn,
+      currency_code: 'SEK' // Default to SEK, could be extracted from price string if needed
+    };
+  }
+
+  /**
    * Process a batch of products
    */
   private async processProductBatch(batch: Record<string, unknown>[], batchNumber: number, totalBatches: number | string, integration: Integration): Promise<void> {
@@ -522,6 +764,10 @@ export class IntegrationSyncService {
       switch (typedIntegration.platform.toLowerCase()) {
         case 'prestashop':
           result = await this.syncPrestashop(typedIntegration);
+          break;
+
+        case 'google-feed':
+          result = await this.syncGoogleFeed(typedIntegration);
           break;
 
         default:

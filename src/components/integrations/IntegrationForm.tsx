@@ -28,11 +28,16 @@ const formSchema = z.object({
 }).refine((data) => {
   // For non-manual platforms, require API credentials
   if (data.platform !== 'manual') {
+    // Google Feed XML only requires URL, not API key
+    if (data.platform === 'google-feed') {
+      return data.api_url;
+    }
+    // Other platforms require both URL and API key
     return data.api_url && data.api_key;
   }
   return true;
 }, {
-  message: "API URL and API Key are required for automated integrations",
+  message: "API URL is required for automated integrations",
   path: ["api_url"],
 });
 
@@ -102,7 +107,17 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
     const api_key = form.getValues('api_key');
 
     // Validate fields before testing
-    if (!platform || !api_url || !api_key) {
+    if (!platform || !api_url) {
+      toast({
+        title: 'Validation Error',
+        description: 'Please fill in the URL field before testing.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // For non-Google Feed platforms, also require API key
+    if (platform !== 'google-feed' && !api_key) {
       toast({
         title: 'Validation Error',
         description: 'Please fill in all required fields before testing.',
@@ -206,6 +221,7 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
                     </FormControl>
                     <SelectContent>
                       <SelectItem value="prestashop">PrestaShop</SelectItem>
+                      <SelectItem value="google-feed">Google Feed XML</SelectItem>
                       <SelectItem value="manual">Manual (CSV Upload)</SelectItem>
                       {/* Add more platforms as they are supported */}
                       {/* <SelectItem value="shopify">Shopify</SelectItem> */}
@@ -245,62 +261,108 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
                   name="api_url"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>API URL</FormLabel>
+                      <FormLabel>
+                        {selectedPlatform === 'google-feed' ? 'Feed URL' : 'API URL'}
+                      </FormLabel>
                       <FormControl>
-                        <Input placeholder="https://mystore.com" {...field} />
+                        <Input
+                          placeholder={
+                            selectedPlatform === 'google-feed'
+                              ? "https://example.com/feed.xml"
+                              : "https://mystore.com"
+                          }
+                          {...field}
+                        />
                       </FormControl>
                       <FormDescription>
-                        The base URL of your store (e.g., https://mystore.com).
+                        {selectedPlatform === 'google-feed'
+                          ? 'The URL to your Google Shopping Feed XML file.'
+                          : 'The base URL of your store (e.g., https://mystore.com).'}
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
 
-                <FormField
-                  control={form.control}
-                  name="api_key"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>API Key</FormLabel>
-                      <div className="flex space-x-2">
-                        <FormControl className="flex-1">
-                          <Input type="password" placeholder="••••••••••••••••" {...field} />
-                        </FormControl>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={testCredentials}
-                          disabled={isTesting}
-                          className="whitespace-nowrap"
-                        >
-                          {isTesting ? (
-                            <>
-                              <RefreshCw className="h-4 w-4 mr-1 animate-spin" />
-                              Testing...
-                            </>
-                          ) : (
-                            'Test Connection'
-                          )}
-                        </Button>
-                      </div>
-                      {testResult && (
-                        <div className={`mt-2 text-sm flex items-center ${testResult.success ? 'text-green-600' : 'text-red-600'}`}>
-                          {testResult.success ? (
-                            <CheckCircle className="h-4 w-4 mr-1" />
-                          ) : (
-                            <AlertCircle className="h-4 w-4 mr-1" />
-                          )}
-                          {testResult.message}
+                {/* Only show API key for platforms that need authentication */}
+                {selectedPlatform !== 'google-feed' && (
+                  <FormField
+                    control={form.control}
+                    name="api_key"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>API Key</FormLabel>
+                        <div className="flex space-x-2">
+                          <FormControl className="flex-1">
+                            <Input type="password" placeholder="••••••••••••••••" {...field} />
+                          </FormControl>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={testCredentials}
+                            disabled={isTesting}
+                            className="whitespace-nowrap"
+                          >
+                            {isTesting ? (
+                              <>
+                                <RefreshCw className="h-4 w-4 mr-1 animate-spin" />
+                                Testing...
+                              </>
+                            ) : (
+                              'Test Connection'
+                            )}
+                          </Button>
                         </div>
+                        {testResult && (
+                          <div className={`mt-2 text-sm flex items-center ${testResult.success ? 'text-green-600' : 'text-red-600'}`}>
+                            {testResult.success ? (
+                              <CheckCircle className="h-4 w-4 mr-1" />
+                            ) : (
+                              <AlertCircle className="h-4 w-4 mr-1" />
+                            )}
+                            {testResult.message}
+                          </div>
+                        )}
+                        <FormDescription>
+                          Your API key or access token for authentication.
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+
+                {/* Show test feed button for Google Feed XML */}
+                {selectedPlatform === 'google-feed' && (
+                  <div className="flex space-x-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={testCredentials}
+                      disabled={isTesting || !form.watch('api_url')}
+                      className="whitespace-nowrap"
+                    >
+                      {isTesting ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-1 animate-spin" />
+                          Testing...
+                        </>
+                      ) : (
+                        'Test Feed'
                       )}
-                      <FormDescription>
-                        Your API key or access token for authentication.
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                    </Button>
+                    {testResult && (
+                      <div className={`mt-2 text-sm flex items-center ${testResult.success ? 'text-green-600' : 'text-red-600'}`}>
+                        {testResult.success ? (
+                          <CheckCircle className="h-4 w-4 mr-1" />
+                        ) : (
+                          <AlertCircle className="h-4 w-4 mr-1" />
+                        )}
+                        {testResult.message}
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             )}
 
@@ -312,6 +374,18 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
                   This integration allows you to upload your own products via CSV files.
                   No API credentials are required. You can upload product data and track
                   price changes manually through the CSV upload feature.
+                </p>
+              </div>
+            )}
+
+            {/* Show description for Google Feed XML integrations */}
+            {selectedPlatform === 'google-feed' && (
+              <div className="rounded-md border p-4 bg-green-50">
+                <h4 className="font-medium text-green-900 mb-2">Google Feed XML Integration</h4>
+                <p className="text-sm text-green-700">
+                  This integration automatically fetches product data from your Google Shopping Feed XML.
+                  It's faster than API-based integrations and perfect for stores with Google Merchant Center feeds.
+                  The system will parse product information including prices, brands, SKUs, and images from your XML feed.
                 </p>
               </div>
             )}
