@@ -176,19 +176,23 @@ async function fetchAndProcessIntegrationJob() {
       console.log(`Starting TEST RUN for integration ${integration.name} (${integration.platform})`);
 
       try {
-        // Import the PrestashopClient dynamically
-        const { PrestashopClient } = await import('./prestashop-client');
+        let testResults;
 
-        // Initialize the Prestashop client
-        const client = new PrestashopClient(integration.api_url, integration.api_key);
+        // Handle test run based on platform
+        switch (integration.platform.toLowerCase()) {
+          case 'prestashop':
+            testResults = await runPrestashopTest(integration, testRunLimit, activeOnly);
+            break;
 
-        // Test the connection
-        console.log('Testing API connection...');
-        const connectionTest = await client.testConnection();
-        if (!connectionTest) {
-          throw new Error('Failed to connect to Prestashop API');
+          case 'google-feed':
+            testResults = await runGoogleFeedTest(integration, testRunLimit);
+            break;
+
+          default:
+            throw new Error(`Unsupported platform for test run: ${integration.platform}`);
         }
-        console.log('API connection successful');
+
+        console.log(`Test run successful for ${integration.platform}`);
 
         // Update run status to processing
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -210,39 +214,21 @@ async function fetchAndProcessIntegrationJob() {
           console.error('Failed to update integration run status:', updateResult1.error);
         }
 
-        // Fetch a limited number of products for the test run using the optimized getProducts method
-        console.log(`Starting test run to fetch ${testRunLimit} random ${activeOnly ? 'active ' : ''}products...`);
-        const productsResult = await client.getProducts({
-          limit: testRunLimit,
-          activeOnly,
-          random: true
-        });
-
-        // Type assertion to ensure products is treated as an array
-        const products = productsResult as { id: string; name: string; active: boolean }[];
-
-        console.log(`Fetched ${products.length} products for test run`);
-
-        // Debug: Log the active status of each product
-        products.forEach(product => {
-          console.log(`Product ${product.id}: ${product.name} - Active: ${product.active}`);
-        });
-
-        // Store the test products in the run
+        // Store the test results in the run
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const updateResult2 = await (supabase as any)
           .from('integration_runs')
           .update({
             status: 'completed',
             completed_at: new Date().toISOString(),
-            products_processed: products.length,
-            test_products: products,
+            products_processed: testResults.productsFound,
+            test_products: testResults.sampleProducts,
             log_details: JSON.stringify([{
               timestamp: new Date().toISOString(),
               level: 'info',
               phase: 'TEST_RUN',
               message: 'Test run completed successfully',
-              data: { product_count: products.length }
+              data: testResults
             }])
           })
           .eq('id', job.id);
@@ -251,7 +237,7 @@ async function fetchAndProcessIntegrationJob() {
           console.error('Failed to update integration run with results:', updateResult2.error);
         }
 
-        console.log(`Test run completed successfully. Fetched ${products.length} products.`);
+        console.log(`Test run completed successfully. Found ${testResults.productsFound} products.`);
 
       } catch (error) {
         console.error('Test run failed:', error);
@@ -333,6 +319,144 @@ async function fetchAndProcessIntegrationJob() {
     isProcessingJob = false;
     currentJobId = null;
   }
+}
+
+// Helper function to run Prestashop test
+async function runPrestashopTest(integration: Integration, testRunLimit: number, activeOnly: boolean) {
+  // Import the PrestashopClient dynamically
+  const { PrestashopClient } = await import('./prestashop-client');
+
+  // Initialize the Prestashop client
+  const client = new PrestashopClient(integration.api_url, integration.api_key);
+
+  // Test the connection
+  console.log('Testing Prestashop API connection...');
+  const connectionTest = await client.testConnection();
+  if (!connectionTest) {
+    throw new Error('Failed to connect to Prestashop API');
+  }
+  console.log('Prestashop API connection successful');
+
+  // Fetch a limited number of products for the test run
+  console.log(`Starting test run to fetch ${testRunLimit} random ${activeOnly ? 'active ' : ''}products...`);
+  const productsResult = await client.getProducts({
+    limit: testRunLimit,
+    activeOnly,
+    random: true
+  });
+
+  // Type assertion to ensure products is treated as an array
+  const products = productsResult as { id: string; name: string; active: boolean }[];
+
+  console.log(`Fetched ${products.length} products for test run`);
+
+  // Debug: Log the active status of each product
+  products.forEach(product => {
+    console.log(`Product ${product.id}: ${product.name} - Active: ${product.active}`);
+  });
+
+  return {
+    productsFound: products.length,
+    sampleProducts: products,
+    platform: 'prestashop'
+  };
+}
+
+// Helper function to run Google Feed XML test
+async function runGoogleFeedTest(integration: Integration, testRunLimit: number) {
+  const { XMLParser } = await import('fast-xml-parser');
+
+  console.log('Testing Google Feed XML connection...');
+
+  // Fetch the XML feed
+  const response = await fetch(integration.api_url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch XML feed: ${response.status} ${response.statusText}`);
+  }
+
+  const xmlContent = await response.text();
+  console.log('Google Feed XML fetched successfully');
+
+  // Parse XML with fast-xml-parser
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '_',
+    parseAttributeValue: true,
+    processEntities: false,
+    htmlEntities: false,
+  });
+
+  const parsedXml = parser.parse(xmlContent);
+
+  // Extract items from the XML structure
+  let items: Record<string, unknown>[] = [];
+
+  if (parsedXml.rss?.channel?.item) {
+    items = Array.isArray(parsedXml.rss.channel.item)
+      ? parsedXml.rss.channel.item
+      : [parsedXml.rss.channel.item];
+  } else if (parsedXml.feed?.entry) {
+    items = Array.isArray(parsedXml.feed.entry)
+      ? parsedXml.feed.entry
+      : [parsedXml.feed.entry];
+  } else if (parsedXml.channel?.item) {
+    items = Array.isArray(parsedXml.channel.item)
+      ? parsedXml.channel.item
+      : [parsedXml.channel.item];
+  } else {
+    throw new Error('No product items found in XML feed. Expected RSS/channel/item or feed/entry structure.');
+  }
+
+  console.log(`Found ${items.length} items in XML feed`);
+
+  if (items.length === 0) {
+    throw new Error('No product items found in XML feed');
+  }
+
+  // Get a sample of products for the test
+  const sampleItems = items.slice(0, testRunLimit);
+  const sampleProducts = sampleItems.map((item, index) => {
+    // Helper function to get value from XML item
+    const getValue = (obj: Record<string, unknown> | null, key: string): string | null => {
+      if (!obj || typeof obj !== 'object') return null;
+
+      const value = obj[key];
+      if (value === undefined || value === null) return null;
+
+      if (typeof value === 'string') {
+        return value.trim();
+      }
+
+      if (typeof value === 'object' && value && '#text' in value) {
+        const textValue = (value as Record<string, unknown>)['#text'];
+        return textValue ? textValue.toString().trim() : null;
+      }
+
+      return value.toString().trim();
+    };
+
+    return {
+      id: getValue(item, 'g:id') || `item-${index}`,
+      name: getValue(item, 'title') || 'Unknown Product',
+      price: getValue(item, 'g:price') || getValue(item, 'g:sale_price') || 'N/A',
+      brand: getValue(item, 'g:brand') || 'N/A',
+      sku: getValue(item, 'g:mpn') || 'N/A',
+      ean: getValue(item, 'g:gtin') || 'N/A'
+    };
+  });
+
+  console.log(`Processed ${sampleProducts.length} sample products for test run`);
+
+  return {
+    productsFound: items.length,
+    sampleProducts: sampleProducts,
+    platform: 'google-feed'
+  };
 }
 
 // Function to log structured messages
