@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Skeleton } from '@/components/ui/skeleton';
+
 import { AlertCircle, CheckCircle, RefreshCw } from 'lucide-react';
 import { Integration } from '@/lib/services/integration-service';
 import { useToast } from '@/components/ui/use-toast';

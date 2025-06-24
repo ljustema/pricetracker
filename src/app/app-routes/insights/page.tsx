@@ -24,7 +24,38 @@ export default async function InsightsPage() {
   const userId = ensureUUID(session.user.id);
   const supabase = createSupabaseAdminClient();
 
-  let stockData = null;
+  let stockData: {
+    competitors: Array<{
+      id: string;
+      name: string;
+      website?: string;
+    }>;
+    recentStockChanges: Array<{
+      id: string;
+      product_id: string;
+      competitor_id: string;
+      new_stock_quantity: number | null;
+      new_stock_status: string | null;
+      new_availability_date: string | null;
+      stock_change_quantity: number | null;
+      changed_at: string;
+      url?: string;
+      products?: {
+        name: string;
+        brand?: string;
+        sku?: string;
+      };
+      competitors?: {
+        name: string;
+      };
+    }>;
+    stockStats: {
+      totalProducts: number;
+      totalStockChanges: number;
+      productsWithStock: number;
+      outOfStockProducts: number;
+    } | null;
+  } | undefined = undefined;
 
   try {
     // Fetch stock data for the Stock Analysis tab
@@ -58,6 +89,7 @@ export default async function InsightsPage() {
   } catch (error) {
     console.error('Error loading stock data:', error);
     // Continue without stock data - the Stock Analysis tab will show an error message
+    stockData = undefined;
   }
 
   return (

@@ -301,6 +301,48 @@ export async function DELETE(
       );
     }
 
+    // Check if there are product_custom_field_values referencing this product
+    const { count: customFieldValuesCount, error: customFieldCountError } = await supabase
+      .from("product_custom_field_values")
+      .select("id", { count: 'exact', head: true })
+      .eq("product_id", productId);
+
+    if (customFieldCountError) {
+      console.error("Error checking product_custom_field_values references:", customFieldCountError);
+      return NextResponse.json(
+        { error: "Error checking product_custom_field_values references" },
+        { status: 500 }
+      );
+    }
+
+    // Check if there are temp_competitors_scraped_data referencing this product
+    const { count: tempCompetitorsCount, error: tempCompetitorsCountError } = await supabase
+      .from("temp_competitors_scraped_data")
+      .select("id", { count: 'exact', head: true })
+      .eq("product_id", productId);
+
+    if (tempCompetitorsCountError) {
+      console.error("Error checking temp_competitors_scraped_data references:", tempCompetitorsCountError);
+      return NextResponse.json(
+        { error: "Error checking temp_competitors_scraped_data references" },
+        { status: 500 }
+      );
+    }
+
+    // Check if there are products_dismissed_duplicates referencing this product
+    const { count: dismissedDuplicatesCount, error: dismissedDuplicatesCountError } = await supabase
+      .from("products_dismissed_duplicates")
+      .select("id", { count: 'exact', head: true })
+      .or(`product_id_1.eq.${productId},product_id_2.eq.${productId}`);
+
+    if (dismissedDuplicatesCountError) {
+      console.error("Error checking products_dismissed_duplicates references:", dismissedDuplicatesCountError);
+      return NextResponse.json(
+        { error: "Error checking products_dismissed_duplicates references" },
+        { status: 500 }
+      );
+    }
+
     // Note: temp_integrations_scraped_data table doesn't have a product_id column
     // so we don't need to check for references there
 
@@ -320,6 +362,60 @@ export async function DELETE(
       }
 
       console.log(`Deleted ${priceChangesCount} price_changes_competitors records for product ${productId}`);
+    }
+
+    // Delete ALL product_custom_field_values records for this product
+    if (customFieldValuesCount && customFieldValuesCount > 0) {
+      const { error: deleteCustomFieldValuesError } = await supabase
+        .from("product_custom_field_values")
+        .delete()
+        .eq("product_id", productId);
+
+      if (deleteCustomFieldValuesError) {
+        console.error("Error deleting product_custom_field_values:", deleteCustomFieldValuesError);
+        return NextResponse.json(
+          { error: `Cannot delete product: it has ${customFieldValuesCount} custom field value records. Please try again or contact support.` },
+          { status: 409 }
+        );
+      }
+
+      console.log(`Deleted ${customFieldValuesCount} product_custom_field_values records for product ${productId}`);
+    }
+
+    // Delete ALL temp_competitors_scraped_data records for this product
+    if (tempCompetitorsCount && tempCompetitorsCount > 0) {
+      const { error: deleteTempCompetitorsError } = await supabase
+        .from("temp_competitors_scraped_data")
+        .delete()
+        .eq("product_id", productId);
+
+      if (deleteTempCompetitorsError) {
+        console.error("Error deleting temp_competitors_scraped_data:", deleteTempCompetitorsError);
+        return NextResponse.json(
+          { error: `Cannot delete product: it has ${tempCompetitorsCount} temp competitor records. Please try again or contact support.` },
+          { status: 409 }
+        );
+      }
+
+      console.log(`Deleted ${tempCompetitorsCount} temp_competitors_scraped_data records for product ${productId}`);
+    }
+
+    // Delete ALL products_dismissed_duplicates records for this product
+    if (dismissedDuplicatesCount && dismissedDuplicatesCount > 0) {
+      const { error: deleteDismissedDuplicatesError } = await supabase
+        .from("products_dismissed_duplicates")
+        .delete()
+        .or(`product_id_1.eq.${productId},product_id_2.eq.${productId}`);
+
+      if (deleteDismissedDuplicatesError) {
+        console.error("Error deleting products_dismissed_duplicates:", deleteDismissedDuplicatesError);
+        return NextResponse.json(
+          { error: `Cannot delete product: it has ${dismissedDuplicatesCount} dismissed duplicate records. Please try again or contact support.` },
+          { status: 409 }
+        );
+      }
+
+      console.log(`Deleted ${dismissedDuplicatesCount} products_dismissed_duplicates records for product ${productId}`);
     }
 
     // temp_integrations_scraped_data doesn't have product_id column, so no cleanup needed

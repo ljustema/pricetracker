@@ -3736,6 +3736,18 @@ BEGIN
     WHERE id = primary_id;
     
     -- Update references in price_changes_competitors table
+    -- First, delete any duplicate price records that would be created by the merge
+    DELETE FROM price_changes_competitors pc1
+    WHERE pc1.product_id = duplicate_id
+    AND EXISTS (
+        SELECT 1 FROM price_changes_competitors pc2
+        WHERE pc2.product_id = primary_id
+        AND pc2.competitor_id = pc1.competitor_id
+        AND pc2.new_competitor_price = pc1.new_competitor_price
+        AND pc2.changed_at::date = pc1.changed_at::date
+    );
+
+    -- Then update remaining records to point to primary product
     UPDATE price_changes_competitors
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
