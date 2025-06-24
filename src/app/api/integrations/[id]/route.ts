@@ -84,6 +84,7 @@ export async function PUT(
         api_url: body.api_url,
         api_key: body.api_key,
         sync_frequency: body.sync_frequency,
+        is_active: body.is_active,
         configuration: body.configuration,
         updated_at: new Date().toISOString(),
       })
@@ -131,6 +132,7 @@ export async function PATCH(
     api_url?: string;
     api_key?: string;
     sync_frequency?: string;
+    is_active?: boolean;
     configuration?: object; // Reason: Replaced 'any' with 'object' to satisfy ESLint rule.
     updated_at: string;
   }
@@ -172,6 +174,7 @@ export async function PATCH(
     if (body.api_url) updateData.api_url = body.api_url;
     if (body.api_key) updateData.api_key = body.api_key;
     if (body.sync_frequency) updateData.sync_frequency = body.sync_frequency;
+    if (body.is_active !== undefined) updateData.is_active = body.is_active;
     if (body.configuration) updateData.configuration = body.configuration;
 
 

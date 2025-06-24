@@ -3,11 +3,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Plus, RefreshCw } from 'lucide-react';
+import { Plus, RefreshCw, Merge } from 'lucide-react';
 import { IntegrationCard } from '@/components/integrations/IntegrationCard';
 import { IntegrationRunsDialog } from '@/components/integrations/IntegrationRunsDialog';
 import { IntegrationForm } from '@/components/integrations/IntegrationForm';
 import { TestRunDialog } from '@/components/integrations/TestRunDialog';
+import { MergePriceChangesDialog } from '@/components/integrations/MergePriceChangesDialog';
 import { Integration, CreateIntegrationData, UpdateIntegrationData } from '@/lib/services/integration-service';
 import { useToast } from '@/components/ui/use-toast';
 import {
@@ -30,6 +31,7 @@ export default function IntegrationsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [testRunDialogOpen, setTestRunDialogOpen] = useState(false);
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [selectedIntegration, setSelectedIntegration] = useState<Integration | null>(null);
   const [integrationToDelete, setIntegrationToDelete] = useState<Integration | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -246,6 +248,29 @@ export default function IntegrationsPage() {
     }
   };
 
+  // Handle toggle active button click
+  const handleToggleActive = async (integration: Integration, isActive: boolean) => {
+    try {
+      const response = await fetch(`/api/integrations/${integration.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ is_active: isActive }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to update integration');
+      }
+
+      // Refresh the integrations list
+      await fetchIntegrations();
+    } catch (error) {
+      throw error; // Re-throw to let the card handle the error display
+    }
+  };
+
   // Open the form for creating a new integration
   const handleAddNew = () => {
     setEditingIntegration(undefined);
@@ -274,6 +299,16 @@ export default function IntegrationsPage() {
             <RefreshCw className={`h-4 w-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
+          {integrations.length >= 2 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMergeDialogOpen(true)}
+            >
+              <Merge className="h-4 w-4 mr-1" />
+              Merge Price Changes
+            </Button>
+          )}
           <Button onClick={handleAddNew}>
             <Plus className="h-4 w-4 mr-1" />
             Add Integration
@@ -332,6 +367,7 @@ export default function IntegrationsPage() {
               onSync={handleSync}
               onViewHistory={handleViewHistory}
               onTestRun={handleTestRun}
+              onToggleActive={handleToggleActive}
               isRunning={!!activeRuns[integration.id]}
               runId={activeRuns[integration.id]}
             />
@@ -380,6 +416,17 @@ export default function IntegrationsPage() {
         onOpenChange={setTestRunDialogOpen}
         integration={selectedIntegration}
         onStartFullSync={handleSync}
+      />
+
+      {/* Merge Price Changes Dialog */}
+      <MergePriceChangesDialog
+        open={mergeDialogOpen}
+        onOpenChange={setMergeDialogOpen}
+        integrations={integrations}
+        onMergeComplete={() => {
+          // Refresh integrations after merge
+          fetchIntegrations();
+        }}
       />
     </div>
   );

@@ -203,9 +203,11 @@ export async function GET(_request: NextRequest) {
         last_sync_at,
         next_run_time,
         status,
+        is_active,
         user_id
       `)
       .eq('status', 'active')
+      .eq('is_active', true)
       .not('sync_frequency', 'is', null)
       .order('name');
 
@@ -261,6 +263,7 @@ export async function GET(_request: NextRequest) {
       .from('integrations')
       .select('id')
       .eq('status', 'active')
+      .eq('is_active', true)
       .not('next_run_time', 'is', null)
       .lte('next_run_time', new Date().toISOString());
 

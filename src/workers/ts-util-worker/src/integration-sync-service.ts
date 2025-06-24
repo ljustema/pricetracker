@@ -44,7 +44,23 @@ interface Integration {
   api_key: string;
   configuration?: {
     activeOnly?: boolean;
-    importAllCustomFields?: boolean;
+    selectiveImport?: {
+      enabled?: boolean;
+      fields?: {
+        name?: boolean;
+        sku?: boolean;
+        ean?: boolean;
+        brand?: boolean;
+        image_url?: boolean;
+        currency_code?: boolean;
+        url?: boolean;
+        our_retail_price?: boolean;
+        our_wholesale_price?: boolean;
+        stock_status?: boolean;
+        availability_date?: boolean;
+        raw_data?: boolean;
+      };
+    };
   };
 }
 
@@ -625,15 +641,16 @@ export class IntegrationSyncService {
   private async processProductBatch(batch: Record<string, unknown>[], batchNumber: number, totalBatches: number | string, integration: Integration): Promise<void> {
     this.log('info', 'BATCH_PROCESSING', `Processing batch ${batchNumber}/${totalBatches} (${batch.length} products)`);
 
-    // Check if we should import all custom fields
-    const importAllCustomFields = integration.configuration?.importAllCustomFields !== false; // Default to true
+    // Check if we should import raw data based on selective import settings
+    const selectiveImportEnabled = integration.configuration?.selectiveImport?.enabled === true;
+    const shouldImportRawData = !selectiveImportEnabled || integration.configuration?.selectiveImport?.fields?.raw_data !== false;
 
     // Prepare the batch for insertion
     const stagedProducts = batch.map(product => {
       // Log the first product in detail to debug
       if (batch.indexOf(product) === 0) {
         console.log('First product raw data:', JSON.stringify(product, null, 2));
-        console.log(`Import all custom fields setting: ${importAllCustomFields}`);
+        console.log(`Should import raw data: ${shouldImportRawData}`);
       }
 
       // Make sure we handle empty strings properly
@@ -647,7 +664,7 @@ export class IntegrationSyncService {
       // Determine what to store in raw_data based on configuration
       let rawDataToStore: Record<string, unknown>;
 
-      if (importAllCustomFields) {
+      if (shouldImportRawData) {
         // Store all extra features and attributes for custom field processing
         rawDataToStore = (product.features as Record<string, unknown>) || {};
       } else {

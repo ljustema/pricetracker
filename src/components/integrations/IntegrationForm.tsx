@@ -21,9 +21,26 @@ const formSchema = z.object({
   api_url: z.string().optional(),
   api_key: z.string().optional(),
   sync_frequency: z.string().optional(),
+  is_active: z.boolean().optional(),
   configuration: z.object({
     activeOnly: z.boolean().optional(),
-    importAllCustomFields: z.boolean().optional(),
+    selectiveImport: z.object({
+      enabled: z.boolean().optional(),
+      fields: z.object({
+        name: z.boolean().optional(),
+        sku: z.boolean().optional(),
+        ean: z.boolean().optional(),
+        brand: z.boolean().optional(),
+        image_url: z.boolean().optional(),
+        currency_code: z.boolean().optional(),
+        url: z.boolean().optional(),
+        our_retail_price: z.boolean().optional(),
+        our_wholesale_price: z.boolean().optional(),
+        stock_status: z.boolean().optional(),
+        availability_date: z.boolean().optional(),
+        raw_data: z.boolean().optional(),
+      }).optional(),
+    }).optional(),
   }).optional(),
 }).refine((data) => {
   // For non-manual platforms, require API credentials
@@ -66,9 +83,26 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
       api_url: integration?.api_url || '',
       api_key: integration?.api_key || '',
       sync_frequency: integration?.sync_frequency || 'daily',
+      is_active: integration?.is_active !== false, // Default to true
       configuration: {
         activeOnly: integration?.configuration?.activeOnly !== false, // Default to true
-        importAllCustomFields: integration?.configuration?.importAllCustomFields !== false, // Default to true
+        selectiveImport: {
+          enabled: integration?.configuration?.selectiveImport?.enabled || false,
+          fields: {
+            name: integration?.configuration?.selectiveImport?.fields?.name !== false,
+            sku: integration?.configuration?.selectiveImport?.fields?.sku !== false,
+            ean: integration?.configuration?.selectiveImport?.fields?.ean !== false,
+            brand: integration?.configuration?.selectiveImport?.fields?.brand !== false,
+            image_url: integration?.configuration?.selectiveImport?.fields?.image_url !== false,
+            currency_code: integration?.configuration?.selectiveImport?.fields?.currency_code !== false,
+            url: integration?.configuration?.selectiveImport?.fields?.url !== false,
+            our_retail_price: integration?.configuration?.selectiveImport?.fields?.our_retail_price !== false,
+            our_wholesale_price: integration?.configuration?.selectiveImport?.fields?.our_wholesale_price !== false,
+            stock_status: integration?.configuration?.selectiveImport?.fields?.stock_status !== false,
+            availability_date: integration?.configuration?.selectiveImport?.fields?.availability_date !== false,
+            raw_data: integration?.configuration?.selectiveImport?.fields?.raw_data !== false,
+          },
+        },
       },
     },
   });
@@ -87,9 +121,26 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
         api_url: integration.api_url,
         api_key: integration.api_key,
         sync_frequency: integration.sync_frequency,
+        is_active: integration.is_active !== false, // Default to true
         configuration: {
           activeOnly: integration.configuration?.activeOnly !== false, // Default to true
-          importAllCustomFields: integration.configuration?.importAllCustomFields !== false, // Default to true
+          selectiveImport: {
+            enabled: integration.configuration?.selectiveImport?.enabled || false,
+            fields: {
+              name: integration.configuration?.selectiveImport?.fields?.name !== false,
+              sku: integration.configuration?.selectiveImport?.fields?.sku !== false,
+              ean: integration.configuration?.selectiveImport?.fields?.ean !== false,
+              brand: integration.configuration?.selectiveImport?.fields?.brand !== false,
+              image_url: integration.configuration?.selectiveImport?.fields?.image_url !== false,
+              currency_code: integration.configuration?.selectiveImport?.fields?.currency_code !== false,
+              url: integration.configuration?.selectiveImport?.fields?.url !== false,
+              our_retail_price: integration.configuration?.selectiveImport?.fields?.our_retail_price !== false,
+              our_wholesale_price: integration.configuration?.selectiveImport?.fields?.our_wholesale_price !== false,
+              stock_status: integration.configuration?.selectiveImport?.fields?.stock_status !== false,
+              availability_date: integration.configuration?.selectiveImport?.fields?.availability_date !== false,
+              raw_data: integration.configuration?.selectiveImport?.fields?.raw_data !== false,
+            },
+          },
         },
       });
     }
@@ -191,7 +242,7 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEditing ? 'Edit Integration' : 'Add Integration'}</DialogTitle>
           <DialogDescription>
@@ -249,6 +300,29 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
                     A friendly name to identify this integration.
                   </FormDescription>
                   <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="is_active"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                  <FormControl>
+                    <Checkbox
+                      checked={field.value !== false} // Default to true if undefined
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <div className="space-y-1 leading-none">
+                    <FormLabel>
+                      Active
+                    </FormLabel>
+                    <FormDescription>
+                      When checked, this integration will run automatically according to the sync frequency. Uncheck to keep the integration configured but prevent it from running.
+                    </FormDescription>
+                  </div>
                 </FormItem>
               )}
             />
@@ -445,32 +519,83 @@ export function IntegrationForm({ open, onOpenChange, integration, onSubmit }: I
                   )}
                 />
 
+
+
+                {/* Selective Import Configuration */}
                 <FormField
                   control={form.control}
-                  name="configuration.importAllCustomFields"
+                  name="configuration.selectiveImport.enabled"
                   render={({ field }) => (
                     <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
                       <FormControl>
                         <Checkbox
-                          checked={field.value !== false} // Default to true if undefined
+                          checked={field.value || false}
                           onCheckedChange={field.onChange}
                         />
                       </FormControl>
                       <div className="space-y-1 leading-none">
                         <FormLabel>
-                          Import all extra custom fields
+                          Enable selective field import
                         </FormLabel>
                         <FormDescription>
-                          When checked, all extra product features and attributes will be imported to raw_data for custom field processing. Unchecking this will only import basic product information.
+                          When enabled, you can choose which specific fields to import from this integration. This is useful when combining data from multiple integrations.
                         </FormDescription>
                       </div>
                     </FormItem>
                   )}
                 />
+
+                {/* Show field selection checkboxes when selective import is enabled */}
+                {form.watch('configuration.selectiveImport.enabled') && (
+                  <div className="rounded-md border p-3 space-y-2">
+                    <h4 className="font-medium text-sm">Select fields to import:</h4>
+                    <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+                      {[
+                        { name: 'name', label: 'Product Name', description: 'Product title/name' },
+                        { name: 'sku', label: 'SKU', description: 'Stock Keeping Unit' },
+                        { name: 'ean', label: 'EAN', description: 'European Article Number' },
+                        { name: 'brand', label: 'Brand', description: 'Product brand/manufacturer' },
+                        { name: 'image_url', label: 'Image URL', description: 'Product image URL' },
+                        { name: 'currency_code', label: 'Currency', description: 'Currency code (SEK, EUR, etc.)' },
+                        { name: 'url', label: 'Product URL', description: 'Link to product page' },
+                        { name: 'our_retail_price', label: 'Retail Price', description: 'Our retail selling price' },
+                        { name: 'our_wholesale_price', label: 'Wholesale Price', description: 'Our wholesale/cost price' },
+                        { name: 'stock_status', label: 'Stock Status', description: 'Stock availability status' },
+                        { name: 'availability_date', label: 'Availability Date', description: 'When product becomes available' },
+                        { name: 'raw_data', label: 'Raw Data', description: 'All custom fields and specifications' },
+                      ].map((fieldConfig) => (
+                        <FormField
+                          key={fieldConfig.name}
+                          control={form.control}
+                          name={`configuration.selectiveImport.fields.${fieldConfig.name}` as keyof FormValues}
+                          render={({ field }) => (
+                            <FormItem className="flex flex-row items-start space-x-2 space-y-0 py-1">
+                              <FormControl>
+                                <Checkbox
+                                  checked={Boolean(field.value)}
+                                  onCheckedChange={field.onChange}
+                                  className="mt-0.5"
+                                />
+                              </FormControl>
+                              <div className="space-y-0 leading-tight">
+                                <FormLabel className="text-xs font-medium cursor-pointer">
+                                  {fieldConfig.label}
+                                </FormLabel>
+                                <FormDescription className="text-xs text-muted-foreground">
+                                  {fieldConfig.description}
+                                </FormDescription>
+                              </div>
+                            </FormItem>
+                          )}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </>
             )}
 
-            <DialogFooter>
+            <DialogFooter className="sticky bottom-0 bg-white border-t pt-4 mt-4">
               <Button
                 type="button"
                 variant="outline"

@@ -5,7 +5,7 @@ import Image from 'next/image';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { AlertCircle, CheckCircle, Clock, Edit, Trash2, RefreshCw, History, FlaskConical, Upload, Store } from 'lucide-react';
+import { AlertCircle, CheckCircle, Clock, Edit, Trash2, RefreshCw, History, FlaskConical, Upload, Store, Power, PowerOff } from 'lucide-react';
 import { Integration } from '@/lib/services/integration-service';
 import { useToast } from '@/components/ui/use-toast';
 import { useRouter } from 'next/navigation';
@@ -17,6 +17,7 @@ interface IntegrationCardProps {
   onSync: (integration: Integration) => void;
   onViewHistory?: (integration: Integration) => void;
   onTestRun?: (integration: Integration) => void;
+  onToggleActive?: (integration: Integration, isActive: boolean) => Promise<void>;
   isRunning?: boolean;
   runId?: string;
 }
@@ -28,6 +29,7 @@ export function IntegrationCard({
   onSync,
   onViewHistory,
   onTestRun,
+  onToggleActive,
   isRunning = false,
   runId: _runId
 }: IntegrationCardProps) {
@@ -130,6 +132,24 @@ export function IntegrationCard({
     onTestRun(integration);
   };
 
+  // Handle toggle active button click
+  const handleToggleActive = async () => {
+    if (!onToggleActive) return;
+    try {
+      await onToggleActive(integration, !integration.is_active);
+      toast({
+        title: integration.is_active ? 'Integration deactivated' : 'Integration activated',
+        description: `${integration.name} is now ${integration.is_active ? 'inactive' : 'active'}.`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Failed to toggle integration',
+        description: error instanceof Error ? error.message : 'Failed to update integration status',
+        variant: 'destructive',
+      });
+    }
+  };
+
   const statusBadge = getStatusBadge();
 
   return (
@@ -207,6 +227,22 @@ export function IntegrationCard({
               {integration.platform === 'manual' ? 'Manual CSV Upload' : integration.sync_frequency}
             </span>
           </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">Status:</span>
+            <span className="flex items-center">
+              {integration.is_active ? (
+                <span className="flex items-center text-green-600">
+                  <Power className="h-3 w-3 mr-1" />
+                  Active
+                </span>
+              ) : (
+                <span className="flex items-center text-gray-500">
+                  <PowerOff className="h-3 w-3 mr-1" />
+                  Inactive
+                </span>
+              )}
+            </span>
+          </div>
           {integration.platform !== 'manual' && (
             <div className="flex justify-between">
               <span className="text-gray-500">Active Products Only:</span>
@@ -240,6 +276,27 @@ export function IntegrationCard({
             <History className="h-4 w-4 mr-1" />
             History
           </Button>
+
+          {onToggleActive && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleToggleActive}
+              className={integration.is_active ? 'text-orange-600 hover:text-orange-700' : 'text-green-600 hover:text-green-700'}
+            >
+              {integration.is_active ? (
+                <>
+                  <PowerOff className="h-4 w-4 mr-1" />
+                  Deactivate
+                </>
+              ) : (
+                <>
+                  <Power className="h-4 w-4 mr-1" />
+                  Activate
+                </>
+              )}
+            </Button>
+          )}
 
           <Button
             variant="outline"
@@ -281,13 +338,15 @@ export function IntegrationCard({
                 variant="default"
                 size="sm"
                 onClick={handleSync}
-                disabled={isSyncing || isRunning || integration.status === 'pending_setup' || integration.status === 'pending_test_run'}
+                disabled={isSyncing || isRunning || !integration.is_active || integration.status === 'pending_setup' || integration.status === 'pending_test_run'}
                 title={
-                  isRunning
-                    ? 'Integration is currently running'
-                    : (!integration.last_sync_at || integration.status === 'pending_setup' || integration.status === 'pending_test_run')
-                      ? 'Run a test first'
-                      : ''
+                  !integration.is_active
+                    ? 'Integration is inactive'
+                    : isRunning
+                      ? 'Integration is currently running'
+                      : (!integration.last_sync_at || integration.status === 'pending_setup' || integration.status === 'pending_test_run')
+                        ? 'Run a test first'
+                        : ''
                 }
               >
                 {isSyncing ? (

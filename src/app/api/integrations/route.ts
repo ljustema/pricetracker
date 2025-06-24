@@ -86,6 +86,7 @@ export async function POST(request: NextRequest) {
       api_url: body.api_url || null,
       api_key: body.api_key || null,
       status: (body.platform === 'manual' || body.platform === 'google-feed') ? 'active' : 'pending_setup', // Manual and Google Feed integrations are immediately active
+      is_active: body.is_active !== false, // Default to true
       sync_frequency: body.platform === 'manual' ? 'manual' : (body.sync_frequency || 'daily'),
       configuration: body.configuration || null,
     };

@@ -3,8 +3,24 @@ import { createSupabaseAdminClient } from '@/lib/supabase/server';
 // Define configuration type for integrations
 export interface IntegrationConfiguration {
   activeOnly?: boolean;
-  importAllCustomFields?: boolean;
-  [key: string]: string | number | boolean | null | undefined;
+  selectiveImport?: {
+    enabled?: boolean;
+    fields?: {
+      name?: boolean;
+      sku?: boolean;
+      ean?: boolean;
+      brand?: boolean;
+      image_url?: boolean;
+      currency_code?: boolean;
+      url?: boolean;
+      our_retail_price?: boolean;
+      our_wholesale_price?: boolean;
+      stock_status?: boolean;
+      availability_date?: boolean;
+      raw_data?: boolean;
+    };
+  };
+  [key: string]: string | number | boolean | null | undefined | object;
 }
 
 // Define log details type
@@ -20,6 +36,7 @@ export interface Integration {
   api_url: string;
   api_key: string;
   status: 'pending_setup' | 'active' | 'inactive' | 'error' | 'pending_test_run';
+  is_active: boolean;
   last_sync_at: string | null;
   last_sync_status: 'success' | 'failed' | null;
   sync_frequency: string;
@@ -57,6 +74,7 @@ export interface UpdateIntegrationData {
   api_url?: string;
   api_key?: string;
   status?: 'pending_setup' | 'active' | 'inactive' | 'error' | 'pending_test_run';
+  is_active?: boolean;
   sync_frequency?: string;
   configuration?: IntegrationConfiguration;
 }
