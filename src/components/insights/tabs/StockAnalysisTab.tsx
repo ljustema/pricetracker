@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { StockBadgeDetailed } from '@/components/ui/stock-badge';
 import { calculateSalesVelocity } from '@/lib/utils/stock-utils';
 
-interface StockInsightsContentProps {
+interface StockAnalysisTabProps {
   competitors: Array<{
     id: string;
     name: string;
@@ -34,14 +34,14 @@ interface StockInsightsContentProps {
     totalStockChanges: number;
     productsWithStock: number;
     outOfStockProducts: number;
-  };
+  } | null;
 }
 
-export default function StockInsightsContent({
+export default function StockAnalysisTab({
   competitors,
   recentStockChanges,
   stockStats: _stockStats
-}: StockInsightsContentProps) {
+}: StockAnalysisTabProps) {
   const [selectedCompetitor, setSelectedCompetitor] = useState<string>('all');
 
   // Filter stock changes by selected competitor
