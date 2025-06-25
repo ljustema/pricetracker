@@ -512,6 +512,23 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
         raw_data = p.get('raw_data')
         raw_data_json = json.dumps(raw_data) if raw_data else None
 
+        # Extract stock data if present
+        stock_data = p.get('stock_data')
+        stock_quantity = None
+        stock_status = None
+        availability_date = None
+        raw_stock_data_json = None
+
+        if stock_data:
+            stock_quantity = stock_data.get('quantity')
+            stock_status = stock_data.get('status')
+            availability_date = stock_data.get('availability_date')
+
+            # Extract raw stock data
+            raw_stock_data = stock_data.get('raw_data')
+            if raw_stock_data:
+                raw_stock_data_json = json.dumps(raw_stock_data)
+
         products_to_insert.append((
             user_id,
             # run_id, # Removed: scraper_run_id column does not exist in temp_competitors_scraped_data
@@ -525,6 +542,10 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
             p.get('brand'),
             p.get('ean'),
             raw_data_json, # Include raw_data as JSON
+            stock_quantity, # Stock quantity
+            stock_status, # Stock status
+            availability_date, # Availability date
+            raw_stock_data_json, # Raw stock data as JSON
             datetime.now(timezone.utc) # scraped_at timestamp
         ))
 
@@ -556,7 +577,8 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
                         sql = """
                             INSERT INTO temp_competitors_scraped_data (
                                 user_id, competitor_id, name, competitor_price, currency_code,
-                                url, image_url, sku, brand, ean, raw_data, scraped_at
+                                url, image_url, sku, brand, ean, raw_data,
+                                stock_quantity, stock_status, availability_date, raw_stock_data, scraped_at
                             ) VALUES %s
                         """
                         psycopg2.extras.execute_values(cur, sql, chunk, page_size=len(chunk))
