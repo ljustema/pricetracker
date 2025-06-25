@@ -54,7 +54,7 @@ interface BrandChangeActivity {
     brand_name: string;
     total_products: number;
     total_changes: number;
-    changes_per_product: number;
+    changes_per_product: number | null;
   }[];
 }
 
@@ -124,14 +124,14 @@ const PricePositioningTooltip = ({ active, payload }: { active?: boolean; payloa
 };
 
 // Custom tooltip for change activity chart
-const ChangeActivityTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; changes_per_product: number; total_changes: number; total_products: number } }> }) => {
+const ChangeActivityTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { brand_name: string; changes_per_product: number | null; total_changes: number; total_products: number } }> }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
       <div className="bg-white p-3 border border-gray-200 shadow-sm rounded-md">
         <p className="font-medium">{data.brand_name}</p>
         <p className="text-sm">
-          Changes per Product: {data.changes_per_product.toFixed(2)}
+          Changes per Product: {(data.changes_per_product || 0).toFixed(2)}
         </p>
         <p className="text-sm">
           Total Changes: {formatNumber(data.total_changes)}

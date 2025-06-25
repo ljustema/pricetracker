@@ -58,8 +58,8 @@ interface SalesAnalysisItem {
   total_revenue: number;
   avg_daily_sales: number;
   avg_daily_revenue: number;
-  revenue_percentage: number;
-  [key: string]: string | number; // Index signature for chart compatibility
+  revenue_percentage: number | null;
+  [key: string]: string | number | null; // Index signature for chart compatibility
 }
 
 interface SalesAnalysisData {
@@ -79,7 +79,7 @@ interface BrandPerformanceItem {
   total_sold: number;
   total_revenue: number;
   avg_sales_per_product: number;
-  revenue_percentage: number;
+  revenue_percentage: number | null;
   avg_daily_sales: number;
   avg_daily_revenue: number;
 }
@@ -300,7 +300,10 @@ export default function StockAnalysisTab({
     return new Intl.NumberFormat('sv-SE').format(numValue);
   };
 
-  const formatPercentage = (value: number) => {
+  const formatPercentage = (value: number | null | undefined) => {
+    if (value === null || value === undefined || isNaN(value)) {
+      return '0.0%';
+    }
     return `${value.toFixed(1)}%`;
   };
 
@@ -593,7 +596,7 @@ export default function StockAnalysisTab({
                       data={salesData.data.slice(0, 10).map(item => ({
                         name: item.product_name.length > 15 ? item.product_name.substring(0, 15) + '...' : item.product_name,
                         value: item.total_revenue,
-                        percentage: item.revenue_percentage
+                        percentage: item.revenue_percentage || 0
                       }))}
                       dataKey="value"
                       nameKey="name"

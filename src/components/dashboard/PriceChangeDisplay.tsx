@@ -6,7 +6,7 @@ interface PriceChangeDisplayProps {
   oldPrice: number;
   newPrice: number;
   currencyCode: string;
-  percentage: number;
+  percentage: number | null;
 }
 
 export default function PriceChangeDisplay({ 
@@ -18,7 +18,7 @@ export default function PriceChangeDisplay({
   return (
     <div className="text-right">
       <p className="text-lg font-medium text-red-600">
-        {percentage.toFixed(2)}%
+        {(percentage || 0).toFixed(2)}%
       </p>
       <p className="text-sm text-gray-500">
         {new Intl.NumberFormat('sv-SE', { 

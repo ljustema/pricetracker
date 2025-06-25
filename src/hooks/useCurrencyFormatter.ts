@@ -85,7 +85,7 @@ export function useCurrencyFormatter() {
         }).format(price);
         break;
       default:
-        formattedNumber = price.toFixed(2);
+        formattedNumber = (price || 0).toFixed(2);
     }
 
     // Return the formatted price with the currency symbol

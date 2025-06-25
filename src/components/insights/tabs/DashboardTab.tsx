@@ -223,8 +223,8 @@ const DashboardTab: React.FC = () => {
                         </p>
                       </div>
                       <div className="text-right">
-                        <div className={`font-medium ${priceChange.price_change_percentage > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {priceChange.price_change_percentage > 0 ? '+' : ''}{priceChange.price_change_percentage.toFixed(2)}%
+                        <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
                         </div>
                         <div className="text-sm text-gray-500">
                           {formatCurrency(
