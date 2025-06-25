@@ -1030,16 +1030,16 @@ async function fetchAndProcessJob() {
                         await saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave, supabase);
                         logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted final batch.`);
                     } catch (err) {
-                        const errorMessage = err instanceof Error ? err.message : String(err);
-                        logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save final product batch: ${errorMessage}`);
+                        const batchErrorMessage = err instanceof Error ? err.message : String(err);
+                        logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save final product batch: ${batchErrorMessage}`);
 
                         // Check if this is a constraint violation that should fail the job
-                        if (errorMessage.includes('check_competitor_price_consistency') ||
-                            errorMessage.includes('violates check constraint')) {
+                        if (batchErrorMessage.includes('check_competitor_price_consistency') ||
+                            batchErrorMessage.includes('violates check constraint')) {
                             logStructured(job.id, 'error', 'DB_CONSTRAINT_VIOLATION', `Database constraint violation in final batch. Job will be marked as failed.`);
                             finalStatus = 'failed';
-                            errorMessage = `Database constraint violation: ${errorMessage}`;
-                            errorDetails = errorMessage;
+                            errorMessage = `Database constraint violation: ${batchErrorMessage}`;
+                            errorDetails = batchErrorMessage;
                         } else {
                             // For other errors, log but don't fail the job if we've processed most data successfully
                             logStructured(job.id, 'warn', 'DB_BATCH_SAVE', `Final batch save failed but job will be marked as completed since main processing succeeded.`);
