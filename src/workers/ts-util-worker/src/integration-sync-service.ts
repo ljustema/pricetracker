@@ -319,36 +319,9 @@ export class IntegrationSyncService {
       productsProcessed = countArray?.length || 0;
     }
 
-    // Call the process_pending_integration_products function one final time with timeout
-    try {
-      this.log('info', 'FINAL_PROCESSING_TRIGGER', 'Triggering final processing for all pending products');
-
-      // Add timeout to prevent hanging on final processing
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Final processing timeout after 10 minutes')), 10 * 60 * 1000);
-      });
-
-      const processingPromise = this.supabase
-        .rpc('process_pending_integration_products', { run_id: this.runId });
-
-      // Race between the actual operation and timeout
-      const result = await Promise.race([processingPromise, timeoutPromise]) as { data: unknown; error: unknown };
-
-      if (result.error) {
-        const errorMessage = result.error && typeof result.error === 'object' && 'message' in result.error ? (result.error as { message: string }).message : 'Unknown error';
-        this.log('error', 'FINAL_PROCESSING_ERROR', `Error in final processing: ${errorMessage}`);
-      } else {
-        this.log('info', 'FINAL_PROCESSING_COMPLETE', `Final processing complete: ${JSON.stringify(result.data)}`);
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.log('error', 'FINAL_PROCESSING_EXCEPTION', `Exception in final processing: ${errorMessage}`);
-
-      // Log timeout specifically but don't fail the entire sync
-      if (errorMessage.includes('timeout')) {
-        this.log('warn', 'FINAL_PROCESSING_TIMEOUT', 'Final processing timed out, but sync will continue with current results');
-      }
-    }
+    // Products are now automatically processed via database triggers
+    // No need for manual processing calls
+    this.log('info', 'AUTO_PROCESSING', 'Products automatically processed via database triggers');
 
     // Wait a moment for any remaining processing to complete
     this.log('info', 'DB_PROCESSING_WAIT', 'Waiting for processing to complete...');
@@ -473,18 +446,8 @@ export class IntegrationSyncService {
         await this.updateRunStatus('processing', { productsProcessed });
       }
 
-      // Process all staged data
-      this.log('info', 'FINAL_PROCESSING', 'Processing all staged products');
-
-      const { data: processResult, error: processError } = await this.supabase
-        .rpc('process_pending_integration_products', { run_id: this.runId });
-
-      if (processError) {
-        const errorMessage = processError && typeof processError === 'object' && 'message' in processError ? (processError as { message: string }).message : 'Unknown error';
-        this.log('error', 'PROCESSING_ERROR', `Error processing products: ${errorMessage}`);
-      } else {
-        this.log('info', 'PROCESSING_COMPLETE', `Processing complete: ${JSON.stringify(processResult)}`);
-      }
+      // Products are automatically processed via database triggers
+      this.log('info', 'AUTO_PROCESSING', 'Products automatically processed via database triggers');
 
       // Get final statistics
       const { data: stats, error: statsError } = await this.supabase
@@ -539,7 +502,7 @@ export class IntegrationSyncService {
         our_retail_price: extractedData.our_retail_price,
         our_wholesale_price: extractedData.our_wholesale_price,
         image_url: extractedData.image_url || null,
-        our_url: extractedData.url || null, // Updated field name to match database schema
+        our_url: extractedData.our_url || null, // Updated field name to match database schema
         currency_code: extractedData.currency_code || 'SEK',
         raw_data: item, // Store the entire XML item for reference
         status: 'pending',
@@ -624,7 +587,7 @@ export class IntegrationSyncService {
 
     return {
       name: title,
-      url: link,
+      our_url: link, // Changed from 'url' to 'our_url' to match database schema
       image_url: imageLink,
       our_retail_price: retailPrice,
       our_wholesale_price: wholesalePrice,
@@ -715,36 +678,8 @@ export class IntegrationSyncService {
 
     this.log('info', 'BATCH_STAGED', `Staged batch ${batchNumber}/${totalBatches} (${batch.length} products)`);
 
-    // Process this batch immediately by calling the database function with timeout
-    try {
-      this.log('info', 'BATCH_PROCESSING_TRIGGER', `Triggering processing for batch ${batchNumber}/${totalBatches}`);
-
-      // Add timeout to prevent hanging on database operations
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Database processing timeout after 5 minutes')), 5 * 60 * 1000);
-      });
-
-      const processingPromise = this.supabase
-        .rpc('process_pending_integration_products', { run_id: this.runId });
-
-      // Race between the actual operation and timeout
-      const result = await Promise.race([processingPromise, timeoutPromise]) as { data: unknown; error: unknown };
-
-      if (result.error) {
-        const errorMessage = result.error && typeof result.error === 'object' && 'message' in result.error ? (result.error as { message: string }).message : 'Unknown error';
-        this.log('error', 'BATCH_PROCESSING_ERROR', `Error processing batch ${batchNumber}: ${errorMessage}`);
-      } else {
-        this.log('info', 'BATCH_PROCESSED', `Processed batch ${batchNumber}/${totalBatches}: ${JSON.stringify(result.data)}`);
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.log('error', 'BATCH_PROCESSING_EXCEPTION', `Exception processing batch ${batchNumber}: ${errorMessage}`);
-
-      // If it's a timeout, we should still continue with the next batch
-      if (errorMessage.includes('timeout')) {
-        this.log('warn', 'BATCH_PROCESSING_TIMEOUT', `Batch ${batchNumber} timed out, continuing with next batch`);
-      }
-    }
+    // Products are automatically processed via database triggers after insertion
+    this.log('info', 'AUTO_PROCESSING', `Batch ${batchNumber}/${totalBatches} automatically processed via database triggers`);
   }
 
   /**
