@@ -15,7 +15,7 @@ interface ProductUpdateData {
   category?: string;
   description?: string;
   image_url?: string;
-  url?: string;
+  our_url?: string; // Renamed from url
   currency_code?: string;
   our_retail_price?: number;
   our_wholesale_price?: number;
@@ -246,7 +246,7 @@ export async function POST(req: NextRequest) {
         if (row.category) updateData.category = row.category;
         if (row.description) updateData.description = row.description;
         if (row.image_url) updateData.image_url = row.image_url;
-        if (row.url) updateData.url = row.url;
+        if (row.our_url || row.url) updateData.our_url = row.our_url || row.url; // Updated field name, support both old and new
         if (row.currency_code) updateData.currency_code = row.currency_code.toUpperCase();
 
         // Update prices if provided
@@ -282,7 +282,7 @@ export async function POST(req: NextRequest) {
             category: row.category || null,
             description: row.description || null,
             image_url: row.image_url || null,
-            url: row.url || null,
+            our_url: row.our_url || row.url || null, // Updated field name, support both old and new
             our_retail_price: ourRetailPrice,
             our_wholesale_price: ourWholesalePrice,
             currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',

@@ -539,7 +539,7 @@ export class IntegrationSyncService {
         our_retail_price: extractedData.our_retail_price,
         our_wholesale_price: extractedData.our_wholesale_price,
         image_url: extractedData.image_url || null,
-        url: extractedData.url || null,
+        our_url: extractedData.url || null, // Updated field name to match database schema
         currency_code: extractedData.currency_code || 'SEK',
         raw_data: item, // Store the entire XML item for reference
         status: 'pending',
@@ -684,7 +684,7 @@ export class IntegrationSyncService {
         our_retail_price: product.price,
         our_wholesale_price: product.wholesale_price || null,
         image_url: imageUrl,
-        url: productUrl, // Add the product URL to the staged product
+        our_url: productUrl, // Updated field name to match database schema
         currency_code: currencyCode, // Add the currency code
         raw_data: rawDataToStore, // Store custom fields based on configuration
         status: 'pending',
