@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-06-23 15:56:10
+-- Generated: 2025-06-25 10:48:41
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -595,8 +595,15 @@ CREATE TABLE public.integrations (
     configuration jsonb,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    next_run_time timestamp with time zone
+    next_run_time timestamp with time zone,
+    is_active boolean DEFAULT true NOT NULL
 );
+
+--
+-- Name: COLUMN integrations.is_active; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.integrations.is_active IS 'Whether the integration is active and should run on schedule';
 
 --
 -- Name: marketing_contacts; Type: TABLE; Schema: public; Owner: -

@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-06-23 15:56:10
+-- Generated: 2025-06-25 10:48:41
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -570,26 +570,16 @@ END;
 
 $$;
 
-timeout_record record;
+timeout_count integer := 0;
 
 BEGIN
-    -- Find integration runs that are processing but haven't updated progress in 1 hour
+    -- Find stalled integration runs (running for more than 1 hour without progress)
     FOR timeout_record IN
-        SELECT 
-            ir.id, 
-            ir.integration_id, 
-            ir.started_at,
-            ir.last_progress_update,
-            ir.products_processed,
-            i.name as integration_name
+        SELECT ir.id, ir.integration_id, ir.started_at, ir.last_progress_update
         FROM public.integration_runs ir
-        JOIN public.integrations i ON ir.integration_id = i.id
-        WHERE ir.status = 'processing'
+        WHERE ir.status IN ('running', 'processing')
           AND (
-            -- Case 1: last_progress_update exists and is older than 1 hour
-            (ir.last_progress_update IS NOT NULL AND ir.last_progress_update < now() - interval '1 hour')
-            OR
-            -- Case 2: last_progress_update is NULL but started_at is older than 1 hour (fallback)
+            (ir.last_progress_update IS NOT NULL AND ir.last_progress_update < now() - interval '1 hour') OR
             (ir.last_progress_update IS NULL AND ir.started_at IS NOT NULL AND ir.started_at < now() - interval '1 hour')
           )
     LOOP
@@ -601,25 +591,24 @@ BEGIN
             error_message = 'Integration run stalled - no progress update for over 1 hour (likely due to worker restart)'
         WHERE id = timeout_record.id;
 
--- Update the integration status to error
+-- Keep the integration status as active (don't set to error) so it can be rescheduled
         UPDATE public.integrations
         SET 
-            status = 'error',
             last_sync_status = 'failed',
             last_sync_at = now(),
             updated_at = now()
+            -- Note: NOT setting status = 'error', keeping it as 'active'
         WHERE id = timeout_record.integration_id;
 
 timeout_count := timeout_count + 1;
 
--- Log the timeout for debugging
+-- Log the timeout
         INSERT INTO public.debug_logs (message, created_at)
         VALUES (
             'Integration run timed out - run_id: ' || timeout_record.id || 
-            ', integration: ' || timeout_record.integration_name || 
-            ', started_at: ' || timeout_record.started_at || 
-            ', last_progress: ' || COALESCE(timeout_record.last_progress_update::text, 'NULL') ||
-            ', products_processed: ' || timeout_record.products_processed,
+            ', integration_id: ' || timeout_record.integration_id || 
+            ', started_at: ' || timeout_record.started_at ||
+            ', last_progress: ' || COALESCE(timeout_record.last_progress_update::text, 'NULL'),
             now()
         );
 
@@ -673,8 +662,6 @@ current_timestamp timestamp with time zone := now();
 RETURN;
 
 END IF;
-
-EXIT;
 
 END IF;
 
@@ -1225,8 +1212,8 @@ BEGIN
 
 similarity_threshold := COALESCE((settings->>'min_similarity_score')::INTEGER, 80);
 
--- 1. EAN Priority (if enabled and EAN provided)
-    IF (settings->>'ean_priority')::BOOLEAN = true AND p_ean IS NOT NULL AND p_ean != '' THEN
+-- 1. EAN Priority (if enabled and valid EAN provided)
+    IF (settings->>'ean_priority')::BOOLEAN = true AND p_ean IS NOT NULL AND p_ean != '' AND is_valid_ean(p_ean) THEN
         SELECT id INTO product_id
         FROM products
         WHERE user_id = p_user_id AND ean = p_ean
@@ -1240,101 +1227,68 @@ END IF;
 
 END IF;
 
--- 2. SKU + Brand Fallback (if enabled)
-    IF (settings->>'sku_brand_fallback')::BOOLEAN = true AND p_sku IS NOT NULL AND p_sku != '' THEN
-        -- Try exact brand + exact SKU first
-        IF p_brand_id IS NOT NULL THEN
-            SELECT id INTO product_id
-            FROM products
-            WHERE user_id = p_user_id 
-              AND brand_id = p_brand_id 
-              AND sku = p_sku
-            ORDER BY created_at ASC
-            LIMIT 1;
+-- 2. SKU + Brand Priority (if enabled)
+    IF (settings->>'sku_brand_priority')::BOOLEAN = true AND p_sku IS NOT NULL AND p_sku != '' AND p_brand IS NOT NULL AND p_brand != '' THEN
+        -- Normalize SKU for fuzzy matching
+        normalized_sku := normalize_sku_for_matching(p_sku);
+
+SELECT id INTO product_id
+        FROM products
+        WHERE user_id = p_user_id 
+          AND normalize_sku_for_matching(sku) = normalized_sku
+          AND (brand_id = p_brand_id OR LOWER(brand) = LOWER(p_brand))
+        ORDER BY created_at ASC
+        LIMIT 1;
 
 IF product_id IS NOT NULL THEN
-                RETURN product_id;
+            RETURN product_id;
 
 END IF;
 
 END IF;
 
--- Try brand name + exact SKU
-        IF p_brand IS NOT NULL AND p_brand != '' THEN
-            SELECT id INTO product_id
-            FROM products
-            WHERE user_id = p_user_id 
-              AND brand = p_brand 
-              AND sku = p_sku
-            ORDER BY created_at ASC
-            LIMIT 1;
+-- 3. Fallback: EAN matching (if not prioritized but valid EAN available)
+    IF p_ean IS NOT NULL AND p_ean != '' AND is_valid_ean(p_ean) THEN
+        SELECT id INTO product_id
+        FROM products
+        WHERE user_id = p_user_id AND ean = p_ean
+        ORDER BY created_at ASC
+        LIMIT 1;
 
 IF product_id IS NOT NULL THEN
-                RETURN product_id;
+            RETURN product_id;
 
 END IF;
 
 END IF;
 
--- Try fuzzy SKU matching (normalize SKUs)
-        normalized_sku := normalize_sku(p_sku);
+-- 4. Fallback: SKU + Brand matching (if not prioritized)
+    IF p_sku IS NOT NULL AND p_sku != '' AND p_brand IS NOT NULL AND p_brand != '' THEN
+        -- Normalize SKU for fuzzy matching
+        normalized_sku := normalize_sku_for_matching(p_sku);
 
-IF normalized_sku IS NOT NULL THEN
-            -- Try with brand_id + normalized SKU
-            IF p_brand_id IS NOT NULL THEN
-                SELECT id INTO product_id
-                FROM products
-                WHERE user_id = p_user_id 
-                  AND brand_id = p_brand_id 
-                  AND normalize_sku(sku) = normalized_sku
-                ORDER BY created_at ASC
-                LIMIT 1;
+SELECT id INTO product_id
+        FROM products
+        WHERE user_id = p_user_id 
+          AND normalize_sku_for_matching(sku) = normalized_sku
+          AND (brand_id = p_brand_id OR LOWER(brand) = LOWER(p_brand))
+        ORDER BY created_at ASC
+        LIMIT 1;
 
 IF product_id IS NOT NULL THEN
-                    RETURN product_id;
+            RETURN product_id;
 
 END IF;
 
 END IF;
 
--- Try with brand name + normalized SKU
-            IF p_brand IS NOT NULL AND p_brand != '' THEN
-                SELECT id INTO product_id
-                FROM products
-                WHERE user_id = p_user_id 
-                  AND brand = p_brand 
-                  AND normalize_sku(sku) = normalized_sku
-                ORDER BY created_at ASC
-                LIMIT 1;
-
-IF product_id IS NOT NULL THEN
-                    RETURN product_id;
-
-END IF;
-
-END IF;
-
-END IF;
-
-END IF;
-
--- 3. Fuzzy Name Matching (if enabled and name provided)
+-- 5. Fuzzy name matching (if enabled and no other matches found)
     IF (settings->>'fuzzy_name_matching')::BOOLEAN = true AND p_name IS NOT NULL AND p_name != '' THEN
-        -- Find products with similar names using Levenshtein distance
         SELECT id INTO product_id
         FROM products
         WHERE user_id = p_user_id
-          AND name IS NOT NULL
-          AND (
-              -- High similarity threshold for name matching
-              (LENGTH(name) > 0 AND LENGTH(p_name) > 0 AND 
-               (100 - (levenshtein(LOWER(name), LOWER(p_name)) * 100.0 / GREATEST(LENGTH(name), LENGTH(p_name)))) >= similarity_threshold)
-              OR
-              -- Substring matching for shorter names
-              (LENGTH(p_name) >= 10 AND LOWER(name) LIKE '%' || LOWER(p_name) || '%')
-              OR
-              (LENGTH(name) >= 10 AND LOWER(p_name) LIKE '%' || LOWER(name) || '%')
-          )
+          AND name IS NOT NULL AND name != ''
+          AND (100 - (levenshtein(LOWER(name), LOWER(p_name)) * 100.0 / GREATEST(LENGTH(name), LENGTH(p_name)))) >= similarity_threshold
         ORDER BY 
             -- Prefer exact matches, then by similarity, then by creation date
             CASE WHEN LOWER(name) = LOWER(p_name) THEN 0 ELSE 1 END,
@@ -1368,6 +1322,63 @@ END;
 
 $$;
 
+date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+
+BEGIN
+    RETURN QUERY
+    WITH brand_sales AS (
+        SELECT 
+            p.brand,
+            COUNT(DISTINCT p.id) as products_tracked,
+            SUM(ABS(sc.stock_change_quantity)) as total_sold,
+            SUM(ABS(sc.stock_change_quantity) * COALESCE(pc.new_competitor_price, 0)) as total_revenue,
+            AVG(ABS(sc.stock_change_quantity)) as avg_sales_per_product,
+            COUNT(DISTINCT DATE(sc.changed_at)) as active_days
+        FROM stock_changes_competitors sc
+        JOIN products p ON sc.product_id = p.id
+        LEFT JOIN LATERAL (
+            SELECT new_competitor_price
+            FROM price_changes_competitors pc2
+            WHERE pc2.product_id = p.id 
+              AND pc2.user_id = p_user_id
+              AND pc2.changed_at <= sc.changed_at
+              AND (p_competitor_id IS NULL OR pc2.competitor_id = p_competitor_id)
+            ORDER BY pc2.changed_at DESC
+            LIMIT 1
+        ) pc ON true
+        WHERE sc.user_id = p_user_id
+          AND sc.stock_change_quantity < 0
+          AND sc.changed_at >= date_filter_start
+          AND sc.changed_at <= date_filter_end
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+        GROUP BY p.brand
+    ),
+    totals AS (
+        SELECT SUM(total_revenue) as grand_total_revenue FROM brand_sales
+    )
+    SELECT 
+        bs.brand,
+        bs.products_tracked,
+        bs.total_sold,
+        bs.total_revenue,
+        bs.avg_sales_per_product,
+        bs.active_days,
+        CASE 
+            WHEN t.grand_total_revenue > 0 THEN (bs.total_revenue / t.grand_total_revenue * 100)
+            ELSE 0 
+        END as revenue_percentage,
+        CASE 
+            WHEN bs.active_days > 0 THEN (bs.total_sold::NUMERIC / bs.active_days)
+            ELSE 0 
+        END as avg_daily_sales,
+        CASE 
+            WHEN bs.active_days > 0 THEN (bs.total_revenue / bs.active_days)
+            ELSE 0 
+        END as avg_daily_revenue
+    FROM brand_sales bs
+    CROSS JOIN totals t
+    ORDER BY bs.total_revenue DESC;
+
 END;
 
 $$;
@@ -1375,6 +1386,112 @@ $$;
 END;
 
 $$;
+
+END;
+
+$$;
+
+END;
+
+$$;
+
+END;
+
+$$;
+
+date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+
+date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+
+BEGIN
+    SELECT json_build_object(
+        'total_sales', (
+            SELECT COALESCE(SUM(ABS(stock_change_quantity)), 0)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+              AND stock_change_quantity < 0
+              AND changed_at >= date_filter_start
+              AND changed_at <= date_filter_end
+              AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+        ),
+        'total_revenue', (
+            SELECT COALESCE(SUM(ABS(sc.stock_change_quantity) * pc.new_competitor_price), 0)
+            FROM stock_changes_competitors sc
+            JOIN price_changes_competitors pc ON pc.product_id = sc.product_id
+            WHERE sc.user_id = p_user_id
+              AND sc.stock_change_quantity < 0
+              AND sc.changed_at >= date_filter_start
+              AND sc.changed_at <= date_filter_end
+              AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+              AND pc.changed_at <= sc.changed_at
+        ),
+        'unique_products_sold', (
+            SELECT COUNT(DISTINCT product_id)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+              AND stock_change_quantity < 0
+              AND changed_at >= date_filter_start
+              AND changed_at <= date_filter_end
+              AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+        ),
+        'unique_brands_sold', (
+            SELECT COUNT(DISTINCT p.brand)
+            FROM stock_changes_competitors sc
+            JOIN products p ON sc.product_id = p.id
+            WHERE sc.user_id = p_user_id
+              AND sc.stock_change_quantity < 0
+              AND sc.changed_at >= date_filter_start
+              AND sc.changed_at <= date_filter_end
+              AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+        ),
+        'total_inventory_value', (
+            WITH current_stock AS (
+                SELECT DISTINCT ON (product_id, competitor_id)
+                    product_id, new_stock_quantity
+                FROM stock_changes_competitors
+                WHERE user_id = p_user_id 
+                  AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+                ORDER BY product_id, competitor_id, changed_at DESC
+            )
+            SELECT COALESCE(SUM(cs.new_stock_quantity * pc.new_competitor_price), 0)
+            FROM current_stock cs
+            JOIN LATERAL (
+                SELECT new_competitor_price
+                FROM price_changes_competitors pc2
+                WHERE pc2.product_id = cs.product_id 
+                  AND pc2.user_id = p_user_id
+                  AND (p_competitor_id IS NULL OR pc2.competitor_id = p_competitor_id)
+                ORDER BY pc2.changed_at DESC
+                LIMIT 1
+            ) pc ON true
+            WHERE cs.new_stock_quantity > 0
+        ),
+        'dead_stock_count', (
+            SELECT COUNT(DISTINCT p.id)
+            FROM products p
+            LEFT JOIN stock_changes_competitors sc ON p.id = sc.product_id 
+              AND sc.user_id = p_user_id
+              AND sc.stock_change_quantity < 0
+              AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+            WHERE p.user_id = p_user_id
+              AND (sc.changed_at IS NULL OR sc.changed_at < NOW() - INTERVAL '30 days')
+        ),
+        'avg_daily_sales', (
+            WITH daily_sales AS (
+                SELECT DATE(changed_at) as sale_date, SUM(ABS(stock_change_quantity)) as daily_total
+                FROM stock_changes_competitors
+                WHERE user_id = p_user_id
+                  AND stock_change_quantity < 0
+                  AND changed_at >= date_filter_start
+                  AND changed_at <= date_filter_end
+                  AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+                GROUP BY DATE(changed_at)
+            )
+            SELECT COALESCE(AVG(daily_total), 0) FROM daily_sales
+        )
+    ) INTO result;
+
+RETURN result;
 
 END;
 
@@ -1388,6 +1505,10 @@ EXCEPTION
     WHEN OTHERS THEN
         -- If any error occurs, return empty result
         RETURN;
+
+END;
+
+$$;
 
 END;
 
@@ -1494,6 +1615,87 @@ BEGIN
 END IF;
 
 RETURN v_settings_id;
+
+END;
+
+$$;
+
+date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+
+BEGIN
+    RETURN QUERY
+    WITH price_ranges AS (
+        SELECT 
+            CASE 
+                WHEN pc.new_competitor_price <= 500 THEN '1-500'
+                WHEN pc.new_competitor_price <= 1000 THEN '501-1000'
+                WHEN pc.new_competitor_price <= 1500 THEN '1001-1500'
+                WHEN pc.new_competitor_price <= 2000 THEN '1501-2000'
+                WHEN pc.new_competitor_price <= 3000 THEN '2001-3000'
+                ELSE '3000+'
+            END as price_range,
+            CASE 
+                WHEN pc.new_competitor_price <= 500 THEN 1
+                WHEN pc.new_competitor_price <= 1000 THEN 2
+                WHEN pc.new_competitor_price <= 1500 THEN 3
+                WHEN pc.new_competitor_price <= 2000 THEN 4
+                WHEN pc.new_competitor_price <= 3000 THEN 5
+                ELSE 6
+            END as range_order,
+            pc.new_competitor_price,
+            p.name,
+            p.brand,
+            ABS(sc.stock_change_quantity) as units_sold,
+            ABS(sc.stock_change_quantity) * pc.new_competitor_price as revenue
+        FROM stock_changes_competitors sc
+        JOIN products p ON sc.product_id = p.id
+        JOIN price_changes_competitors pc ON pc.product_id = p.id
+        WHERE sc.stock_change_quantity < 0 
+          AND sc.user_id = p_user_id
+          AND pc.user_id = p_user_id
+          AND sc.changed_at >= date_filter_start
+          AND sc.changed_at <= date_filter_end
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+          AND (p_competitor_id IS NULL OR pc.competitor_id = p_competitor_id)
+          -- Match price change to stock change timing
+          AND pc.changed_at <= sc.changed_at
+          AND pc.changed_at = (
+              SELECT MAX(pc2.changed_at)
+              FROM price_changes_competitors pc2
+              WHERE pc2.product_id = pc.product_id
+                AND pc2.user_id = pc.user_id
+                AND pc2.changed_at <= sc.changed_at
+                AND (p_competitor_id IS NULL OR pc2.competitor_id = p_competitor_id)
+          )
+    ),
+    range_analysis AS (
+        SELECT 
+            price_range,
+            range_order,
+            COUNT(DISTINCT name) as unique_products,
+            SUM(units_sold) as total_units_sold,
+            SUM(revenue) as total_revenue,
+            AVG(new_competitor_price) as avg_price_in_range
+        FROM price_ranges
+        GROUP BY price_range, range_order
+    ),
+    totals AS (
+        SELECT SUM(total_revenue) as grand_total_revenue FROM range_analysis
+    )
+    SELECT 
+        ra.price_range,
+        ra.unique_products,
+        ra.total_units_sold,
+        ra.total_revenue,
+        ra.avg_price_in_range,
+        CASE 
+            WHEN t.grand_total_revenue > 0 THEN (ra.total_revenue / t.grand_total_revenue * 100)
+            ELSE 0 
+        END as revenue_percentage,
+        ra.range_order
+    FROM range_analysis ra
+    CROSS JOIN totals t
+    ORDER BY ra.range_order;
 
 END;
 
@@ -1754,6 +1956,74 @@ END;
 
 $$;
 
+date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+
+BEGIN
+    RETURN QUERY
+    WITH sales_data AS (
+        SELECT 
+            p.id,
+            p.name,
+            p.brand,
+            p.sku,
+            SUM(ABS(sc.stock_change_quantity)) as total_sold,
+            AVG(pc.new_competitor_price) as avg_price,
+            SUM(ABS(sc.stock_change_quantity) * COALESCE(pc.new_competitor_price, 0)) as total_revenue,
+            COUNT(DISTINCT DATE(sc.changed_at)) as active_days
+        FROM stock_changes_competitors sc
+        JOIN products p ON sc.product_id = p.id
+        LEFT JOIN LATERAL (
+            SELECT new_competitor_price
+            FROM price_changes_competitors pc2
+            WHERE pc2.product_id = p.id 
+              AND pc2.user_id = p_user_id
+              AND pc2.changed_at <= sc.changed_at
+              AND (p_competitor_id IS NULL OR pc2.competitor_id = p_competitor_id)
+            ORDER BY pc2.changed_at DESC
+            LIMIT 1
+        ) pc ON true
+        WHERE sc.user_id = p_user_id
+          AND sc.stock_change_quantity < 0  -- Only sales (decreases)
+          AND sc.changed_at >= date_filter_start
+          AND sc.changed_at <= date_filter_end
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+          AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+        GROUP BY p.id, p.name, p.brand, p.sku
+    ),
+    totals AS (
+        SELECT 
+            SUM(total_revenue) as grand_total_revenue
+        FROM sales_data
+    )
+    SELECT 
+        sd.id,
+        sd.name,
+        sd.brand,
+        sd.sku,
+        sd.total_sold,
+        sd.avg_price,
+        sd.total_revenue,
+        sd.active_days,
+        CASE 
+            WHEN t.grand_total_revenue > 0 THEN (sd.total_revenue / t.grand_total_revenue * 100)
+            ELSE 0 
+        END as revenue_percentage,
+        CASE 
+            WHEN sd.active_days > 0 THEN (sd.total_sold::NUMERIC / sd.active_days)
+            ELSE 0 
+        END as avg_daily_sales,
+        CASE 
+            WHEN sd.active_days > 0 THEN (sd.total_revenue / sd.active_days)
+            ELSE 0 
+        END as avg_daily_revenue
+    FROM sales_data sd
+    CROSS JOIN totals t
+    ORDER BY sd.total_sold DESC;
+
+END;
+
+$$;
+
 END;
 
 $$;
@@ -1820,6 +2090,102 @@ END;
 
 $$;
 
+date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+
+BEGIN
+    RETURN QUERY
+    WITH current_stock AS (
+        SELECT DISTINCT ON (product_id, competitor_id)
+            product_id, 
+            competitor_id, 
+            new_stock_quantity, 
+            changed_at
+        FROM stock_changes_competitors
+        WHERE user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+        ORDER BY product_id, competitor_id, changed_at DESC
+    ),
+    sales_data AS (
+        SELECT 
+            product_id,
+            SUM(ABS(sc.stock_change_quantity)) as total_sales,
+            COUNT(DISTINCT DATE(sc.changed_at)) as active_sales_days,
+            MIN(sc.changed_at) as first_sale,
+            MAX(sc.changed_at) as last_sale
+        FROM stock_changes_competitors sc
+        WHERE sc.user_id = p_user_id
+          AND sc.stock_change_quantity < 0
+          AND sc.changed_at >= date_filter_start
+          AND sc.changed_at <= date_filter_end
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+        GROUP BY product_id
+    ),
+    stock_history AS (
+        SELECT 
+            product_id,
+            AVG(new_stock_quantity) as avg_stock_level
+        FROM stock_changes_competitors
+        WHERE user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+          AND changed_at >= date_filter_start
+          AND changed_at <= date_filter_end
+        GROUP BY product_id
+    ),
+    turnover_analysis AS (
+        SELECT 
+            p.id,
+            p.name,
+            p.brand,
+            p.sku,
+            COALESCE(sd.total_sales, 0) as total_sales,
+            COALESCE(sh.avg_stock_level, 0) as avg_stock_level,
+            COALESCE(cs.new_stock_quantity, 0) as current_stock,
+            -- Stock Turnover Ratio = Total Sales / Average Stock
+            CASE 
+                WHEN sh.avg_stock_level > 0 THEN sd.total_sales / sh.avg_stock_level 
+                ELSE 0 
+            END as stock_turnover_ratio,
+            -- Dead Stock Indicator
+            CASE 
+                WHEN sd.last_sale < NOW() - INTERVAL '1 day' * p_dead_stock_days OR sd.last_sale IS NULL 
+                THEN 'Dead Stock' 
+                ELSE 'Active' 
+            END as stock_status,
+            COALESCE(EXTRACT(DAYS FROM (NOW() - sd.last_sale))::INTEGER, 999) as days_since_last_sale,
+            -- Velocity categories
+            CASE 
+                WHEN COALESCE(sd.total_sales, 0) / NULLIF(sd.active_sales_days, 0) > 10 THEN 'Fast Mover'
+                WHEN COALESCE(sd.total_sales, 0) / NULLIF(sd.active_sales_days, 0) > 3 THEN 'Medium Mover'
+                ELSE 'Slow Mover'
+            END as velocity_category,
+            sd.last_sale
+        FROM products p
+        LEFT JOIN sales_data sd ON p.id = sd.product_id
+        LEFT JOIN stock_history sh ON p.id = sh.product_id
+        LEFT JOIN current_stock cs ON p.id = cs.product_id
+        WHERE p.user_id = p_user_id
+          AND (cs.product_id IS NOT NULL OR sd.product_id IS NOT NULL)
+    )
+    SELECT 
+        ta.id,
+        ta.name,
+        ta.brand,
+        ta.sku,
+        ta.total_sales,
+        ta.avg_stock_level,
+        ta.current_stock,
+        ta.stock_turnover_ratio,
+        ta.stock_status,
+        ta.days_since_last_sale,
+        ta.velocity_category,
+        ta.last_sale
+    FROM turnover_analysis ta
+    ORDER BY ta.stock_turnover_ratio DESC NULLS LAST;
+
+END;
+
+$$;
+
 $$;
 
 $$;
@@ -1862,6 +2228,46 @@ END;
 
 $$;
 
+END IF;
+
+-- Clean the EAN code by trimming whitespace
+    ean_code := trim(ean_code);
+
+-- Check if it contains only digits
+    IF ean_code !~ '^[0-9]+$' THEN
+        RETURN FALSE;
+
+END IF;
+
+-- Check length - valid EAN codes are 8, 10, 11, 12, or 13 digits
+    -- EAN-8: 8 digits
+    -- UPC-A: 12 digits  
+    -- EAN-13: 13 digits
+    -- Some systems also accept 10 and 11 digit codes
+    IF length(ean_code) < 8 OR length(ean_code) > 13 THEN
+        RETURN FALSE;
+
+END IF;
+
+-- Additional check: reject obviously invalid codes like single digits repeated
+    -- Reject codes like "11111111" or "00000000" for 8-digit codes
+    IF length(ean_code) = 8 AND ean_code ~ '^(.)\1{7}$' THEN
+        RETURN FALSE;
+
+END IF;
+
+-- Reject codes like "111111111111" or "1111111111111" for 12-13 digit codes
+    IF length(ean_code) >= 12 AND ean_code ~ '^(.)\1{11,12}$' THEN
+        RETURN FALSE;
+
+END IF;
+
+RETURN TRUE;
+
+END;
+
+$_$;
+
 BEGIN
   -- Mark messages as read based on reader type
   IF reader_type = 'user' THEN
@@ -1900,6 +2306,89 @@ ELSE
 END IF;
 
 RETURN updated_count;
+
+END;
+
+$$;
+
+target_integration_id UUID;
+
+merged_competitors_count INTEGER := 0;
+
+merged_suppliers_count INTEGER := 0;
+
+updated_products_count INTEGER := 0;
+
+result JSONB;
+
+BEGIN
+    -- Get integration IDs
+    SELECT id INTO source_integration_id FROM integrations WHERE name = source_integration_name;
+
+SELECT id INTO target_integration_id FROM integrations WHERE name = target_integration_name;
+
+IF source_integration_id IS NULL THEN
+        RAISE EXCEPTION 'Source integration not found: %', source_integration_name;
+
+END IF;
+
+IF target_integration_id IS NULL THEN
+        RAISE EXCEPTION 'Target integration not found: %', target_integration_name;
+
+END IF;
+
+-- Update existing price_changes_competitors records from source to target integration
+    UPDATE price_changes_competitors 
+    SET integration_id = target_integration_id
+    WHERE integration_id = source_integration_id;
+
+GET DIAGNOSTICS merged_competitors_count = ROW_COUNT;
+
+-- Update existing price_changes_suppliers records from source to target integration
+    UPDATE price_changes_suppliers 
+    SET integration_id = target_integration_id
+    WHERE integration_id = source_integration_id;
+
+GET DIAGNOSTICS merged_suppliers_count = ROW_COUNT;
+
+-- Update products.our_retail_price to match the latest price from the merged records
+    -- This ensures consistency between products table and price_changes_competitors table
+    WITH latest_prices AS (
+        SELECT 
+            product_id,
+            new_our_retail_price,
+            ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY changed_at DESC) as rn
+        FROM price_changes_competitors 
+        WHERE integration_id = target_integration_id 
+          AND new_our_retail_price IS NOT NULL
+    )
+    UPDATE products 
+    SET our_retail_price = latest_prices.new_our_retail_price,
+        updated_at = NOW()
+    FROM latest_prices 
+    WHERE products.id = latest_prices.product_id 
+      AND latest_prices.rn = 1
+      AND products.our_retail_price IS DISTINCT FROM latest_prices.new_our_retail_price;
+
+GET DIAGNOSTICS updated_products_count = ROW_COUNT;
+
+-- Return summary
+    result := jsonb_build_object(
+        'source_integration', source_integration_name,
+        'target_integration', target_integration_name,
+        'merged_competitor_price_changes', merged_competitors_count,
+        'merged_supplier_price_changes', merged_suppliers_count,
+        'updated_products', updated_products_count,
+        'success', true
+    );
+
+RETURN result;
+
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+        'success', false,
+        'error', SQLERRM
+    );
 
 END;
 
@@ -1990,6 +2479,18 @@ END IF;
     WHERE id = primary_id;
 
 -- Update references in price_changes_competitors table
+    -- First, delete any duplicate price records that would be created by the merge
+    DELETE FROM price_changes_competitors pc1
+    WHERE pc1.product_id = duplicate_id
+    AND EXISTS (
+        SELECT 1 FROM price_changes_competitors pc2
+        WHERE pc2.product_id = primary_id
+        AND pc2.competitor_id = pc1.competitor_id
+        AND pc2.new_competitor_price = pc1.new_competitor_price
+        AND pc2.changed_at::date = pc1.changed_at::date
+    );
+
+-- Then update remaining records to point to primary product
     UPDATE price_changes_competitors
     SET product_id = primary_id
     WHERE product_id = duplicate_id;
@@ -2725,14 +3226,11 @@ BEGIN
     FROM user_settings
     WHERE user_id = NEW.user_id;
 
--- Set default matching rules if not found
-    IF user_matching_rules IS NULL THEN
-        user_matching_rules := '{"ean_priority": true, "sku_brand_fallback": true, "fuzzy_name_matching": false}'::jsonb;
+-- Default to empty JSONB if no settings found
+    user_matching_rules := COALESCE(user_matching_rules, '{}');
 
-END IF;
-
--- Check what data we have
-    has_ean := (NEW.ean IS NOT NULL AND NEW.ean != '' AND NEW.ean != '-');
+-- Check what data we have (with EAN validation)
+    has_ean := (NEW.ean IS NOT NULL AND NEW.ean != '' AND NEW.ean != '-' AND is_valid_ean(NEW.ean));
 
 has_brand_sku := (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.sku != '-');
 
@@ -2740,8 +3238,16 @@ has_name := (NEW.name IS NOT NULL AND NEW.name != '');
 
 fuzzy_name_enabled := (user_matching_rules->>'fuzzy_name_matching')::boolean;
 
+-- If EAN is provided but invalid, set it to NULL and log the issue
+    IF NEW.ean IS NOT NULL AND NEW.ean != '' AND NEW.ean != '-' AND NOT is_valid_ean(NEW.ean) THEN
+        RAISE NOTICE 'Invalid EAN code rejected: % for product: %', NEW.ean, NEW.name;
+
+NEW.ean := NULL;
+
+END IF;
+
 -- Validate that the record has sufficient data for processing
-    -- Must have either EAN OR both brand+sku OR (name if fuzzy matching is enabled)
+    -- Must have either valid EAN OR both brand+sku OR (name if fuzzy matching is enabled)
     IF NOT has_ean AND NOT has_brand_sku AND NOT (fuzzy_name_enabled AND has_name) THEN
         -- Delete records that don't meet any matching criteria
         DELETE FROM temp_competitors_scraped_data WHERE id = NEW.id;
@@ -2788,7 +3294,7 @@ END IF;
                 NEW.user_id,
                 NEW.name,
                 NEW.sku,
-                NEW.ean,
+                NEW.ean,  -- This will be NULL if it was invalid
                 NEW.brand,
                 v_brand_id,
                 NEW.image_url,
@@ -2796,55 +3302,26 @@ END IF;
                 NEW.url
             ) RETURNING id INTO matched_product_id;
 
-ELSE
-            -- Update existing product with missing information only
-            -- For competitors: only fill in NULL or empty fields
-            UPDATE products SET
-                name = CASE WHEN (name IS NULL OR name = '') AND NEW.name IS NOT NULL AND NEW.name != '' THEN NEW.name ELSE name END,
-                sku = CASE WHEN (sku IS NULL OR sku = '') AND NEW.sku IS NOT NULL AND NEW.sku != '' THEN NEW.sku ELSE sku END,
-                ean = CASE WHEN (ean IS NULL OR ean = '') AND NEW.ean IS NOT NULL AND NEW.ean != '' THEN NEW.ean ELSE ean END,
-                brand = CASE WHEN (brand IS NULL OR brand = '') AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN NEW.brand ELSE brand END,
-                brand_id = CASE WHEN brand_id IS NULL AND v_brand_id IS NOT NULL THEN v_brand_id ELSE brand_id END,
-                image_url = CASE WHEN (image_url IS NULL OR image_url = '') AND NEW.image_url IS NOT NULL AND NEW.image_url != '' THEN NEW.image_url ELSE image_url END,
-                url = CASE WHEN (url IS NULL OR url = '') AND NEW.url IS NOT NULL AND NEW.url != '' THEN NEW.url ELSE url END,
-                currency_code = CASE WHEN (currency_code IS NULL OR currency_code = '') AND NEW.currency_code IS NOT NULL AND NEW.currency_code != '' THEN NEW.currency_code ELSE currency_code END,
-                updated_at = NOW()
-            WHERE id = matched_product_id;
+END IF;
 
 END IF;
 
--- Update the temp record with the matched/created product_id
-        UPDATE temp_competitors_scraped_data
-        SET product_id = matched_product_id
-        WHERE id = NEW.id;
+-- Process custom fields if present
+    IF NEW.raw_data IS NOT NULL THEN
+        SELECT process_custom_fields(NEW.user_id, matched_product_id, NEW.raw_data) INTO custom_fields_result;
 
 END IF;
 
--- Process custom fields from raw_data if we have a product
-    -- Pass source information: 'competitor' as source_type and competitor_id as source_id
-    IF matched_product_id IS NOT NULL AND NEW.raw_data IS NOT NULL THEN
-        SELECT process_custom_fields_from_raw_data(
-            NEW.user_id,
-            matched_product_id,
-            NEW.raw_data,
-            'competitor',
-            NEW.competitor_id
-        ) INTO custom_fields_result;
-
-END IF;
-
--- PRICE PROCESSING (existing logic)
-    -- Get current competitor price for this product and competitor
+-- Get current competitor price for comparison
     SELECT new_competitor_price INTO current_competitor_price
     FROM price_changes_competitors
-    WHERE product_id = matched_product_id
+    WHERE user_id = NEW.user_id
+      AND product_id = matched_product_id
       AND competitor_id = NEW.competitor_id
-      AND user_id = NEW.user_id
     ORDER BY changed_at DESC
     LIMIT 1;
 
--- Only insert competitor price change record if price has actually changed
-    -- OR if this is the first price record for this product/competitor combination
+-- Only insert price change if price has actually changed
     IF current_competitor_price IS NULL OR current_competitor_price != NEW.competitor_price THEN
         INSERT INTO price_changes_competitors (
             user_id,
@@ -2852,31 +3329,21 @@ END IF;
             competitor_id,
             old_competitor_price,
             new_competitor_price,
-            price_change_percentage,
-            changed_at,
-            currency_code,
-            url
+            changed_at
         ) VALUES (
             NEW.user_id,
             matched_product_id,
             NEW.competitor_id,
-            COALESCE(current_competitor_price, NEW.competitor_price), -- Use current price as old price, or new price if first time
+            current_competitor_price,
             NEW.competitor_price,
-            CASE 
-                WHEN current_competitor_price IS NULL OR current_competitor_price = 0 THEN 0
-                ELSE ROUND(((NEW.competitor_price - current_competitor_price) / current_competitor_price * 100)::numeric, 2)
-            END,
-            NOW(),
-            NEW.currency_code,
-            NEW.url
+            NOW()
         );
 
 END IF;
 
--- STOCK PROCESSING (updated to not include URL)
-    -- Only process stock if we have stock data
-    IF NEW.stock_quantity IS NOT NULL OR NEW.stock_status IS NOT NULL THEN
-        -- Get current stock data for this product/competitor combination
+-- Process stock data if present
+    IF NEW.stock_quantity IS NOT NULL OR NEW.stock_status IS NOT NULL OR NEW.availability_date IS NOT NULL THEN
+        -- Get current stock data for comparison
         SELECT 
             new_stock_quantity,
             new_stock_status,
@@ -2886,18 +3353,18 @@ END IF;
             current_stock_status,
             current_availability_date
         FROM stock_changes_competitors
-        WHERE user_id = NEW.user_id 
-          AND product_id = matched_product_id 
+        WHERE user_id = NEW.user_id
+          AND product_id = matched_product_id
           AND competitor_id = NEW.competitor_id
         ORDER BY changed_at DESC
         LIMIT 1;
 
--- Standardize the new stock status
+-- Standardize stock status
         standardized_status := standardize_stock_status(NEW.stock_status);
 
--- Only insert if stock has changed
-        IF (current_stock_quantity IS DISTINCT FROM NEW.stock_quantity) OR
-           (current_stock_status IS DISTINCT FROM standardized_status) OR
+-- Only insert stock change if stock data has actually changed
+        IF (current_stock_quantity IS DISTINCT FROM NEW.stock_quantity) OR 
+           (current_stock_status IS DISTINCT FROM standardized_status) OR 
            (current_availability_date IS DISTINCT FROM NEW.availability_date) THEN
             
             INSERT INTO stock_changes_competitors (
@@ -2935,13 +3402,7 @@ END IF;
 -- Delete the processed temp record
     DELETE FROM temp_competitors_scraped_data WHERE id = NEW.id;
 
-RETURN NULL; -- Don't insert into temp table since we're deleting it
-EXCEPTION WHEN OTHERS THEN
-    -- Log the error for debugging
-    RAISE NOTICE 'Error processing competitor data: %', SQLERRM;
-
--- Re-raise the exception
-    RAISE;
+RETURN NEW;
 
 END;
 
@@ -2959,6 +3420,12 @@ rounded_retail_price NUMERIC(10,2);
 
 rounded_wholesale_price NUMERIC(10,2);
 
+integration_config JSONB;
+
+selective_import_enabled BOOLEAN := FALSE;
+
+field_config JSONB;
+
 BEGIN
     -- Validate that the record has minimum required data
     -- Products must have either an EAN or both SKU and brand to be imported
@@ -2971,87 +3438,56 @@ RETURN NEW;
 
 END IF;
 
+-- Get integration configuration
+    SELECT configuration INTO integration_config
+    FROM integrations 
+    WHERE id = NEW.integration_id;
+
+-- Check if selective import is enabled
+    IF integration_config IS NOT NULL AND 
+       integration_config->'selectiveImport'->>'enabled' = 'true' THEN
+        selective_import_enabled := TRUE;
+
+field_config := integration_config->'selectiveImport'->'fields';
+
+END IF;
+
 -- Round integration prices to whole numbers (no decimals)
     rounded_retail_price := ROUND(NEW.our_retail_price);
 
 rounded_wholesale_price := ROUND(NEW.our_wholesale_price);
 
--- Find or create brand if we have brand name
-    IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
-        SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
+-- Find or create brand if we have brand name and brand field is selected
+    v_brand_id := NULL;
+
+IF NEW.brand IS NOT NULL AND NEW.brand != '' AND 
+       (NOT selective_import_enabled OR field_config->>'brand' != 'false') THEN
+        SELECT id INTO v_brand_id FROM brands WHERE name = NEW.brand;
+
+IF v_brand_id IS NULL THEN
+            INSERT INTO brands (name) VALUES (NEW.brand) RETURNING id INTO v_brand_id;
 
 END IF;
 
--- ENHANCED MATCHING LOGIC
-    -- Try to find existing product by EAN first (exact match)
-    IF NEW.ean IS NOT NULL AND NEW.ean != '' AND NEW.ean != '-' THEN
-        SELECT id INTO existing_product_id
-        FROM products
-        WHERE user_id = NEW.user_id
-          AND ean = NEW.ean
-        LIMIT 1;
-
--- Log matching attempt for debugging
-        RAISE NOTICE 'EAN matching for %: found product %', NEW.ean, existing_product_id;
-
 END IF;
 
--- If no match by EAN, try by SKU and brand (exact match)
-    IF existing_product_id IS NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.sku != '-' AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN
-        SELECT id INTO existing_product_id
-        FROM products
-        WHERE user_id = NEW.user_id
-          AND TRIM(sku) = TRIM(NEW.sku)
-          AND TRIM(brand) = TRIM(NEW.brand)
-        LIMIT 1;
+-- Try to find existing product by EAN first, then by SKU+brand
+    SELECT id INTO existing_product_id FROM products 
+    WHERE user_id = NEW.user_id 
+      AND ((NEW.ean IS NOT NULL AND NEW.ean != '' AND ean = NEW.ean)
+           OR (NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.brand IS NOT NULL AND NEW.brand != '' 
+               AND sku = NEW.sku AND brand = NEW.brand));
 
--- Log matching attempt for debugging
-        RAISE NOTICE 'SKU+Brand matching for % + %: found product %', NEW.sku, NEW.brand, existing_product_id;
-
-END IF;
-
--- If still no match, try with brand_id if we have it
-    IF existing_product_id IS NULL AND v_brand_id IS NOT NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.sku != '-' THEN
-        SELECT id INTO existing_product_id
-        FROM products
-        WHERE user_id = NEW.user_id
-          AND brand_id = v_brand_id
-          AND TRIM(sku) = TRIM(NEW.sku)
-        LIMIT 1;
-
--- Log matching attempt for debugging
-        RAISE NOTICE 'SKU+BrandID matching for % + %: found product %', NEW.sku, v_brand_id, existing_product_id;
-
-END IF;
-
-IF existing_product_id IS NOT NULL THEN
-        -- Get current prices for comparison
-        SELECT our_retail_price, our_wholesale_price
+-- Get current prices for price change tracking
+    IF existing_product_id IS NOT NULL THEN
+        SELECT our_retail_price, our_wholesale_price 
         INTO current_retail_price, current_wholesale_price
-        FROM products
-        WHERE id = existing_product_id;
+        FROM products WHERE id = existing_product_id;
 
--- Update existing product with integration data (overwrite all fields since we own this data)
-        -- Use rounded prices
-        UPDATE products SET
-            name = COALESCE(NEW.name, name),
-            sku = COALESCE(NEW.sku, sku),
-            ean = COALESCE(NEW.ean, ean),
-            brand = COALESCE(NEW.brand, brand),
-            brand_id = COALESCE(v_brand_id, brand_id),
-            our_retail_price = rounded_retail_price,
-            our_wholesale_price = rounded_wholesale_price,
-            image_url = COALESCE(NEW.image_url, image_url),
-            url = COALESCE(NEW.url, url),
-            currency_code = COALESCE(NEW.currency_code, currency_code),
-            updated_at = NOW()
-        WHERE id = existing_product_id;
+END IF;
 
--- Log successful update
-        RAISE NOTICE 'Updated existing product % with new data', existing_product_id;
-
-ELSE
-        -- Create new product with rounded prices
+IF existing_product_id IS NULL THEN
+        -- Create new product with only selected fields
         INSERT INTO products (
             user_id,
             name,
@@ -3062,77 +3498,66 @@ ELSE
             our_retail_price,
             our_wholesale_price,
             image_url,
+            url,
             currency_code,
-            url
+            stock_quantity,
+            stock_status,
+            availability_date
         ) VALUES (
             NEW.user_id,
-            NEW.name,
-            NEW.sku,
-            NEW.ean,
-            NEW.brand,
-            v_brand_id,
-            rounded_retail_price,
-            rounded_wholesale_price,
-            NEW.image_url,
-            NEW.currency_code,
-            NEW.url
+            CASE WHEN NOT selective_import_enabled OR field_config->>'name' != 'false' THEN NEW.name ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'sku' != 'false' THEN NEW.sku ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'ean' != 'false' THEN NEW.ean ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN NEW.brand ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN v_brand_id ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'our_retail_price' != 'false' THEN rounded_retail_price ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'our_wholesale_price' != 'false' THEN rounded_wholesale_price ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'image_url' != 'false' THEN NEW.image_url ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'url' != 'false' THEN NEW.url ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'currency_code' != 'false' THEN NEW.currency_code ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'stock_status' != 'false' THEN NEW.stock_quantity ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'stock_status' != 'false' THEN NEW.stock_status ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'availability_date' != 'false' THEN NEW.availability_date ELSE NULL END
         ) RETURNING id INTO existing_product_id;
 
--- Log new product creation
-        RAISE NOTICE 'Created new product % for SKU % + Brand %', existing_product_id, NEW.sku, NEW.brand;
+ELSE
+        -- Update existing product with integration data (overwrite selected fields only)
+        UPDATE products SET
+            name = CASE WHEN NOT selective_import_enabled OR field_config->>'name' != 'false' THEN COALESCE(NEW.name, name) ELSE name END,
+            sku = CASE WHEN NOT selective_import_enabled OR field_config->>'sku' != 'false' THEN COALESCE(NEW.sku, sku) ELSE sku END,
+            ean = CASE WHEN NOT selective_import_enabled OR field_config->>'ean' != 'false' THEN COALESCE(NEW.ean, ean) ELSE ean END,
+            brand = CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN COALESCE(NEW.brand, brand) ELSE brand END,
+            brand_id = CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN COALESCE(v_brand_id, brand_id) ELSE brand_id END,
+            our_retail_price = CASE WHEN NOT selective_import_enabled OR field_config->>'our_retail_price' != 'false' THEN rounded_retail_price ELSE our_retail_price END,
+            our_wholesale_price = CASE WHEN NOT selective_import_enabled OR field_config->>'our_wholesale_price' != 'false' THEN rounded_wholesale_price ELSE our_wholesale_price END,
+            image_url = CASE WHEN NOT selective_import_enabled OR field_config->>'image_url' != 'false' THEN COALESCE(NEW.image_url, image_url) ELSE image_url END,
+            url = CASE WHEN NOT selective_import_enabled OR field_config->>'url' != 'false' THEN COALESCE(NEW.url, url) ELSE url END,
+            currency_code = CASE WHEN NOT selective_import_enabled OR field_config->>'currency_code' != 'false' THEN COALESCE(NEW.currency_code, currency_code) ELSE currency_code END,
+            stock_quantity = CASE WHEN NOT selective_import_enabled OR field_config->>'stock_status' != 'false' THEN COALESCE(NEW.stock_quantity, stock_quantity) ELSE stock_quantity END,
+            stock_status = CASE WHEN NOT selective_import_enabled OR field_config->>'stock_status' != 'false' THEN COALESCE(NEW.stock_status, stock_status) ELSE stock_status END,
+            availability_date = CASE WHEN NOT selective_import_enabled OR field_config->>'availability_date' != 'false' THEN COALESCE(NEW.availability_date, availability_date) ELSE availability_date END,
+            updated_at = NOW()
+        WHERE id = existing_product_id;
 
 END IF;
 
--- Process custom fields from raw_data if we have a product
-    -- Pass source information: 'integration' as source_type and integration_id as source_id
-    IF existing_product_id IS NOT NULL AND NEW.raw_data IS NOT NULL THEN
-        SELECT process_custom_fields_from_raw_data(
-            NEW.user_id,
-            existing_product_id,
-            NEW.raw_data,
-            'integration',
-            NEW.integration_id
-        ) INTO custom_fields_result;
+-- Process custom fields if raw_data field is selected (or if selective import is disabled)
+    IF (NOT selective_import_enabled OR field_config->>'raw_data' != 'false') AND NEW.raw_data IS NOT NULL THEN
+        SELECT process_custom_fields(existing_product_id, NEW.raw_data) INTO custom_fields_result;
 
 END IF;
 
--- Create price change records for retail prices (in competitors table) ONLY if price changed
-    -- Use rounded prices for comparison and storage
-    IF rounded_retail_price IS NOT NULL AND (current_retail_price IS NULL OR current_retail_price != rounded_retail_price) THEN
+-- Record price changes only if price fields are selected
+    IF (NOT selective_import_enabled OR field_config->>'our_retail_price' != 'false' OR field_config->>'our_wholesale_price' != 'false') AND
+       (rounded_retail_price IS NOT NULL OR rounded_wholesale_price IS NOT NULL) AND
+       (current_retail_price IS DISTINCT FROM rounded_retail_price OR current_wholesale_price IS DISTINCT FROM rounded_wholesale_price) THEN
+        
         INSERT INTO price_changes_competitors (
             user_id,
             product_id,
             integration_id,
             old_our_retail_price,
             new_our_retail_price,
-            price_change_percentage,
-            changed_at,
-            currency_code,
-            url
-        ) VALUES (
-            NEW.user_id,
-            existing_product_id,
-            NEW.integration_id,
-            COALESCE(current_retail_price, rounded_retail_price),
-            rounded_retail_price,
-            CASE 
-                WHEN current_retail_price IS NULL OR current_retail_price = 0 THEN 0
-                ELSE ROUND(((rounded_retail_price - current_retail_price) / current_retail_price * 100)::numeric, 2)
-            END,
-            NOW(),
-            NEW.currency_code,
-            NEW.url
-        );
-
-END IF;
-
--- Create price change records for wholesale prices (in suppliers table) ONLY if price changed
-    -- Use rounded prices for comparison and storage
-    IF rounded_wholesale_price IS NOT NULL AND (current_wholesale_price IS NULL OR current_wholesale_price != rounded_wholesale_price) THEN
-        INSERT INTO price_changes_suppliers (
-            user_id,
-            product_id,
-            integration_id,
             old_our_wholesale_price,
             new_our_wholesale_price,
             price_change_percentage,
@@ -3143,11 +3568,13 @@ END IF;
             NEW.user_id,
             existing_product_id,
             NEW.integration_id,
-            COALESCE(current_wholesale_price, rounded_wholesale_price),
+            current_retail_price,
+            rounded_retail_price,
+            current_wholesale_price,
             rounded_wholesale_price,
             CASE 
-                WHEN current_wholesale_price IS NULL OR current_wholesale_price = 0 THEN 0
-                ELSE ROUND(((rounded_wholesale_price - current_wholesale_price) / current_wholesale_price * 100)::numeric, 2)
+                WHEN current_retail_price IS NULL OR current_retail_price = 0 THEN 0
+                ELSE ROUND(((rounded_retail_price - current_retail_price) / current_retail_price * 100)::numeric, 2)
             END,
             NOW(),
             NEW.currency_code,
@@ -3176,13 +3603,8 @@ EXCEPTION WHEN OTHERS THEN
         processed_at = NOW() 
     WHERE id = NEW.id;
 
--- Log the error for debugging
-    RAISE NOTICE 'Error processing integration data: %', SQLERRM;
-
--- Delete error records as well to prevent temp table from filling up
-    DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
-
-RETURN NEW;
+-- Re-raise the exception
+    RAISE;
 
 END;
 
@@ -3649,7 +4071,19 @@ END;
 
 $$;
 
--- Calculate and set the next run time
+ELSE
+            -- For failed runs, update last_sync_status but keep it active for retry
+            UPDATE public.integrations
+            SET 
+                last_sync_at = NEW.completed_at,
+                last_sync_status = 'failed',
+                status = 'active',  -- Reset to active so it can be scheduled again
+                updated_at = now()
+            WHERE id = NEW.integration_id;
+
+END IF;
+
+-- Calculate and set the next run time for both completed and failed runs
         PERFORM public.update_integration_next_run_time(NEW.integration_id, NEW.completed_at);
 
 END IF;
@@ -4831,6 +5265,12 @@ CREATE INDEX idx_marketing_contacts_created_at ON public.marketing_contacts USIN
 CREATE INDEX idx_marketing_contacts_status ON public.marketing_contacts USING btree (status);
 
 --
+-- Name: idx_price_changes_analysis; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_analysis ON public.price_changes_competitors USING btree (user_id, product_id, competitor_id, changed_at DESC, new_competitor_price);
+
+--
 -- Name: idx_price_changes_competitor_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4841,6 +5281,12 @@ CREATE INDEX idx_price_changes_competitor_id ON public.price_changes_competitors
 --
 
 CREATE INDEX idx_price_changes_integration_id ON public.price_changes_competitors USING btree (integration_id);
+
+--
+-- Name: idx_price_changes_product_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_product_date ON public.price_changes_competitors USING btree (product_id, changed_at DESC);
 
 --
 -- Name: idx_price_changes_product_id; Type: INDEX; Schema: public; Owner: -
@@ -4877,6 +5323,12 @@ CREATE INDEX idx_price_changes_suppliers_supplier_id ON public.price_changes_sup
 --
 
 CREATE INDEX idx_price_changes_suppliers_user_id ON public.price_changes_suppliers USING btree (user_id);
+
+--
+-- Name: idx_price_changes_user_competitor_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_competitor_date ON public.price_changes_competitors USING btree (user_id, competitor_id, changed_at DESC);
 
 --
 -- Name: idx_price_changes_user_id; Type: INDEX; Schema: public; Owner: -
@@ -5041,6 +5493,18 @@ CREATE INDEX idx_products_ean_nonempty ON public.products USING btree (user_id, 
 CREATE INDEX idx_products_name_length ON public.products USING btree (user_id, length(name));
 
 --
+-- Name: idx_products_user_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_active ON public.products USING btree (user_id, is_active) WHERE (is_active = true);
+
+--
+-- Name: idx_products_user_brand; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_brand ON public.products USING btree (user_id, brand);
+
+--
 -- Name: idx_products_user_brand_sku; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5185,6 +5649,12 @@ CREATE INDEX idx_scrapers_execution_time ON public.scrapers USING btree (executi
 CREATE INDEX idx_scrapers_scraper_type ON public.scrapers USING btree (scraper_type);
 
 --
+-- Name: idx_stock_changes_analysis; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_analysis ON public.stock_changes_competitors USING btree (user_id, product_id, competitor_id, changed_at DESC, stock_change_quantity);
+
+--
 -- Name: idx_stock_changes_competitors_changed_at; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5245,6 +5715,12 @@ CREATE INDEX idx_stock_changes_competitors_user_product_time ON public.stock_cha
 COMMENT ON INDEX public.idx_stock_changes_competitors_user_product_time IS 'Optimizes product stock history queries';
 
 --
+-- Name: idx_stock_changes_product_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_product_date ON public.stock_changes_competitors USING btree (product_id, changed_at DESC);
+
+--
 -- Name: idx_stock_changes_suppliers_changed_at; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5303,6 +5779,18 @@ CREATE INDEX idx_stock_changes_suppliers_user_supplier ON public.stock_changes_s
 --
 
 COMMENT ON INDEX public.idx_stock_changes_suppliers_user_supplier IS 'Optimizes supplier-based stock queries';
+
+--
+-- Name: idx_stock_changes_user_competitor_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_user_competitor_date ON public.stock_changes_competitors USING btree (user_id, competitor_id, changed_at DESC);
+
+--
+-- Name: idx_stock_changes_user_quantity_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_user_quantity_date ON public.stock_changes_competitors USING btree (user_id, stock_change_quantity, changed_at) WHERE (stock_change_quantity < 0);
 
 --
 -- Name: idx_suppliers_is_active; Type: INDEX; Schema: public; Owner: -

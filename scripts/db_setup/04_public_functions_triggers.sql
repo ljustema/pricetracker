@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-06-23 15:56:10
+-- Generated: 2025-06-25 10:48:41
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -361,7 +361,7 @@ CREATE FUNCTION public.cleanup_stalled_integration_runs() RETURNS integer
     LANGUAGE plpgsql
     AS $$
 DECLARE
-    timeout_count integer := 0;
+    timeout_record record;
 
 --
 -- Name: cleanup_temp_competitors_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
@@ -701,6 +701,74 @@ BEGIN
 COMMENT ON FUNCTION public.get_brand_analytics(p_user_id uuid, p_brand_id uuid) IS 'Enhanced brand analytics function that includes our_products_count (products with our_retail_price IS NOT NULL)';
 
 --
+-- Name: get_brand_performance_data(uuid, uuid, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_performance_data(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS TABLE(brand text, products_tracked bigint, total_sold bigint, total_revenue numeric, avg_sales_per_product numeric, active_days bigint, revenue_percentage numeric, avg_daily_sales numeric, avg_daily_revenue numeric)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+
+--
+-- Name: FUNCTION get_brand_performance_data(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brand_performance_data(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone) IS 'Returns brand-level sales performance metrics including revenue percentages and daily averages';
+
+--
+-- Name: get_brand_stock_availability(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_stock_availability(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid) RETURNS TABLE(brand text, total_products bigint, in_stock_products bigint, out_of_stock_products bigint, in_stock_percentage numeric, out_of_stock_percentage numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH current_stock AS (
+        SELECT DISTINCT ON (product_id, competitor_id)
+            product_id, 
+            competitor_id, 
+            new_stock_quantity, 
+            new_stock_status
+        FROM stock_changes_competitors
+        WHERE user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+        ORDER BY product_id, competitor_id, changed_at DESC
+    ),
+    brand_availability AS (
+        SELECT 
+            p.brand,
+            COUNT(*) as total_products,
+            COUNT(CASE WHEN cs.new_stock_quantity > 0 THEN 1 END) as in_stock_products,
+            COUNT(CASE WHEN cs.new_stock_quantity = 0 OR cs.new_stock_quantity IS NULL THEN 1 END) as out_of_stock_products
+        FROM current_stock cs
+        JOIN products p ON cs.product_id = p.id
+        GROUP BY p.brand
+    )
+    SELECT 
+        ba.brand,
+        ba.total_products,
+        ba.in_stock_products,
+        ba.out_of_stock_products,
+        CASE 
+            WHEN ba.total_products > 0 THEN (ba.in_stock_products::NUMERIC / ba.total_products * 100)
+            ELSE 0 
+        END as in_stock_percentage,
+        CASE 
+            WHEN ba.total_products > 0 THEN (ba.out_of_stock_products::NUMERIC / ba.total_products * 100)
+            ELSE 0 
+        END as out_of_stock_percentage
+    FROM brand_availability ba
+    ORDER BY ba.in_stock_percentage DESC;
+
+--
+-- Name: FUNCTION get_brand_stock_availability(p_user_id uuid, p_competitor_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brand_stock_availability(p_user_id uuid, p_competitor_id uuid) IS 'Returns stock availability percentages by brand for inventory strategy analysis';
+
+--
 -- Name: get_brands_for_competitor(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -800,6 +868,22 @@ BEGIN
     c.user_id = p_user_id;
 
 --
+-- Name: get_comprehensive_analysis_summary(uuid, uuid, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_comprehensive_analysis_summary(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS json
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    result JSON;
+
+--
+-- Name: FUNCTION get_comprehensive_analysis_summary(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_comprehensive_analysis_summary(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone) IS 'Returns comprehensive summary statistics for all stock analysis modules';
+
+--
 -- Name: get_conversation_summary(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -867,6 +951,82 @@ BEGIN
         j.jobname
     FROM cron.job j
     ORDER BY j.jobname;
+
+--
+-- Name: get_current_stock_analysis(uuid, uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_brand_filter text DEFAULT NULL::text) RETURNS TABLE(product_id uuid, product_name text, brand text, sku text, current_stock integer, current_price numeric, inventory_value numeric, in_stock_flag integer, total_products bigint, products_in_stock bigint, in_stock_percentage numeric, total_inventory_value numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH current_stock AS (
+        SELECT DISTINCT ON (product_id, competitor_id)
+            product_id, 
+            competitor_id, 
+            new_stock_quantity, 
+            new_stock_status
+        FROM stock_changes_competitors
+        WHERE user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+        ORDER BY product_id, competitor_id, changed_at DESC
+    ),
+    stock_analysis AS (
+        SELECT 
+            p.id,
+            p.name,
+            p.brand,
+            p.sku,
+            cs.new_stock_quantity as current_stock,
+            pc.new_competitor_price as current_price,
+            (COALESCE(cs.new_stock_quantity, 0) * COALESCE(pc.new_competitor_price, 0)) as inventory_value,
+            CASE WHEN cs.new_stock_quantity > 0 THEN 1 ELSE 0 END as in_stock_flag
+        FROM current_stock cs
+        JOIN products p ON cs.product_id = p.id
+        LEFT JOIN LATERAL (
+            SELECT new_competitor_price
+            FROM price_changes_competitors pc2
+            WHERE pc2.product_id = p.id 
+              AND pc2.user_id = p_user_id
+              AND (p_competitor_id IS NULL OR pc2.competitor_id = p_competitor_id)
+            ORDER BY pc2.changed_at DESC
+            LIMIT 1
+        ) pc ON true
+        WHERE (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+    ),
+    totals AS (
+        SELECT 
+            COUNT(*) as total_products,
+            SUM(in_stock_flag) as products_in_stock,
+            SUM(inventory_value) as total_inventory_value
+        FROM stock_analysis
+    )
+    SELECT 
+        sa.id,
+        sa.name,
+        sa.brand,
+        sa.sku,
+        sa.current_stock,
+        sa.current_price,
+        sa.inventory_value,
+        sa.in_stock_flag,
+        t.total_products,
+        t.products_in_stock,
+        CASE 
+            WHEN t.total_products > 0 THEN (t.products_in_stock::NUMERIC / t.total_products * 100)
+            ELSE 0 
+        END as in_stock_percentage,
+        t.total_inventory_value
+    FROM stock_analysis sa
+    CROSS JOIN totals t
+    ORDER BY sa.current_stock DESC NULLS LAST;
+
+--
+-- Name: FUNCTION get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid, p_brand_filter text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid, p_brand_filter text) IS 'Returns current stock levels, inventory values, and stock distribution analysis';
 
 --
 -- Name: get_dismissed_product_duplicates(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -1060,6 +1220,22 @@ DECLARE
   v_settings_id UUID;
 
 --
+-- Name: get_price_range_analysis(uuid, uuid, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_price_range_analysis(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS TABLE(price_range text, unique_products bigint, total_units_sold bigint, total_revenue numeric, avg_price_in_range numeric, revenue_percentage numeric, range_order integer)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+
+--
+-- Name: FUNCTION get_price_range_analysis(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_price_range_analysis(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone) IS 'Returns sales distribution analysis across different price segments';
+
+--
 -- Name: get_product_price_history(uuid, uuid, uuid, integer); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1076,6 +1252,22 @@ CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFA
     AS $$
 DECLARE
     _offset integer;
+
+--
+-- Name: get_sales_analysis_data(uuid, uuid, timestamp without time zone, timestamp without time zone, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_sales_analysis_data(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_brand_filter text DEFAULT NULL::text) RETURNS TABLE(product_id uuid, product_name text, brand text, sku text, total_sold bigint, avg_price numeric, total_revenue numeric, active_days bigint, revenue_percentage numeric, avg_daily_sales numeric, avg_daily_revenue numeric)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+
+--
+-- Name: FUNCTION get_sales_analysis_data(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone, p_brand_filter text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_sales_analysis_data(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone, p_brand_filter text) IS 'Returns comprehensive sales analysis data for products based on stock decreases with revenue calculations and daily averages';
 
 --
 -- Name: get_scheduling_stats(); Type: FUNCTION; Schema: public; Owner: -
@@ -1167,6 +1359,22 @@ DECLARE
 --
 
 COMMENT ON FUNCTION public.get_stock_summary_stats(p_user_id uuid) IS 'Returns summary statistics for stock tracking including product counts, stock levels, and sales velocity';
+
+--
+-- Name: get_stock_turnover_analysis(uuid, uuid, timestamp without time zone, timestamp without time zone, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_stock_turnover_analysis(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_dead_stock_days integer DEFAULT 30) RETURNS TABLE(product_id uuid, product_name text, brand text, sku text, total_sales bigint, avg_stock_level numeric, current_stock integer, stock_turnover_ratio numeric, stock_status text, days_since_last_sale integer, velocity_category text, last_sale_date timestamp without time zone)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '90 days');
+
+--
+-- Name: FUNCTION get_stock_turnover_analysis(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone, p_dead_stock_days integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_stock_turnover_analysis(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone, p_dead_stock_days integer) IS 'Returns stock turnover ratios, dead stock detection, and velocity categorization';
 
 --
 -- Name: get_unique_competitor_products(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -1431,6 +1639,24 @@ BEGIN
 COMMENT ON FUNCTION public.handle_worker_error() IS 'Handles worker timeouts by marking pending jobs as failed if they have been pending for too long and have not been claimed by a worker.';
 
 --
+-- Name: is_valid_ean(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.is_valid_ean(ean_code text) RETURNS boolean
+    LANGUAGE plpgsql
+    AS $_$
+BEGIN
+    -- Return false if ean_code is null, empty, or just whitespace
+    IF ean_code IS NULL OR trim(ean_code) = '' THEN
+        RETURN FALSE;
+
+--
+-- Name: FUNCTION is_valid_ean(ean_code text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.is_valid_ean(ean_code text) IS 'Validates EAN codes to ensure they are 8-13 digits long, contain only numbers, and are not obviously invalid patterns like repeated single digits';
+
+--
 -- Name: mark_conversation_messages_read(uuid, text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1439,6 +1665,16 @@ CREATE FUNCTION public.mark_conversation_messages_read(conversation_uuid uuid, r
     AS $$
 DECLARE
   updated_count INTEGER;
+
+--
+-- Name: merge_integration_price_changes(text, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.merge_integration_price_changes(source_integration_name text, target_integration_name text) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    source_integration_id UUID;
 
 --
 -- Name: merge_product_data(text, text, text, text, text, text, text, text, uuid, uuid, text, text, text, text); Type: FUNCTION; Schema: public; Owner: -
@@ -1517,6 +1753,14 @@ COMMENT ON FUNCTION public.normalize_sku(sku text) IS 'Normalizes SKU by removin
 CREATE FUNCTION public.optimize_scraper_schedules() RETURNS integer
     LANGUAGE plpgsql
     AS $$ DECLARE scraper_record record; update_count integer := 0; time_slot integer := 0; total_scrapers integer; minutes_per_slot integer; new_hour integer; new_minute integer; new_time text; updated_schedule jsonb; BEGIN SELECT COUNT(*) INTO total_scrapers FROM public.scrapers WHERE is_active = true; minutes_per_slot := GREATEST(5, (24 * 60) / GREATEST(total_scrapers, 1)); FOR scraper_record IN SELECT id, schedule, user_id FROM public.scrapers WHERE is_active = true ORDER BY user_id, id LOOP new_hour := (time_slot * minutes_per_slot) / 60; new_minute := (time_slot * minutes_per_slot) % 60; new_time := LPAD((new_hour % 24)::text, 2, '0') || ':' || LPAD(new_minute::text, 2, '0'); updated_schedule := jsonb_set( scraper_record.schedule, '{time}', to_jsonb(new_time) ); UPDATE public.scrapers SET schedule = updated_schedule, updated_at = now() WHERE id = scraper_record.id; update_count := update_count + 1; time_slot := time_slot + 1; END LOOP; INSERT INTO public.debug_logs (message, created_at) VALUES ('Optimized scraper schedules - updated_scrapers: ' || update_count || ', total_scrapers: ' || total_scrapers || ', minutes_per_slot: ' || minutes_per_slot, now()); RETURN update_count; END; $$;
+
+--
+-- Name: process_custom_fields(uuid, uuid, jsonb); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_custom_fields(p_user_id uuid, p_product_id uuid, p_raw_data jsonb) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $$ BEGIN RETURN process_custom_fields_from_raw_data(p_user_id, p_product_id, p_raw_data); END; $$;
 
 --
 -- Name: process_custom_fields_from_raw_data(uuid, uuid, jsonb); Type: FUNCTION; Schema: public; Owner: -
@@ -1736,15 +1980,19 @@ CREATE FUNCTION public.update_integration_next_run_on_completion() RETURNS trigg
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    -- Only update next_run_time when status changes to 'completed'
-    IF NEW.status = 'completed' AND OLD.status != 'completed' THEN
-        -- Update the integration's last_sync_at and next_run_time
-        UPDATE public.integrations
-        SET 
-            last_sync_at = NEW.completed_at,
-            last_sync_status = 'success',
-            updated_at = now()
-        WHERE id = NEW.integration_id;
+    -- Update next_run_time when status changes to 'completed' or 'failed'
+    IF (NEW.status = 'completed' AND OLD.status != 'completed') OR 
+       (NEW.status = 'failed' AND OLD.status != 'failed') THEN
+        
+        IF NEW.status = 'completed' THEN
+            -- Update the integration's last_sync_at and next_run_time for successful runs
+            UPDATE public.integrations
+            SET 
+                last_sync_at = NEW.completed_at,
+                last_sync_status = 'success',
+                status = 'active',  -- Ensure it stays active
+                updated_at = now()
+            WHERE id = NEW.integration_id;
 
 --
 -- Name: update_integration_next_run_time(uuid, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -

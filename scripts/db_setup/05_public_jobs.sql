@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Job-related objects
 -- =========================================================================
--- Generated: 2025-06-23 15:56:10
+-- Generated: 2025-06-25 10:48:41
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -101,13 +101,13 @@ BEGIN
     FROM public.integration_runs ir
     WHERE ir.status IN ('pending', 'initializing', 'running', 'processing');
 
--- Log current status
-    RAISE NOTICE 'Current integration jobs: %/%, Max per run: %',
+-- Log current state
+    RAISE NOTICE 'Integration job scheduler: Current jobs: %/%, Max per run: %',
         current_integration_jobs, max_integration_jobs, max_jobs_per_run;
 
--- If integration worker is at capacity, don't create any jobs
+-- Exit early if we're at capacity
     IF current_integration_jobs >= max_integration_jobs THEN
-        RETURN QUERY SELECT 0, format('Integration worker busy - %s/%s jobs running',
+        RETURN QUERY SELECT 0, format('Integration worker at capacity (%s/%s)',
             current_integration_jobs, max_integration_jobs);
 
 -- Process integrations that are due to run based on their stored next_run_time
@@ -122,6 +122,7 @@ BEGIN
             i.next_run_time
         FROM public.integrations i
         WHERE i.status = 'active'
+          AND i.is_active = true  -- Only run active integrations
           AND i.sync_frequency IS NOT NULL
           AND i.next_run_time IS NOT NULL
           -- Only consider integrations that are due to run
@@ -133,29 +134,24 @@ BEGIN
     LOOP
         -- Stop if we've reached the per-run job limit or worker capacity
         IF job_count >= max_jobs_per_run OR current_integration_jobs >= max_integration_jobs THEN
-            RAISE NOTICE 'Reached limit - jobs created: %, worker capacity: %/%',
-                job_count, current_integration_jobs, max_integration_jobs;
+            EXIT;
 
--- Check if there's already a pending, running, or processing job for this integration
+-- Check if there's already a pending/running job for this integration
         IF NOT EXISTS (
             SELECT 1 FROM public.integration_runs ir
             WHERE ir.integration_id = integration_record.id
               AND ir.status IN ('pending', 'initializing', 'running', 'processing')
         ) THEN
-            -- Create new integration run job
+            -- Create a new integration run job
             INSERT INTO public.integration_runs (
-                id,
                 integration_id,
                 user_id,
                 status,
-                started_at,
                 created_at
             ) VALUES (
-                gen_random_uuid(),
                 integration_record.id,
                 integration_record.user_id,
                 'pending',
-                current_timestamp,
                 current_timestamp
             ) RETURNING id INTO new_job_id;
 
