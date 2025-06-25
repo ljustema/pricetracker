@@ -705,17 +705,23 @@ async function fetchAndProcessJob() {
                                 productsBuffer.length = 0; // Clear buffer
                                 logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Saving batch of ${batchToSave.length} products...`);
                                 // Use job.fetched_competitor_id from the RPC response
-                                saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave, supabase)
-                                    .then(() => {
-                                        if (job) {
-                                            logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted batch.`);
-                                        }
-                                    })
-                                    .catch(err => {
-                                        if (job) {
-                                            logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save product batch: ${err.message}`);
-                                        }
-                                    });
+                                try {
+                                    await saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave, supabase);
+                                    logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted batch.`);
+                                } catch (err) {
+                                    const errorMessage = err instanceof Error ? err.message : String(err);
+                                    logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save product batch: ${errorMessage}`);
+
+                                    // Check if this is a constraint violation that should abort the scraper
+                                    if (errorMessage.includes('check_competitor_price_consistency') ||
+                                        errorMessage.includes('violates check constraint')) {
+                                        logStructured(job.id, 'error', 'DB_CONSTRAINT_VIOLATION', `Database constraint violation detected. Aborting scraper to prevent data corruption.`);
+                                        throw new Error(`Database constraint violation: ${errorMessage}`);
+                                    }
+
+                                    // For other errors, log but continue (could be temporary network issues)
+                                    logStructured(job.id, 'warn', 'DB_BATCH_SAVE', `Continuing scraper despite batch save error.`);
+                                }
                             }
                         } else {
                             if (job) {
@@ -1020,17 +1026,25 @@ async function fetchAndProcessJob() {
                     const batchToSave = [...productsBuffer];
                     productsBuffer.length = 0;
                     logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Saving final batch of ${batchToSave.length} products...`);
-                    saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave, supabase)
-                         .then(() => {
-                             if (job) {
-                                 logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted final batch.`);
-                             }
-                         })
-                         .catch(err => {
-                             if (job) {
-                                 logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save final product batch: ${err.message}`);
-                             }
-                         });
+                    try {
+                        await saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave, supabase);
+                        logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted final batch.`);
+                    } catch (err) {
+                        const errorMessage = err instanceof Error ? err.message : String(err);
+                        logStructured(job.id, 'error', 'DB_BATCH_SAVE', `Failed to save final product batch: ${errorMessage}`);
+
+                        // Check if this is a constraint violation that should fail the job
+                        if (errorMessage.includes('check_competitor_price_consistency') ||
+                            errorMessage.includes('violates check constraint')) {
+                            logStructured(job.id, 'error', 'DB_CONSTRAINT_VIOLATION', `Database constraint violation in final batch. Job will be marked as failed.`);
+                            finalStatus = 'failed';
+                            errorMessage = `Database constraint violation: ${errorMessage}`;
+                            errorDetails = errorMessage;
+                        } else {
+                            // For other errors, log but don't fail the job if we've processed most data successfully
+                            logStructured(job.id, 'warn', 'DB_BATCH_SAVE', `Final batch save failed but job will be marked as completed since main processing succeeded.`);
+                        }
+                    }
                 }
 
                 // Final update of product count in database
@@ -1583,6 +1597,14 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
 
                 if (error) {
                     logStructured(runId, 'warn', 'DB_INSERT', `Attempt ${attempt} failed for chunk ${chunkNumber}: ${error.message}`);
+
+                    // Check if this is a constraint violation that shouldn't be retried
+                    if (error.message.includes('check_competitor_price_consistency') ||
+                        error.message.includes('violates check constraint')) {
+                        logStructured(runId, 'error', 'DB_CONSTRAINT_VIOLATION', `Database constraint violation detected in chunk ${chunkNumber}. This indicates data quality issues that need to be fixed in the scraper.`);
+                        throw new Error(`Database constraint violation in chunk ${chunkNumber}: ${error.message}`);
+                    }
+
                     if (attempt >= MAX_RETRIES) {
                         throw new Error(`Failed to insert chunk ${chunkNumber} after ${MAX_RETRIES} attempts: ${error.message}`);
                     }
