@@ -431,7 +431,7 @@ const BrandAnalysisTab: React.FC = () => {
                   <BarChart
                     data={changeActivityData.brands
                       .filter(brand => brand.total_products >= 3) // Only show brands with at least 3 products
-                      .sort((a, b) => b.changes_per_product - a.changes_per_product)
+                      .sort((a, b) => (b.changes_per_product || 0) - (a.changes_per_product || 0))
                       .slice(0, 15)} // Show top 15 brands
                     margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
                   >

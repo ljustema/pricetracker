@@ -571,7 +571,16 @@ export default function StockAnalysisTab({
                 <CardContent>
                   {salesData?.data && (
                     <BarChart
-                      data={salesData.data.slice(0, 10)}
+                      data={salesData.data.slice(0, 10).map(item => ({
+                        product_name: item.product_name,
+                        brand: item.brand,
+                        sku: item.sku,
+                        total_sold: item.total_sold,
+                        total_revenue: item.total_revenue,
+                        avg_daily_sales: item.avg_daily_sales,
+                        avg_daily_revenue: item.avg_daily_revenue,
+                        revenue_percentage: item.revenue_percentage || 0
+                      }))}
                       xKey="product_name"
                       yKey="total_sold"
                       height={300}
