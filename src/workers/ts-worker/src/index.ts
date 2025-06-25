@@ -715,6 +715,8 @@ async function fetchAndProcessJob() {
                                     // Check if this is a constraint violation that should abort the scraper
                                     if (errorMessage.includes('check_price_consistency') ||
                                         errorMessage.includes('check_at_least_one_price') ||
+                                        errorMessage.includes('check_price_type_consistency') ||
+                                        errorMessage.includes('check_exactly_one_price_type') ||
                                         errorMessage.includes('violates check constraint')) {
                                         logStructured(job.id, 'error', 'DB_CONSTRAINT_VIOLATION', `Database constraint violation detected. Aborting scraper to prevent data corruption.`);
                                         throw new Error(`Database constraint violation: ${errorMessage}`);
@@ -1037,6 +1039,8 @@ async function fetchAndProcessJob() {
                         // Check if this is a constraint violation that should fail the job
                         if (batchErrorMessage.includes('check_price_consistency') ||
                             batchErrorMessage.includes('check_at_least_one_price') ||
+                            batchErrorMessage.includes('check_price_type_consistency') ||
+                            batchErrorMessage.includes('check_exactly_one_price_type') ||
                             batchErrorMessage.includes('violates check constraint')) {
                             logStructured(job.id, 'error', 'DB_CONSTRAINT_VIOLATION', `Database constraint violation in final batch. Job will be marked as failed.`);
                             finalStatus = 'failed';
@@ -1603,6 +1607,8 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
                     // Check if this is a constraint violation that shouldn't be retried
                     if (error.message.includes('check_price_consistency') ||
                         error.message.includes('check_at_least_one_price') ||
+                        error.message.includes('check_price_type_consistency') ||
+                        error.message.includes('check_exactly_one_price_type') ||
                         error.message.includes('violates check constraint')) {
                         logStructured(runId, 'error', 'DB_CONSTRAINT_VIOLATION', `Database constraint violation detected in chunk ${chunkNumber}. This indicates data quality issues that need to be fixed in the scraper.`);
                         throw new Error(`Database constraint violation in chunk ${chunkNumber}: ${error.message}`);
