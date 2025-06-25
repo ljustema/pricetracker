@@ -39,7 +39,7 @@ export interface Product {
     }
   }; // New field for source stock with type information
   currency_code?: string; // Add currency_code field
-  url?: string; // Add url field
+  our_url?: string; // Renamed from url
 }
 
 export interface StockLevel {
@@ -115,7 +115,9 @@ export interface PriceChange {
   new_our_retail_price?: number | string; // For our retail price changes (integrations) - can be string from DB
   price_change_percentage: number | string; // Can be string from DB
   changed_at: string;
-  url?: string; // URL to the product on the competitor's website
+  url?: string; // Legacy field for backward compatibility
+  competitor_url?: string; // URL to the product on the competitor's website
+  our_url?: string; // URL to our product page
   currency_code?: string;
   competitors?: {
     id?: string;

@@ -29,7 +29,7 @@ import { hideBin } from 'yargs/helpers';
  * Align this with the `temp_suppliers_scraped_data` table schema.
  */
 interface ScrapedSupplierData {
-    url: string;
+    supplier_url: string; // Renamed from url to match database schema
     name: string;
     supplier_price: number | null; // Supplier's selling price to us
     supplier_recommended_price?: number | null; // Supplier's recommended retail price
@@ -205,7 +205,7 @@ async function scrape(context: ScriptContext): Promise<void> {
                 supplier_price: supplierPrice,
                 supplier_recommended_price: supplierRecommendedPrice,
                 currency_code: "SEK", // Or detect from page
-                url: link,
+                supplier_url: link, // Updated field name to match database schema
                 image_url: imageUrl,
                 sku: sku,
                 brand: brand,

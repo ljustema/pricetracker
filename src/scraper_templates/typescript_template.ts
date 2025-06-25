@@ -29,7 +29,7 @@ import { hideBin } from 'yargs/helpers';
  * Align this with the `temp_competitors_scraped_data` table schema.
  */
 interface ScrapedProductData {
-    url: string;
+    competitor_url: string; // Renamed from url to match database schema
     name: string;
     competitor_price: number | null; // Updated field name to match temp_competitors_scraped_data table
     currency_code: string | null; // Updated field name to match temp_competitors_scraped_data table
@@ -238,7 +238,7 @@ async function scrape(context: ScriptContext): Promise<void> {
                 name: name,
                 competitor_price: price,
                 currency_code: "SEK", // Or detect from page
-                url: link,
+                competitor_url: link, // Updated field name to match database schema
                 image_url: imageUrl,
                 sku: sku,
                 brand: brand,

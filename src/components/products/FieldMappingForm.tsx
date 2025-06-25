@@ -33,7 +33,7 @@ const STANDARD_FIELDS = {
     { key: 'category', label: 'Category', type: 'text', required: false },
     { key: 'description', label: 'Description', type: 'text', required: false },
     { key: 'image_url', label: 'Image URL', type: 'url', required: false },
-    { key: 'url', label: 'Product URL', type: 'url', required: false },
+    { key: 'our_url', label: 'Product URL', type: 'url', required: false }, // Updated field name
   ],
   competitor: [
     { key: 'name', label: 'Product Name', type: 'text', required: true },
@@ -43,7 +43,7 @@ const STANDARD_FIELDS = {
     { key: 'brand', label: 'Brand', type: 'text', required: false },
     { key: 'ean', label: 'EAN', type: 'text', required: false },
     { key: 'image_url', label: 'Image URL', type: 'url', required: false },
-    { key: 'url', label: 'Product URL', type: 'url', required: false },
+    { key: 'competitor_url', label: 'Product URL', type: 'url', required: false }, // Updated field name
   ],
 };
 

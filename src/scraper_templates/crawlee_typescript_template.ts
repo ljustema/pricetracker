@@ -180,7 +180,7 @@ interface ScrapedProductData {
   name: string;
   competitor_price: number | null; // Updated field name to match temp_competitors_scraped_data table
   currency_code: string; // Updated field name to match temp_competitors_scraped_data table
-  url: string;
+  competitor_url: string; // Renamed from url to match database schema
   sku: string | null;
   brand: string | null;
   ean: string | null;
@@ -580,7 +580,7 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
         name: apiProduct.name,
         competitor_price: typeof apiProduct.price === 'number' ? apiProduct.price : parseFloat(String(apiProduct.price)),
         currency_code: apiProduct.currency_code || 'SEK', // Default to SEK if not specified
-        url: `${CONFIG.SITE.BASE_URL}/product/${apiProduct.id}`, // Construct URL based on product ID
+        competitor_url: `${CONFIG.SITE.BASE_URL}/product/${apiProduct.id}`, // Updated field name to match database schema
         sku: apiProduct.sku || null,
         brand: apiProduct.brand || null,
         ean: apiProduct.ean || null,
@@ -697,7 +697,7 @@ async function extractProductData($: cheerio.CheerioAPI, url: string): Promise<S
       name: '',
       competitor_price: null,
       currency_code: 'SEK', // Default currency
-      url,
+      competitor_url: url, // Updated field name to match database schema
       sku: null,
       brand: null,
       ean: null,

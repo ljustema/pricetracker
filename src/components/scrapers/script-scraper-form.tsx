@@ -600,10 +600,10 @@ export default function ScriptScraperForm({ // Renamed component
                           </div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs">
-                          <div className={`${product.url ? 'text-blue-600 underline' : 'text-yellow-600 italic'}`}>
-                            {product.url ? (
-                              <a href={product.url} target="_blank" rel="noopener noreferrer" className="truncate block max-w-[100px]">
-                                {product.url}
+                          <div className={`${(product as unknown as Record<string, unknown>).competitor_url as string || product.url ? 'text-blue-600 underline' : 'text-yellow-600 italic'}`}>
+                            {(product as unknown as Record<string, unknown>).competitor_url as string || product.url ? (
+                              <a href={(product as unknown as Record<string, unknown>).competitor_url as string || product.url} target="_blank" rel="noopener noreferrer" className="truncate block max-w-[100px]">
+                                {(product as unknown as Record<string, unknown>).competitor_url as string || product.url}
                               </a>
                             ) : 'Not set'}
                           </div>

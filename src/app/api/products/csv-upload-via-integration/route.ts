@@ -204,7 +204,7 @@ export async function POST(req: NextRequest) {
           our_retail_price: ourRetailPrice, // Use our_retail_price as the main price
           our_wholesale_price: ourWholesalePrice,
           image_url: row.image_url || null,
-          url: row.url || null,
+          our_url: row.our_url || row.url || null, // Updated field name, support both old and new
           currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
           raw_data: row, // Store all CSV data including custom fields
           status: 'pending',

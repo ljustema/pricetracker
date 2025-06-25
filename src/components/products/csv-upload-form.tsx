@@ -648,18 +648,20 @@ export default function CSVUploadForm({
                   {productType === 'own' ? (
                     <>
                       Required columns: name<br />
-                      Optional columns: our_retail_price, our_wholesale_price, currency_code, sku, brand, ean, image_url, url, category, description<br />
-                      <span className="text-gray-400">Note: old field names (our_price, wholesale_price) are still supported</span>
+                      Optional columns: our_retail_price, our_wholesale_price, currency_code, sku, brand, ean, image_url, our_url, category, description<br />
+                      <span className="text-gray-400">Note: old field names (our_price, wholesale_price, url) are still supported</span>
                     </>
                   ) : productType === 'competitor' ? (
                     <>
                       Required columns: name, competitor_price<br />
-                      Optional columns: currency_code, sku, brand, ean, image_url, url
+                      Optional columns: currency_code, sku, brand, ean, image_url, competitor_url<br />
+                      <span className="text-gray-400">Note: old field name (url) is still supported</span>
                     </>
                   ) : (
                     <>
                       Required columns: name, supplier_price<br />
-                      Optional columns: supplier_recommended_price, currency_code, sku, brand, ean, image_url, url, minimum_order_quantity, lead_time_days
+                      Optional columns: supplier_recommended_price, currency_code, sku, brand, ean, image_url, supplier_url, minimum_order_quantity, lead_time_days<br />
+                      <span className="text-gray-400">Note: old field name (url) is still supported</span>
                     </>
                   )}
                 </p>

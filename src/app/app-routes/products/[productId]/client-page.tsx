@@ -235,7 +235,10 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                       const sourceName = priceChange.source_name || priceChange.competitors?.name || "Unknown";
                       const sourceWebsite = priceChange.source?.website || priceChange.competitors?.website;
                       const sourceType = priceChange.source_type || "competitor";
-                      const productUrl = priceChange.url;
+                      // Use the appropriate URL field based on source type
+                      const productUrl = sourceType === 'integration'
+                        ? (priceChange as unknown as Record<string, unknown>).our_url as string || priceChange.url
+                        : (priceChange as unknown as Record<string, unknown>).competitor_url as string || priceChange.url;
 
                       // Use the appropriate price field based on source type
                       const rawPrice = priceChange.source_type === 'integration'

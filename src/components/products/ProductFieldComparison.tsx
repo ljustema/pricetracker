@@ -15,7 +15,7 @@ interface Product {
   our_retail_price?: number | null; // Renamed from our_price
   our_wholesale_price?: number | null; // Renamed from wholesale_price
   currency_code?: string | null;
-  url?: string | null;
+  our_url?: string | null; // Renamed from url
   image_url?: string | null;
   category?: string | null;
   description?: string | null;
@@ -46,7 +46,7 @@ const fields: FieldInfo[] = [
   { key: 'our_retail_price', label: 'Our Retail Price', type: 'number' },
   { key: 'our_wholesale_price', label: 'Our Wholesale Price', type: 'number' },
   { key: 'currency_code', label: 'Currency', type: 'text' },
-  { key: 'url', label: 'Product URL', type: 'url' },
+  { key: 'our_url', label: 'Product URL', type: 'url' }, // Updated field name
   { key: 'image_url', label: 'Image URL', type: 'url' },
 ];
 

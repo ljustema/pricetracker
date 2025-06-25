@@ -28,7 +28,7 @@ export type Database = {
           updated_at: string | null;
           user_id: string;
           currency_code: string | null;
-          url: string | null;
+          our_url: string | null; // Renamed from url
         };
         Insert: {
           brand?: string | null;
@@ -47,7 +47,7 @@ export type Database = {
           updated_at?: string | null;
           user_id: string;
           currency_code?: string | null;
-          url?: string | null;
+          our_url?: string | null; // Renamed from url
         };
         Update: {
           brand?: string | null;
@@ -66,7 +66,7 @@ export type Database = {
           updated_at?: string | null;
           user_id?: string;
           currency_code?: string | null;
-          url?: string | null;
+          our_url?: string | null; // Renamed from url
         };
         Relationships: [
           {
@@ -92,7 +92,8 @@ export type Database = {
           price_change_percentage: number;
           product_id: string;
           user_id: string;
-          url: string | null;
+          competitor_url: string | null; // Renamed from url
+          our_url: string | null; // New field for cross-reference
           currency_code: string | null;
           integration_id: string | null;
         };
@@ -107,7 +108,8 @@ export type Database = {
           price_change_percentage: number;
           product_id: string;
           user_id: string;
-          url?: string | null;
+          competitor_url?: string | null; // Renamed from url
+          our_url?: string | null; // New field for cross-reference
           currency_code?: string | null;
           integration_id?: string | null;
         };
@@ -122,7 +124,8 @@ export type Database = {
           price_change_percentage?: number;
           product_id?: string;
           user_id?: string;
-          url?: string | null;
+          competitor_url?: string | null; // Renamed from url
+          our_url?: string | null; // New field for cross-reference
           currency_code?: string | null;
           integration_id?: string | null;
         };
@@ -159,7 +162,8 @@ export type Database = {
           new_supplier_recommended_price: number | null; // New field
           price_change_percentage: number | null;
           currency_code: string | null;
-          url: string | null;
+          supplier_url: string | null; // Renamed from url
+          our_url: string | null; // New field for cross-reference
           minimum_order_quantity: number | null;
           lead_time_days: number | null;
           changed_at: string | null;
@@ -178,7 +182,8 @@ export type Database = {
           new_supplier_recommended_price?: number | null;
           price_change_percentage?: number | null;
           currency_code?: string | null;
-          url?: string | null;
+          supplier_url?: string | null; // Renamed from url
+          our_url?: string | null; // New field for cross-reference
           minimum_order_quantity?: number | null;
           lead_time_days?: number | null;
           changed_at?: string | null;
@@ -197,7 +202,8 @@ export type Database = {
           new_supplier_recommended_price?: number | null;
           price_change_percentage?: number | null;
           currency_code?: string | null;
-          url?: string | null;
+          supplier_url?: string | null; // Renamed from url
+          our_url?: string | null; // New field for cross-reference
           minimum_order_quantity?: number | null;
           lead_time_days?: number | null;
           changed_at?: string | null;
@@ -220,7 +226,174 @@ export type Database = {
           }
         ];
       };
-      
+
+      // Updated temp_competitors_scraped_data table
+      temp_competitors_scraped_data: {
+        Row: {
+          id: string;
+          user_id: string;
+          competitor_id: string;
+          scraper_id: string | null;
+          product_id: string | null;
+          name: string;
+          competitor_price: number | null;
+          currency_code: string | null;
+          competitor_url: string | null; // Renamed from url
+          image_url: string | null;
+          sku: string | null;
+          brand: string | null;
+          ean: string | null;
+          raw_data: Json | null;
+          scraped_at: string | null;
+          created_at: string | null;
+          stock_quantity: number | null;
+          stock_status: string | null;
+          availability_date: string | null;
+          raw_stock_data: Json | null;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          competitor_id: string;
+          scraper_id?: string | null;
+          product_id?: string | null;
+          name: string;
+          competitor_price?: number | null;
+          currency_code?: string | null;
+          competitor_url?: string | null; // Renamed from url
+          image_url?: string | null;
+          sku?: string | null;
+          brand?: string | null;
+          ean?: string | null;
+          raw_data?: Json | null;
+          scraped_at?: string | null;
+          created_at?: string | null;
+          stock_quantity?: number | null;
+          stock_status?: string | null;
+          availability_date?: string | null;
+          raw_stock_data?: Json | null;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          competitor_id?: string;
+          scraper_id?: string | null;
+          product_id?: string | null;
+          name?: string;
+          competitor_price?: number | null;
+          currency_code?: string | null;
+          competitor_url?: string | null; // Renamed from url
+          image_url?: string | null;
+          sku?: string | null;
+          brand?: string | null;
+          ean?: string | null;
+          raw_data?: Json | null;
+          scraped_at?: string | null;
+          created_at?: string | null;
+          stock_quantity?: number | null;
+          stock_status?: string | null;
+          availability_date?: string | null;
+          raw_stock_data?: Json | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "temp_competitors_scraped_data_competitor_id_fkey";
+            columns: ["competitor_id"];
+            isOneToOne: false;
+            referencedRelation: "competitors";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+
+      // Updated temp_integrations_scraped_data table
+      temp_integrations_scraped_data: {
+        Row: {
+          id: string;
+          integration_run_id: string;
+          integration_id: string;
+          user_id: string;
+          prestashop_product_id: string | null;
+          name: string;
+          sku: string | null;
+          ean: string | null;
+          brand: string | null;
+          our_retail_price: number | null;
+          our_wholesale_price: number | null;
+          image_url: string | null;
+          raw_data: Json | null;
+          status: string;
+          error_message: string | null;
+          created_at: string;
+          processed_at: string | null;
+          currency_code: string | null;
+          our_url: string | null; // Renamed from url
+          stock_quantity: number | null;
+          stock_status: string | null;
+          availability_date: string | null;
+          raw_stock_data: Json | null;
+        };
+        Insert: {
+          id?: string;
+          integration_run_id: string;
+          integration_id: string;
+          user_id: string;
+          prestashop_product_id?: string | null;
+          name: string;
+          sku?: string | null;
+          ean?: string | null;
+          brand?: string | null;
+          our_retail_price?: number | null;
+          our_wholesale_price?: number | null;
+          image_url?: string | null;
+          raw_data?: Json | null;
+          status?: string;
+          error_message?: string | null;
+          created_at?: string;
+          processed_at?: string | null;
+          currency_code?: string | null;
+          our_url?: string | null; // Renamed from url
+          stock_quantity?: number | null;
+          stock_status?: string | null;
+          availability_date?: string | null;
+          raw_stock_data?: Json | null;
+        };
+        Update: {
+          id?: string;
+          integration_run_id?: string;
+          integration_id?: string;
+          user_id?: string;
+          prestashop_product_id?: string | null;
+          name?: string;
+          sku?: string | null;
+          ean?: string | null;
+          brand?: string | null;
+          our_retail_price?: number | null;
+          our_wholesale_price?: number | null;
+          image_url?: string | null;
+          raw_data?: Json | null;
+          status?: string;
+          error_message?: string | null;
+          created_at?: string;
+          processed_at?: string | null;
+          currency_code?: string | null;
+          our_url?: string | null; // Renamed from url
+          stock_quantity?: number | null;
+          stock_status?: string | null;
+          availability_date?: string | null;
+          raw_stock_data?: Json | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "temp_integrations_scraped_data_integration_id_fkey";
+            columns: ["integration_id"];
+            isOneToOne: false;
+            referencedRelation: "integrations";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+
       // Updated temp_suppliers_scraped_data table
       temp_suppliers_scraped_data: {
         Row: {
@@ -236,7 +409,7 @@ export type Database = {
           supplier_price: number | null; // Renamed from price
           supplier_recommended_price: number | null; // New field
           currency_code: string | null;
-          url: string | null;
+          supplier_url: string | null; // Renamed from url
           image_url: string | null;
           minimum_order_quantity: number | null;
           lead_time_days: number | null;
@@ -260,7 +433,7 @@ export type Database = {
           supplier_price?: number | null;
           supplier_recommended_price?: number | null;
           currency_code?: string | null;
-          url?: string | null;
+          supplier_url?: string | null; // Renamed from url
           image_url?: string | null;
           minimum_order_quantity?: number | null;
           lead_time_days?: number | null;
@@ -284,7 +457,7 @@ export type Database = {
           supplier_price?: number | null;
           supplier_recommended_price?: number | null;
           currency_code?: string | null;
-          url?: string | null;
+          supplier_url?: string | null; // Renamed from url
           image_url?: string | null;
           minimum_order_quantity?: number | null;
           lead_time_days?: number | null;

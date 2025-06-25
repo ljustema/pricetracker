@@ -255,7 +255,7 @@ export async function POST(req: NextRequest) {
           sku: row.sku || null,
           ean: row.ean || null,
           brand: row.brand || null,
-          url: row.url || null,
+          competitor_url: row.competitor_url || row.url || null, // Updated field name, support both old and new
           image_url: row.image_url || null,
           currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
           raw_data: row, // Include all CSV data as raw_data for custom fields processing

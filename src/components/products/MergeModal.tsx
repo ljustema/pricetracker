@@ -30,7 +30,7 @@ interface Product {
   our_retail_price?: number | null;
   our_wholesale_price?: number | null;
   currency_code?: string | null;
-  url?: string | null;
+  our_url?: string | null; // Renamed from url
 }
 
 interface DuplicateGroup {

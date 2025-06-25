@@ -140,7 +140,7 @@ interface _ScrapedProductData {
   name: string;
   competitor_price: number; // Updated field name to match temp_competitors_scraped_data table
   currency_code?: string; // Updated field name to match temp_competitors_scraped_data table
-  url?: string;
+  competitor_url?: string; // Renamed from url to match database schema
   image_url?: string;
   sku?: string;
   brand?: string;
@@ -1568,7 +1568,7 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
         name: p.name,
         competitor_price: p.competitor_price,
         currency_code: (p.currency_code ?? 'SEK').toUpperCase(), // Use currency_code instead of currency
-        url: p.url,
+        competitor_url: p.competitor_url, // Updated field name to match database schema
         image_url: p.image_url,
         sku: p.sku,
         brand: p.brand,
