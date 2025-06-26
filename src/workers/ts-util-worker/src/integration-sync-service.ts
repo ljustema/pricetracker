@@ -746,12 +746,13 @@ export class IntegrationSyncService {
         this.log('error', 'CONFLICT_DETECTION_ERROR', `Failed to fetch integration records: ${recordsError.message}`);
       } else if (integrationRecords && Array.isArray(integrationRecords) && integrationRecords.length > 0) {
         // Run conflict detection on all records from this integration run
+        const recordIds = integrationRecords.map((r: { id: string }) => r.id);
         const { data: conflictResult, error: conflictError } = await this.supabase.rpc(
           'detect_ean_conflicts_and_create_reviews',
           {
             p_user_id: this.userId,
             p_source_table: 'temp_integrations_scraped_data',
-            p_batch_ids: integrationRecords.map((r: any) => r.id)
+            p_batch_ids: recordIds
           }
         );
 
@@ -759,7 +760,10 @@ export class IntegrationSyncService {
           this.log('error', 'CONFLICT_DETECTION_ERROR', `Failed to detect conflicts: ${conflictError.message}`);
         } else {
           const conflictArray = Array.isArray(conflictResult) ? conflictResult : [];
-          const reviewsCount = conflictArray.length > 0 && conflictArray[0] ? (conflictArray[0] as any).reviews_count || 0 : 0;
+          const firstResult = conflictArray.length > 0 ? conflictArray[0] : null;
+          const reviewsCount = firstResult && typeof firstResult === 'object' && 'reviews_count' in firstResult
+            ? (firstResult as { reviews_count: number }).reviews_count || 0
+            : 0;
           this.log('info', 'CONFLICT_DETECTION_COMPLETE', `Conflict detection completed. Found conflicts: ${reviewsCount}`);
         }
 
