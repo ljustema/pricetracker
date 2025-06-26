@@ -27,6 +27,8 @@ interface SupabaseQueryBuilder {
   insert: (data: unknown) => SupabaseQueryBuilder;
   update: (data: Record<string, unknown>) => SupabaseQueryBuilder;
   eq: (column: string, value: unknown) => SupabaseQueryBuilder;
+  limit: (count: number) => SupabaseQueryBuilder;
+  range: (from: number, to: number) => SupabaseQueryBuilder;
   single: () => Promise<DatabaseResponse>;
   then: (callback: (result: DatabaseResponse) => void) => Promise<void>;
   catch: (callback: (error: unknown) => void) => Promise<void>;
@@ -758,16 +760,31 @@ export class IntegrationSyncService {
       // Now manually process the pending records since auto-trigger is disabled
       this.log('info', 'MANUAL_PROCESSING_START', 'Starting manual processing of pending records');
 
-      const { data: pendingRecords, error: pendingError } = await this.supabase
-        .from('temp_integrations_scraped_data')
-        .select('*')
-        .eq('integration_run_id', this.runId)
-        .eq('status', 'pending');
+      // Process records in batches to handle large datasets
+      let totalProcessed = 0;
+      let batchNumber = 1;
+      const batchSize = 1000;
+      let hasMoreRecords = true;
 
-      if (pendingError) {
-        this.log('error', 'MANUAL_PROCESSING_ERROR', `Failed to fetch pending records: ${pendingError.message}`);
-      } else if (pendingRecords && Array.isArray(pendingRecords) && pendingRecords.length > 0) {
-        this.log('info', 'MANUAL_PROCESSING_RECORDS', `Processing ${pendingRecords.length} pending records manually`);
+      while (hasMoreRecords) {
+        const { data: pendingRecords, error: pendingError } = await this.supabase
+          .from('temp_integrations_scraped_data')
+          .select('id')
+          .eq('integration_run_id', this.runId)
+          .eq('status', 'pending')
+          .limit(batchSize);
+
+        if (pendingError) {
+          this.log('error', 'MANUAL_PROCESSING_ERROR', `Failed to fetch pending records batch ${batchNumber}: ${pendingError.message}`);
+          break;
+        }
+
+        if (!pendingRecords || !Array.isArray(pendingRecords) || pendingRecords.length === 0) {
+          hasMoreRecords = false;
+          break;
+        }
+
+        this.log('info', 'MANUAL_PROCESSING_BATCH', `Processing batch ${batchNumber}: ${pendingRecords.length} records`);
 
         // Process each record by calling the processing function
         for (const record of pendingRecords) {
@@ -779,6 +796,8 @@ export class IntegrationSyncService {
 
             if (processError) {
               this.log('error', 'MANUAL_PROCESSING_RECORD_ERROR', `Failed to process record ${recordWithId.id}: ${processError.message}`);
+            } else {
+              totalProcessed++;
             }
           } catch (error) {
             const recordWithId = record as { id: string };
@@ -786,8 +805,20 @@ export class IntegrationSyncService {
           }
         }
 
-        this.log('info', 'MANUAL_PROCESSING_COMPLETE', 'Manual processing of pending records completed');
+        // If we got fewer records than the batch size, we've processed all records
+        if (pendingRecords.length < batchSize) {
+          hasMoreRecords = false;
+        }
+
+        batchNumber++;
+
+        // Add a small delay between batches to avoid overwhelming the database
+        if (hasMoreRecords) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
       }
+
+      this.log('info', 'MANUAL_PROCESSING_COMPLETE', `Manual processing completed. Total records processed: ${totalProcessed}`);
 
       // Update run status to completed
       await this.updateRunStatus('completed', {
