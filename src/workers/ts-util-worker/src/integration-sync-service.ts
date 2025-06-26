@@ -660,14 +660,14 @@ export class IntegrationSyncService {
       };
     });
 
-    // Insert the batch into the temp_integrations_scraped_data table with integration_pending status
+    // Insert the batch into the temp_integrations_scraped_data table with pending status
     console.log(`Inserting ${stagedProducts.length} products into temp_integrations_scraped_data table`);
     console.log('First product in batch:', JSON.stringify(stagedProducts[0], null, 2));
 
-    // Set status to 'integration_pending' to prevent automatic processing until integration run completes
+    // Set status to 'pending' for immediate processing
     const stagedProductsWithStatus = stagedProducts.map(product => ({
       ...product,
-      status: 'integration_pending'
+      status: 'pending'
     }));
 
     const { data: insertData, error: insertError } = await this.supabase
@@ -737,88 +737,8 @@ export class IntegrationSyncService {
           throw new Error(`Unsupported platform: ${typedIntegration.platform}`);
       }
 
-      // Now run conflict detection on the COMPLETE integration run
-      this.log('info', 'CONFLICT_DETECTION_START', 'Running conflict detection on complete integration run');
-
-      const { data: conflictResult, error: conflictError } = await this.supabase.rpc(
-        'detect_and_process_integration_conflicts',
-        {
-          p_user_id: this.userId,
-          p_integration_run_id: this.runId,
-          p_batch_ids: null // Process all records
-        }
-      );
-
-      if (conflictError) {
-        this.log('error', 'CONFLICT_DETECTION_ERROR', `Conflict detection failed: ${conflictError.message}`);
-      } else {
-        const conflictArray = Array.isArray(conflictResult) ? conflictResult : [];
-        const result = conflictArray.length > 0 && conflictArray[0] ? conflictArray[0] as { processed_count: number; conflict_count: number } : { processed_count: 0, conflict_count: 0 };
-        this.log('info', 'CONFLICT_DETECTION_COMPLETE', `Processed: ${result.processed_count} records, Conflicts: ${result.conflict_count}`);
-      }
-
-      // Now manually process the pending records since auto-trigger is disabled
-      this.log('info', 'MANUAL_PROCESSING_START', 'Starting manual processing of pending records');
-
-      // Process records in batches to handle large datasets
-      let totalProcessed = 0;
-      let batchNumber = 1;
-      const batchSize = 1000;
-      let hasMoreRecords = true;
-
-      while (hasMoreRecords) {
-        const { data: pendingRecords, error: pendingError } = await this.supabase
-          .from('temp_integrations_scraped_data')
-          .select('id')
-          .eq('integration_run_id', this.runId)
-          .eq('status', 'pending')
-          .limit(batchSize);
-
-        if (pendingError) {
-          this.log('error', 'MANUAL_PROCESSING_ERROR', `Failed to fetch pending records batch ${batchNumber}: ${pendingError.message}`);
-          break;
-        }
-
-        if (!pendingRecords || !Array.isArray(pendingRecords) || pendingRecords.length === 0) {
-          hasMoreRecords = false;
-          break;
-        }
-
-        this.log('info', 'MANUAL_PROCESSING_BATCH', `Processing batch ${batchNumber}: ${pendingRecords.length} records`);
-
-        // Process each record by calling the processing function
-        for (const record of pendingRecords) {
-          try {
-            const recordWithId = record as { id: string };
-            const { error: processError } = await this.supabase.rpc('process_temp_integrations_scraped_data_manual', {
-              p_record_id: recordWithId.id
-            });
-
-            if (processError) {
-              this.log('error', 'MANUAL_PROCESSING_RECORD_ERROR', `Failed to process record ${recordWithId.id}: ${processError.message}`);
-            } else {
-              totalProcessed++;
-            }
-          } catch (error) {
-            const recordWithId = record as { id: string };
-            this.log('error', 'MANUAL_PROCESSING_RECORD_EXCEPTION', `Exception processing record ${recordWithId.id}: ${error}`);
-          }
-        }
-
-        // If we got fewer records than the batch size, we've processed all records
-        if (pendingRecords.length < batchSize) {
-          hasMoreRecords = false;
-        }
-
-        batchNumber++;
-
-        // Add a small delay between batches to avoid overwhelming the database
-        if (hasMoreRecords) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-      }
-
-      this.log('info', 'MANUAL_PROCESSING_COMPLETE', `Manual processing completed. Total records processed: ${totalProcessed}`);
+      // Simple approach: Enable the auto-processing trigger to handle records automatically
+      this.log('info', 'PROCESSING_START', 'Records will be processed automatically by database trigger');
 
       // Update run status to completed
       await this.updateRunStatus('completed', {

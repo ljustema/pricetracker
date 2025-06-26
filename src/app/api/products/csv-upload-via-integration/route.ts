@@ -234,31 +234,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Run conflict detection before processing
-    if (insertedRecords && insertedRecords.length > 0) {
-      const { data: conflictResult, error: conflictError } = await supabase.rpc(
-        'detect_ean_conflicts_and_create_reviews',
-        {
-          p_user_id: userId,
-          p_source_table: 'temp_integrations_scraped_data',
-          p_batch_ids: insertedRecords.map(r => r.id)
-        }
-      );
-
-      if (conflictError) {
-        console.error('Error detecting conflicts:', conflictError);
-        // Don't fail the entire upload, just log the error
-      } else {
-        console.log('Conflict detection completed:', conflictResult);
-      }
-
-      // Update status to 'pending' so records can be processed
-      await supabase
-        .from('temp_integrations_scraped_data')
-        .update({ status: 'pending' })
-        .eq('integration_run_id', integrationRun.id)
-        .eq('status', 'conflict_check');
-    }
+    // Records will be processed automatically by the database trigger
 
     // Process the staged data using the database function
     const { data: processResult, error: processError } = await supabase
