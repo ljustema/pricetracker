@@ -779,6 +779,40 @@ export class IntegrationSyncService {
           this.log('error', 'STATUS_UPDATE_ERROR', `Failed to update status to pending: ${updateError.message}`);
         } else {
           this.log('info', 'PROCESSING_START', 'Updated non-conflicting records to pending status for processing');
+
+          // Now manually process the pending records since auto-trigger is disabled
+          this.log('info', 'MANUAL_PROCESSING_START', 'Starting manual processing of pending records');
+
+          const { data: pendingRecords, error: pendingError } = await this.supabase
+            .from('temp_integrations_scraped_data')
+            .select('*')
+            .eq('integration_run_id', this.runId)
+            .eq('status', 'pending');
+
+          if (pendingError) {
+            this.log('error', 'MANUAL_PROCESSING_ERROR', `Failed to fetch pending records: ${pendingError.message}`);
+          } else if (pendingRecords && Array.isArray(pendingRecords) && pendingRecords.length > 0) {
+            this.log('info', 'MANUAL_PROCESSING_RECORDS', `Processing ${pendingRecords.length} pending records manually`);
+
+            // Process each record by calling the processing function
+            for (const record of pendingRecords) {
+              try {
+                const recordWithId = record as { id: string };
+                const { error: processError } = await this.supabase.rpc('process_temp_integrations_scraped_data_manual', {
+                  p_record_id: recordWithId.id
+                });
+
+                if (processError) {
+                  this.log('error', 'MANUAL_PROCESSING_RECORD_ERROR', `Failed to process record ${recordWithId.id}: ${processError.message}`);
+                }
+              } catch (error) {
+                const recordWithId = record as { id: string };
+                this.log('error', 'MANUAL_PROCESSING_RECORD_EXCEPTION', `Exception processing record ${recordWithId.id}: ${error}`);
+              }
+            }
+
+            this.log('info', 'MANUAL_PROCESSING_COMPLETE', 'Manual processing of pending records completed');
+          }
         }
       }
 
