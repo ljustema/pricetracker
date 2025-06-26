@@ -536,7 +536,7 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
             p.get('name'),
             price,
             (p.get('currency_code', p.get('currency', 'SEK'))).upper(), # Support both currency_code and currency, ensure uppercase
-            p.get('url'),
+            p.get('competitor_url', p.get('url')), # Support both new competitor_url and old url field names
             p.get('image_url'),
             p.get('sku'),
             p.get('brand'),
@@ -577,7 +577,7 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
                         sql = """
                             INSERT INTO temp_competitors_scraped_data (
                                 user_id, competitor_id, name, competitor_price, currency_code,
-                                url, image_url, sku, brand, ean, raw_data,
+                                competitor_url, image_url, sku, brand, ean, raw_data,
                                 stock_quantity, stock_status, availability_date, raw_stock_data, scraped_at
                             ) VALUES %s
                         """
