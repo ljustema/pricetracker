@@ -10,7 +10,7 @@ export default function ProductsHeader() {
   const [showCSVUploadForm, setShowCSVUploadForm] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [counts, setCounts] = useState({ eanConflicts: 0, duplicates: 0 });
+  const [counts, setCounts] = useState({ duplicates: 0 });
   const [isLoadingCounts, setIsLoadingCounts] = useState(true);
   const searchParams = useSearchParams();
 
@@ -116,18 +116,7 @@ export default function ProductsHeader() {
               <UploadIcon className="h-4 w-4 mr-2" />
               Upload CSV
             </button>
-            <Link
-              href="/app-routes/products/ean-conflicts"
-              className="flex items-center relative rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-            >
-              <AlertTriangle className="h-4 w-4 mr-2" />
-              Review EAN Conflicts
-              {!isLoadingCounts && counts.eanConflicts > 0 && (
-                <span className="absolute -top-2 -right-2 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/2 -translate-y-1/2 bg-red-600 rounded-full">
-                  {counts.eanConflicts}
-                </span>
-              )}
-            </Link>
+
             <Link
               href="/app-routes/products/duplicates"
               className="flex items-center relative rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"

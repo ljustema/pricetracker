@@ -12,20 +12,7 @@ export async function GET(_request: NextRequest) {
 
     const supabase = await createSupabaseServerClient();
 
-    // Get count of pending EAN conflict reviews
-    const { count: conflictCount, error: conflictError } = await supabase
-      .from('product_match_reviews')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', session.user.id)
-      .eq('status', 'pending');
-
-    if (conflictError) {
-      console.error('Error counting EAN conflicts:', conflictError);
-      return NextResponse.json(
-        { error: 'Failed to count EAN conflicts', details: conflictError.message },
-        { status: 500 }
-      );
-    }
+    // EAN conflict detection has been removed
 
     // Get count of potential duplicates
     let duplicateCount = 0;
@@ -50,7 +37,6 @@ export async function GET(_request: NextRequest) {
     }
 
     return NextResponse.json({
-      eanConflicts: conflictCount || 0,
       duplicates: duplicateCount
     });
 
