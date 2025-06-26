@@ -446,8 +446,59 @@ export class IntegrationSyncService {
         await this.updateRunStatus('processing', { productsProcessed });
       }
 
-      // Products are automatically processed via database triggers
-      this.log('info', 'AUTO_PROCESSING', 'Products automatically processed via database triggers');
+      // Run conflict detection immediately after staging, before any processing
+      this.log('info', 'CONFLICT_DETECTION_START', 'Running conflict detection on staged products');
+
+      const { data: conflictResult, error: conflictError } = await this.supabase.rpc(
+        'detect_and_process_integration_conflicts',
+        {
+          p_user_id: this.userId,
+          p_integration_run_id: this.runId,
+          p_batch_ids: null // Process all records
+        }
+      );
+
+      if (conflictError) {
+        this.log('error', 'CONFLICT_DETECTION_ERROR', `Conflict detection failed: ${conflictError.message}`);
+      } else {
+        const conflictArray = Array.isArray(conflictResult) ? conflictResult : [];
+        const result = conflictArray.length > 0 && conflictArray[0] ? conflictArray[0] as { processed_count: number; conflict_count: number } : { processed_count: 0, conflict_count: 0 };
+        this.log('info', 'CONFLICT_DETECTION_COMPLETE', `Processed: ${result.processed_count} records, Conflicts: ${result.conflict_count}`);
+      }
+
+      // Now manually process the pending records since auto-trigger is disabled
+      this.log('info', 'MANUAL_PROCESSING_START', 'Starting manual processing of pending records');
+
+      const { data: pendingRecords, error: pendingError } = await this.supabase
+        .from('temp_integrations_scraped_data')
+        .select('*')
+        .eq('integration_run_id', this.runId)
+        .eq('status', 'pending');
+
+      if (pendingError) {
+        this.log('error', 'MANUAL_PROCESSING_ERROR', `Failed to fetch pending records: ${pendingError.message}`);
+      } else if (pendingRecords && Array.isArray(pendingRecords) && pendingRecords.length > 0) {
+        this.log('info', 'MANUAL_PROCESSING_RECORDS', `Processing ${pendingRecords.length} pending records manually`);
+
+        // Process each record by calling the processing function
+        for (const record of pendingRecords) {
+          try {
+            const recordWithId = record as { id: string };
+            const { error: processError } = await this.supabase.rpc('process_temp_integrations_scraped_data_manual', {
+              p_record_id: recordWithId.id
+            });
+
+            if (processError) {
+              this.log('error', 'MANUAL_PROCESSING_RECORD_ERROR', `Failed to process record ${recordWithId.id}: ${processError.message}`);
+            }
+          } catch (error) {
+            const recordWithId = record as { id: string };
+            this.log('error', 'MANUAL_PROCESSING_RECORD_EXCEPTION', `Exception processing record ${recordWithId.id}: ${error}`);
+          }
+        }
+
+        this.log('info', 'MANUAL_PROCESSING_COMPLETE', 'Manual processing of pending records completed');
+      }
 
       // Get final statistics
       const { data: stats, error: statsError } = await this.supabase
@@ -732,85 +783,7 @@ export class IntegrationSyncService {
           throw new Error(`Unsupported platform: ${typedIntegration.platform}`);
       }
 
-      // Use efficient batch processing with integrated conflict detection
-      this.log('info', 'BATCH_CONFLICT_PROCESSING_START', 'Starting batch processing with conflict detection');
-
-        // Process records in batches of 500 with conflict detection
-        const batchSize = 500;
-        let processedCount = 0;
-        let conflictCount = 0;
-
-        // Get all integration_pending records and process them in one go
-        const { data: allRecords, error: recordsError } = await this.supabase
-          .from('temp_integrations_scraped_data')
-          .select('id')
-          .eq('integration_run_id', this.runId)
-          .eq('status', 'integration_pending');
-
-        if (recordsError) {
-          this.log('error', 'BATCH_PROCESSING_ERROR', `Failed to fetch records: ${recordsError.message}`);
-        } else if (allRecords && Array.isArray(allRecords) && allRecords.length > 0) {
-          this.log('info', 'PROCESSING_ALL_RECORDS', `Processing ${allRecords.length} records with conflict detection`);
-
-          // Process all records at once using the new function
-          const allIds = allRecords.map((r: { id: string }) => r.id);
-
-          // Run conflict detection and processing on all records
-          const { data: conflictResult, error: conflictError } = await this.supabase.rpc(
-            'detect_and_process_integration_conflicts',
-            {
-              p_user_id: this.userId,
-              p_integration_run_id: this.runId,
-              p_batch_ids: allIds
-            }
-          );
-
-          if (conflictError) {
-            this.log('error', 'CONFLICT_PROCESSING_ERROR', `Conflict detection failed: ${conflictError.message}`);
-          } else {
-            const conflictArray = Array.isArray(conflictResult) ? conflictResult : [];
-            const result = conflictArray.length > 0 && conflictArray[0] ? conflictArray[0] as { processed_count: number; conflict_count: number } : { processed_count: 0, conflict_count: 0 };
-            conflictCount = result.conflict_count;
-            processedCount = result.processed_count;
-            this.log('info', 'CONFLICT_PROCESSING_RESULT', `Processed: ${result.processed_count} records, Conflicts: ${result.conflict_count}`);
-          }
-        }
-
-        this.log('info', 'BATCH_CONFLICT_PROCESSING_COMPLETE', `Batch processing completed. Total conflicts: ${conflictCount}`);
-
-        // Now manually process the pending records since auto-trigger is disabled
-        this.log('info', 'MANUAL_PROCESSING_START', 'Starting manual processing of pending records');
-
-        const { data: pendingRecords, error: pendingError } = await this.supabase
-          .from('temp_integrations_scraped_data')
-          .select('*')
-          .eq('integration_run_id', this.runId)
-          .eq('status', 'pending');
-
-        if (pendingError) {
-          this.log('error', 'MANUAL_PROCESSING_ERROR', `Failed to fetch pending records: ${pendingError.message}`);
-        } else if (pendingRecords && Array.isArray(pendingRecords) && pendingRecords.length > 0) {
-          this.log('info', 'MANUAL_PROCESSING_RECORDS', `Processing ${pendingRecords.length} pending records manually`);
-
-          // Process each record by calling the processing function
-          for (const record of pendingRecords) {
-            try {
-              const recordWithId = record as { id: string };
-              const { error: processError } = await this.supabase.rpc('process_temp_integrations_scraped_data_manual', {
-                p_record_id: recordWithId.id
-              });
-
-              if (processError) {
-                this.log('error', 'MANUAL_PROCESSING_RECORD_ERROR', `Failed to process record ${recordWithId.id}: ${processError.message}`);
-              }
-            } catch (error) {
-              const recordWithId = record as { id: string };
-              this.log('error', 'MANUAL_PROCESSING_RECORD_EXCEPTION', `Exception processing record ${recordWithId.id}: ${error}`);
-            }
-          }
-
-          this.log('info', 'MANUAL_PROCESSING_COMPLETE', 'Manual processing of pending records completed');
-        }
+      // Conflict detection and processing already completed in Google Feed sync
 
       // Update run status to completed
       await this.updateRunStatus('completed', {
