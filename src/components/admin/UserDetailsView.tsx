@@ -20,10 +20,12 @@ import {
   Bot,
   Zap,
   Activity,
-  MessageSquare
+  MessageSquare,
+  AlertTriangle
 } from 'lucide-react';
 import { SubscriptionEditor } from './SubscriptionEditor';
 import { UserStatusEditor } from './UserStatusEditor';
+import { DeleteAllProductsButton } from './DeleteAllProductsButton';
 
 interface UserData {
   user: {
@@ -342,9 +344,46 @@ export function UserDetailsView({ userData, adminUser, userId: _userId }: UserDe
 
         {adminUser.adminRole === 'super_admin' && (
           <TabsContent value="admin">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <SubscriptionEditor user={user} onUpdate={() => window.location.reload()} />
-              <UserStatusEditor user={user} onUpdate={() => window.location.reload()} />
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <SubscriptionEditor user={user} onUpdate={() => window.location.reload()} />
+                <UserStatusEditor user={user} onUpdate={() => window.location.reload()} />
+              </div>
+
+              {/* Dangerous Actions */}
+              <Card className="border-red-200">
+                <CardHeader>
+                  <CardTitle className="flex items-center text-red-600">
+                    <AlertTriangle className="h-5 w-5 mr-2" />
+                    Dangerous Actions
+                  </CardTitle>
+                  <CardDescription>
+                    These actions are irreversible and will permanently delete user data.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <h3 className="text-sm font-medium text-red-800">Delete All Products</h3>
+                          <p className="text-sm text-red-600 mt-1">
+                            Permanently delete all products ({statistics.products}), price history, stock history,
+                            and custom fields for this user. This will NOT delete user settings, competitors,
+                            suppliers, integrations, or scrapers.
+                          </p>
+                        </div>
+                        <div className="ml-4">
+                          <DeleteAllProductsButton
+                            userId={user.id}
+                            userName={user.name || user.email}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
           </TabsContent>
         )}

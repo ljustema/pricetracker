@@ -535,7 +535,7 @@ def save_temp_competitors_scraped_data(conn, run_id: str, user_id: str, competit
             competitor_id,
             p.get('name'),
             price,
-            (p.get('currency_code', p.get('currency', 'SEK'))).upper(), # Support both currency_code and currency, ensure uppercase
+            (p.get('currency_code', p.get('currency')) or None), # Let database set user's primary currency, support both field names
             p.get('competitor_url', p.get('url')), # Support both new competitor_url and old url field names
             p.get('image_url'),
             p.get('sku'),

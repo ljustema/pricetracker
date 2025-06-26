@@ -37,7 +37,7 @@ interface CustomFieldValue {
   created_by_source?: string;
   created_at: string;
   updated_at: string;
-  user_custom_fields: CustomField;
+  product_custom_fields: CustomField;
   products: {
     id: string;
     name: string;
@@ -527,14 +527,14 @@ export default function CustomFieldsPage() {
           <Card key={value.id} className="p-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3 flex-1">
-                <div className={`p-1.5 rounded ${getFieldTypeColor(value.user_custom_fields.field_type)}`}>
-                  {getFieldTypeIcon(value.user_custom_fields.field_type)}
+                <div className={`p-1.5 rounded ${getFieldTypeColor(value.product_custom_fields.field_type)}`}>
+                  {getFieldTypeIcon(value.product_custom_fields.field_type)}
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1.5">
-                    <h3 className="text-base font-medium">{value.user_custom_fields.field_name}</h3>
+                    <h3 className="text-base font-medium">{value.product_custom_fields.field_name}</h3>
                     <Badge variant="outline" className="text-xs px-1.5 py-0.5">
-                      {value.user_custom_fields.field_type}
+                      {value.product_custom_fields.field_type}
                     </Badge>
                   </div>
                   <div className="flex items-center gap-2 text-sm text-gray-600 mb-1.5">

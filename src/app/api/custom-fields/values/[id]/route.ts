@@ -31,7 +31,7 @@ export async function GET(
         created_by_source,
         created_at,
         updated_at,
-        user_custom_fields (
+        product_custom_fields (
           id,
           field_name,
           field_type,
@@ -164,7 +164,7 @@ export async function PUT(
         created_by_source,
         created_at,
         updated_at,
-        user_custom_fields (
+        product_custom_fields (
           id,
           field_name,
           field_type,

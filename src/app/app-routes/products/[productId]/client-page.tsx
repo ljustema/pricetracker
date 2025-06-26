@@ -32,11 +32,13 @@ interface ClientProductPageProps {
   retailPriceHistory: PriceChange[];
   supplierPrices: SupplierPriceChange[];
   stockData: StockChange[];
+  stockHistory: StockChange[];
 }
 
-export default function ClientProductPage({ product, retailPrices, retailPriceHistory, supplierPrices, stockData }: ClientProductPageProps) {
+export default function ClientProductPage({ product, retailPrices, retailPriceHistory, supplierPrices, stockData, stockHistory }: ClientProductPageProps) {
   const { formatPrice } = useCurrencyFormatter();
   const [showAllPriceChanges, setShowAllPriceChanges] = useState(false);
+  const [showAllStockChanges, setShowAllStockChanges] = useState(false);
 
 
 
@@ -235,10 +237,8 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                       const sourceName = priceChange.source_name || priceChange.competitors?.name || "Unknown";
                       const sourceWebsite = priceChange.source?.website || priceChange.competitors?.website;
                       const sourceType = priceChange.source_type || "competitor";
-                      // Use the appropriate URL field based on source type
-                      const productUrl = sourceType === 'integration'
-                        ? (priceChange as unknown as Record<string, unknown>).our_url as string || priceChange.url
-                        : (priceChange as unknown as Record<string, unknown>).competitor_url as string || priceChange.url;
+                      // Use the URL field from the database function (it already handles the logic)
+                      const productUrl = (priceChange as unknown as Record<string, unknown>).url as string;
 
                       // Use the appropriate price field based on source type
                       const rawPrice = priceChange.source_type === 'integration'
@@ -390,7 +390,23 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                     >
                       <div>
                         <div className="font-medium">
-                          {sourceName}
+                          {(() => {
+                            // Use the URL field from the database function (it already handles the logic)
+                            const productUrl = (change as unknown as Record<string, unknown>).url as string;
+
+                            return productUrl ? (
+                              <a
+                                href={productUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-indigo-600 hover:text-indigo-900 hover:underline"
+                              >
+                                {sourceName}
+                              </a>
+                            ) : (
+                              <span>{sourceName}</span>
+                            );
+                          })()}
                           {sourceType === "integration" && (
                             <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
                               Integration
@@ -403,7 +419,7 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                       </div>
 
                       <div className="text-right">
-                        <div className="flex items-center space-x-1">
+                        <div className="flex items-center space-x-2">
                           {(() => {
                             const rawOldPrice = change.source_type === 'integration'
                               ? change.old_our_retail_price
@@ -418,36 +434,156 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
 
                             return (
                               <>
-                                <span className="text-gray-500">{formatPrice(oldPrice)}</span>
-                                <svg
-                                  className="h-4 w-4 text-gray-400"
-                                  fill="none"
-                                  viewBox="0 0 24 24"
-                                  stroke="currentColor"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M9 5l7 7-7 7"
-                                  />
-                                </svg>
-                                <span className="font-medium">{formatPrice(newPrice)}</span>
+                                {/* Show old price state or "Initial" for first records */}
+                                <div className="flex flex-col items-end">
+                                  <span className="text-xs text-gray-400">From:</span>
+                                  {(oldPrice === null || oldPrice === undefined) ? (
+                                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                                      Initial
+                                    </span>
+                                  ) : (
+                                    <span className="text-gray-500 font-medium">{formatPrice(oldPrice)}</span>
+                                  )}
+                                </div>
+
+                                <span className="text-gray-400">→</span>
+
+                                {/* Show new price state */}
+                                <div className="flex flex-col items-end">
+                                  <span className="text-xs text-gray-400">To:</span>
+                                  <span className="font-medium">{formatPrice(newPrice)}</span>
+                                </div>
                               </>
                             );
                           })()}
                         </div>
 
-                        <span
-                          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                            (typeof changePercent === 'number' ? changePercent : parseFloat(changePercent)) > 0
-                              ? "bg-red-100 text-red-800"
-                              : "bg-green-100 text-green-800"
-                          }`}
-                        >
-                          {(typeof changePercent === 'number' ? changePercent : parseFloat(changePercent)) > 0 ? "+" : ""}
-                          {(typeof changePercent === 'number' ? changePercent : parseFloat(changePercent)).toFixed(2)}%
-                        </span>
+                        {/* Show percentage change indicator */}
+                        {changePercent !== null && changePercent !== undefined && changePercent !== 0 && (
+                          <div className="mt-1">
+                            <span
+                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                                (typeof changePercent === 'number' ? changePercent : parseFloat(changePercent)) > 0
+                                  ? "bg-red-100 text-red-800"
+                                  : "bg-green-100 text-green-800"
+                              }`}
+                            >
+                              {(typeof changePercent === 'number' ? changePercent : parseFloat(changePercent)) > 0 ? "+" : ""}
+                              {(typeof changePercent === 'number' ? changePercent : parseFloat(changePercent)).toFixed(2)}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Recent Stock Changes */}
+          {stockHistory && stockHistory.length > 0 && (
+            <div className="mt-8 rounded-lg bg-white p-6 shadow-sm">
+              <div className="mt-6 flex items-center justify-between">
+                <h3 className="text-lg font-medium">Recent Stock Changes</h3>
+                {stockHistory.length > 5 && (
+                  <button
+                    onClick={() => setShowAllStockChanges(!showAllStockChanges)}
+                    className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                  >
+                    {showAllStockChanges ? 'Show Less' : `Show All (${stockHistory.length})`}
+                  </button>
+                )}
+              </div>
+              <div className="space-y-4 mt-2">
+                {(showAllStockChanges ? stockHistory : stockHistory.slice(0, 5)).map((change: StockChange) => {
+                  // Use source information if available, fall back to competitors
+                  const sourceName = change.source_name || change.competitors?.name || "Unknown";
+                  const sourceType = change.source_type || "competitor";
+
+
+
+                  return (
+                    <div
+                      key={change.id}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 p-4"
+                    >
+                      <div>
+                        <div className="font-medium">
+                          {(() => {
+                            // Use the URL field from the database function (it already handles the logic)
+                            const productUrl = (change as unknown as Record<string, unknown>).url as string;
+
+                            return productUrl ? (
+                              <a
+                                href={productUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-indigo-600 hover:text-indigo-900 hover:underline"
+                              >
+                                {sourceName}
+                              </a>
+                            ) : (
+                              <span>{sourceName}</span>
+                            );
+                          })()}
+                          {sourceType === "integration" && (
+                            <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
+                              Integration
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          {new Date(change.changed_at).toLocaleDateString()}
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <div className="flex items-center space-x-2">
+                          {/* Show old stock state or "Initial" for first records */}
+                          <div className="flex flex-col items-end">
+                            <span className="text-xs text-gray-400">From:</span>
+                            {(change.old_stock_quantity === null && change.old_stock_status === null) ? (
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                                Initial
+                              </span>
+                            ) : (
+                              <StockBadgeDetailed
+                                stockQuantity={change.old_stock_quantity ?? null}
+                                stockStatus={change.old_stock_status ?? null}
+                                availabilityDate={change.old_availability_date ?? null}
+                              />
+                            )}
+                          </div>
+
+                          <span className="text-gray-400">→</span>
+
+                          {/* Show new stock state */}
+                          <div className="flex flex-col items-end">
+                            <span className="text-xs text-gray-400">To:</span>
+                            <StockBadgeDetailed
+                              stockQuantity={change.new_stock_quantity ?? null}
+                              stockStatus={change.new_stock_status ?? null}
+                              availabilityDate={change.new_availability_date ?? null}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Show quantity change indicator */}
+                        {change.stock_change_quantity !== null && change.stock_change_quantity !== undefined && change.stock_change_quantity !== 0 && (
+                          <div className="mt-1">
+                            <span
+                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                                change.stock_change_quantity > 0
+                                  ? "bg-green-100 text-green-800"
+                                  : "bg-red-100 text-red-800"
+                              }`}
+                            >
+                              {change.stock_change_quantity > 0 ? "+" : ""}
+                              {change.stock_change_quantity}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -527,7 +663,25 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                         <tr key={supplierPrice.id}>
                           <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm sm:pl-6">
                             <div className="font-medium text-gray-900">
-                              {sourceName}
+                              {(() => {
+                                // Use the appropriate URL field based on source type
+                                const productUrl = isIntegrationRecord
+                                  ? (supplierPrice as unknown as Record<string, unknown>).our_url as string
+                                  : (supplierPrice as unknown as Record<string, unknown>).supplier_url as string;
+
+                                return productUrl ? (
+                                  <a
+                                    href={productUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-indigo-600 hover:text-indigo-900 hover:underline"
+                                  >
+                                    {sourceName}
+                                  </a>
+                                ) : (
+                                  <span>{sourceName}</span>
+                                );
+                              })()}
                               {isIntegrationRecord && (
                                 <span className="ml-2 inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
                                   Our Price

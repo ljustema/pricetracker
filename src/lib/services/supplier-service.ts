@@ -41,7 +41,9 @@ export interface SupplierPriceChange {
   new_our_wholesale_price?: number | string; // Can be string from DB
   price_change_percentage?: number | string; // Can be string from DB
   currency_code: string;
-  url?: string;
+  url?: string; // Legacy URL field - deprecated
+  supplier_url?: string | null; // URL to the product on the supplier's website
+  our_url?: string | null; // URL to the product on our website
   minimum_order_quantity?: number | string; // Can be string from DB
   lead_time_days?: number | string; // Can be string from DB
   changed_at: string;

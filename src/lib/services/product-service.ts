@@ -64,7 +64,17 @@ export interface StockChange {
   last_stock_change?: number | null;
   changed_at: string;
   source_website?: string;
-  url?: string; // URL to the product on the competitor's website
+  url?: string; // Legacy URL field - deprecated
+  competitor_url?: string | null; // URL to the product on the competitor's website
+  our_url?: string | null; // URL to the product on our website
+  // Additional fields for stock history
+  old_stock_quantity?: number | null;
+  old_stock_status?: string | null;
+  old_availability_date?: string | null;
+  new_stock_quantity?: number | null;
+  new_stock_status?: string | null;
+  new_availability_date?: string | null;
+  stock_change_quantity?: number | null;
   competitors?: {
     id?: string;
     name: string;
@@ -675,6 +685,107 @@ export async function getLatestCompetitorStockBatch(
     return data || [];
   } catch (error) {
     console.error("Unexpected error fetching batch stock:", error);
+    return [];
+  }
+}
+
+/**
+ * Get stock change history for a product from a specific source (competitor or integration)
+ */
+export async function getProductStockHistory(
+  userId: string,
+  productId: string,
+  sourceId?: string,
+  limit: number = 50
+): Promise<StockChange[]> {
+  const supabase = createSupabaseAdminClient();
+  const uuid = ensureUUID(userId);
+
+  // Use the database function that handles both competitor and integration stock changes
+  try {
+    const { data, error } = await supabase
+      .rpc('get_product_stock_history', {
+        p_user_id: uuid,
+        p_product_id: productId,
+        p_source_id: sourceId || null,
+        p_limit: limit
+      });
+
+    if (error) {
+      console.error("Error fetching stock history:", error);
+      // Fall back to direct query
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from("stock_changes_competitors")
+        .select(`
+          *,
+          competitors(name, website)
+        `)
+        .eq("user_id", uuid)
+        .eq("product_id", productId)
+        .order("changed_at", { ascending: false })
+        .limit(limit);
+
+      if (fallbackError) {
+        console.error("Error in fallback stock history query:", fallbackError);
+        return [];
+      }
+
+      // Transform fallback data to match expected format
+      return (fallbackData || []).map((stockChange: {
+        id: string;
+        product_id: string;
+        competitor_id?: string;
+        integration_id?: string;
+        old_stock_quantity?: number | null;
+        new_stock_quantity?: number | null;
+        old_stock_status?: string | null;
+        new_stock_status?: string | null;
+        old_availability_date?: string | null;
+        new_availability_date?: string | null;
+        stock_change_quantity?: number | null;
+        changed_at: string;
+        competitor_url?: string | null;
+        our_url?: string | null;
+        competitors?: {
+          name: string;
+          website?: string;
+        } | null;
+      }) => ({
+        id: stockChange.id,
+        product_id: stockChange.product_id,
+        competitor_id: stockChange.competitor_id,
+        integration_id: stockChange.integration_id,
+        source_id: stockChange.competitor_id || stockChange.integration_id,
+        source_name: stockChange.competitors?.name || 'Unknown',
+        source_type: stockChange.competitor_id ? 'competitor' : 'integration',
+        source_website: stockChange.competitors?.website || '',
+        current_stock_quantity: stockChange.new_stock_quantity,
+        current_stock_status: stockChange.new_stock_status,
+        current_availability_date: stockChange.new_availability_date,
+        last_stock_change: stockChange.stock_change_quantity,
+        changed_at: stockChange.changed_at,
+        url: stockChange.competitor_url || stockChange.our_url || '',
+        old_stock_quantity: stockChange.old_stock_quantity,
+        old_stock_status: stockChange.old_stock_status,
+        old_availability_date: stockChange.old_availability_date,
+        new_stock_quantity: stockChange.new_stock_quantity,
+        new_stock_status: stockChange.new_stock_status,
+        new_availability_date: stockChange.new_availability_date,
+        stock_change_quantity: stockChange.stock_change_quantity
+      } as StockChange & {
+        old_stock_quantity?: number | null;
+        old_stock_status?: string | null;
+        old_availability_date?: string | null;
+        new_stock_quantity?: number | null;
+        new_stock_status?: string | null;
+        new_availability_date?: string | null;
+        stock_change_quantity?: number | null;
+      }));
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error("Unexpected error fetching stock history:", error);
     return [];
   }
 }

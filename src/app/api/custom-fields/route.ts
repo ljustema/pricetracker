@@ -14,7 +14,7 @@ export async function GET(_request: NextRequest) {
     const supabase = createSupabaseAdminClient();
 
     const { data: customFields, error } = await supabase
-      .from('user_custom_fields')
+      .from('product_custom_fields')
       .select('*')
       .eq('user_id', session.user.id)
       .order('created_at', { ascending: true });
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
 
     // Check if field name already exists for this user
     const { data: existingField } = await supabase
-      .from('user_custom_fields')
+      .from('product_custom_fields')
       .select('id')
       .eq('user_id', session.user.id)
       .eq('field_name', field_name)
@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
 
     // Create the custom field
     const { data: customField, error } = await supabase
-      .from('user_custom_fields')
+      .from('product_custom_fields')
       .insert({
         user_id: session.user.id,
         field_name,

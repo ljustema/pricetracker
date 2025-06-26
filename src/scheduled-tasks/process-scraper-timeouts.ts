@@ -62,7 +62,7 @@ export async function processScraperTimeouts() {
           ? 'Scraper test run exceeded timeout period'
           : 'Scraper run exceeded timeout period';
 
-        const timeoutPeriod = run.is_test_run ? '1-minute' : '24-hour';
+        const timeoutPeriod = run.is_test_run ? '1-minute' : '2-hour';
         const claimedStatus = run.claimed_by_worker_at
           ? `claimed by worker at ${run.claimed_by_worker_at}`
           : 'not claimed by any worker';

@@ -135,7 +135,7 @@ export default async function ProductPage({ params }: ProductPageProps) {
   }
 
   // Import the product service and supplier service
-  const { getLatestCompetitorPrices: getLatestPrices, getProductPriceHistory, getLatestCompetitorStock } = await import('@/lib/services/product-service');
+  const { getLatestCompetitorPrices: getLatestPrices, getProductPriceHistory, getLatestCompetitorStock, getProductStockHistory } = await import('@/lib/services/product-service');
   const { getSupplierPriceChanges } = await import('@/lib/services/supplier-service');
 
   // Fetch latest retail prices for this product from all sources (competitors and integrations)
@@ -171,11 +171,21 @@ export default async function ProductPage({ params }: ProductPageProps) {
     console.error("Error fetching stock data:", error);
   }
 
+  // Fetch stock history for this product
+  let stockHistory: StockChange[] = [];
+  try {
+    stockHistory = await getProductStockHistory(userId, productId, undefined, 20);
+  } catch (error) {
+    console.error("Error fetching stock history:", error);
+    // Continue with empty stock history
+  }
+
   return <ClientProductPage
     product={product}
     retailPrices={retailPrices}
     retailPriceHistory={retailPriceHistory}
     supplierPrices={supplierPrices}
     stockData={stockData}
+    stockHistory={stockHistory}
   />;
 }

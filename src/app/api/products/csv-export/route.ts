@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
 
     // Get custom fields for this user
     const { data: customFields, error: customFieldsError } = await supabase
-      .from('user_custom_fields')
+      .from('product_custom_fields')
       .select('id, field_name')
       .eq('user_id', userId)
       .order('field_name');
@@ -148,7 +148,7 @@ export async function POST(request: NextRequest) {
           product_id,
           custom_field_id,
           value,
-          user_custom_fields (
+          product_custom_fields (
             field_name
           )
         `)
@@ -166,7 +166,7 @@ export async function POST(request: NextRequest) {
             customFieldMap.set(cfv.product_id, new Map());
           }
           // Handle the nested structure from the join
-          const fieldName = (cfv.user_custom_fields as unknown as { field_name: string } | null)?.field_name;
+          const fieldName = (cfv.product_custom_fields as unknown as { field_name: string } | null)?.field_name;
           if (fieldName) {
             customFieldMap.get(cfv.product_id).set(fieldName, cfv.value);
           }

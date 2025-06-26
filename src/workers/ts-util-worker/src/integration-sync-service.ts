@@ -508,7 +508,7 @@ export class IntegrationSyncService {
         our_wholesale_price: extractedData.our_wholesale_price,
         image_url: extractedData.image_url || null,
         our_url: extractedData.our_url || null, // Updated field name to match database schema
-        currency_code: extractedData.currency_code || 'SEK',
+        currency_code: extractedData.currency_code || null, // Let database set user's primary currency
         raw_data: item, // Store the entire XML item for reference
         status: 'pending',
         created_at: new Date().toISOString()
@@ -599,7 +599,7 @@ export class IntegrationSyncService {
       ean: gtin,
       brand: brand,
       sku: mpn,
-      currency_code: 'SEK' // Default to SEK, could be extracted from price string if needed
+      currency_code: null // Let database set user's primary currency, could be extracted from price string if needed
     };
   }
 
@@ -627,7 +627,7 @@ export class IntegrationSyncService {
       const brand = product.manufacturer_name && product.manufacturer_name !== '' ? product.manufacturer_name : null;
       const imageUrl = product.image_url && product.image_url !== '' ? product.image_url : null;
       const productUrl = product.product_url && product.product_url !== '' ? product.product_url : null;
-      const currencyCode = product.currency_code || 'SEK'; // Default to SEK if not provided
+      const currencyCode = product.currency_code || null; // Let database set user's primary currency
 
       // Determine what to store in raw_data based on configuration
       let rawDataToStore: Record<string, unknown>;

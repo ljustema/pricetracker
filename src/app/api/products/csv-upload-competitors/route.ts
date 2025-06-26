@@ -220,7 +220,7 @@ export async function POST(req: NextRequest) {
           brand_id: brandId, // Set the brand_id from the brand service
           image_url: row.image_url || null,
           url: row.url || null,
-          currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
+          currency_code: row.currency_code ? row.currency_code.toUpperCase() : null, // Let database set user's primary currency
           is_active: true,
           created_at: now,
           updated_at: now,
@@ -257,7 +257,7 @@ export async function POST(req: NextRequest) {
           brand: row.brand || null,
           competitor_url: row.competitor_url || row.url || null, // Updated field name, support both old and new
           image_url: row.image_url || null,
-          currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
+          currency_code: row.currency_code ? row.currency_code.toUpperCase() : null, // Let database set user's primary currency
           raw_data: row, // Include all CSV data as raw_data for custom fields processing
           scraped_at: now
         });

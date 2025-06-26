@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
         created_by_source,
         created_at,
         updated_at,
-        user_custom_fields!inner (
+        product_custom_fields!inner (
           id,
           field_name,
           field_type,
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
           user_id
         )
       `)
-      .eq('user_custom_fields.user_id', session.user.id);
+      .eq('product_custom_fields.user_id', session.user.id);
 
     // If field_id is provided, filter by that specific field
     if (fieldId) {

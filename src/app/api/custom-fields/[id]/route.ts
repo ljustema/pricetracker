@@ -18,7 +18,7 @@ export async function GET(
     const supabase = createSupabaseAdminClient();
 
     const { data: customField, error } = await supabase
-      .from('user_custom_fields')
+      .from('product_custom_fields')
       .select('*')
       .eq('id', id)
       .eq('user_id', session.user.id)
@@ -92,7 +92,7 @@ export async function PUT(
 
     // Check if the custom field exists and belongs to the user
     const { data: existingField } = await supabase
-      .from('user_custom_fields')
+      .from('product_custom_fields')
       .select('id, field_name')
       .eq('id', id)
       .eq('user_id', session.user.id)
@@ -108,7 +108,7 @@ export async function PUT(
     // Check if field name already exists for this user (excluding current field)
     if (field_name !== existingField.field_name) {
       const { data: duplicateField } = await supabase
-        .from('user_custom_fields')
+        .from('product_custom_fields')
         .select('id')
         .eq('user_id', session.user.id)
         .eq('field_name', field_name)
@@ -125,7 +125,7 @@ export async function PUT(
 
     // Update the custom field
     const { data: customField, error } = await supabase
-      .from('user_custom_fields')
+      .from('product_custom_fields')
       .update({
         field_name,
         field_type,
@@ -172,7 +172,7 @@ export async function DELETE(
 
     // Check if the custom field exists and belongs to the user
     const { data: existingField } = await supabase
-      .from('user_custom_fields')
+      .from('product_custom_fields')
       .select('id')
       .eq('id', id)
       .eq('user_id', session.user.id)
@@ -201,7 +201,7 @@ export async function DELETE(
 
     // Delete the custom field
     const { error } = await supabase
-      .from('user_custom_fields')
+      .from('product_custom_fields')
       .delete()
       .eq('id', id)
       .eq('user_id', session.user.id);

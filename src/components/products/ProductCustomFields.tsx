@@ -20,7 +20,7 @@ interface ProductCustomFieldValue {
   created_by_source?: string;
   created_at?: string;
   updated_at?: string;
-  user_custom_fields: CustomField;
+  product_custom_fields: CustomField;
 }
 
 interface ProductCustomFieldsProps {

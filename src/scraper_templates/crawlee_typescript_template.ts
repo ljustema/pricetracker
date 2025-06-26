@@ -179,7 +179,7 @@ interface ScriptContext {
 interface ScrapedProductData {
   name: string;
   competitor_price: number | null; // Updated field name to match temp_competitors_scraped_data table
-  currency_code: string; // Updated field name to match temp_competitors_scraped_data table
+  currency_code: string | null; // Updated field name to match temp_competitors_scraped_data table, allow null for database default
   competitor_url: string; // Renamed from url to match database schema
   sku: string | null;
   brand: string | null;
@@ -579,7 +579,7 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
       return {
         name: apiProduct.name,
         competitor_price: typeof apiProduct.price === 'number' ? apiProduct.price : parseFloat(String(apiProduct.price)),
-        currency_code: apiProduct.currency_code || 'SEK', // Default to SEK if not specified
+        currency_code: apiProduct.currency_code || null, // Let database set user's primary currency
         competitor_url: `${CONFIG.SITE.BASE_URL}/product/${apiProduct.id}`, // Updated field name to match database schema
         sku: apiProduct.sku || null,
         brand: apiProduct.brand || null,
@@ -696,7 +696,7 @@ async function extractProductData($: cheerio.CheerioAPI, url: string): Promise<S
     const productData: ScrapedProductData = {
       name: '',
       competitor_price: null,
-      currency_code: 'SEK', // Default currency
+      currency_code: null, // Let database set user's primary currency
       competitor_url: url, // Updated field name to match database schema
       sku: null,
       brand: null,
@@ -821,7 +821,7 @@ async function extractProductData($: cheerio.CheerioAPI, url: string): Promise<S
     }
 
     // Extract Currency
-    if (productData.currency_code === 'SEK' && selectors.CURRENCY) {
+    if (productData.currency_code === null && selectors.CURRENCY) {
       const currencyEl = $(selectors.CURRENCY);
       if (currencyEl.length > 0) {
         productData.currency_code = currencyEl.text().trim();

@@ -205,7 +205,7 @@ export async function POST(req: NextRequest) {
           our_wholesale_price: ourWholesalePrice,
           image_url: row.image_url || null,
           our_url: row.our_url || row.url || null, // Updated field name, support both old and new
-          currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
+          currency_code: row.currency_code ? row.currency_code.toUpperCase() : null, // Let database set user's primary currency
           raw_data: row, // Store all CSV data including custom fields
           status: 'conflict_check', // Use special status to prevent automatic processing
           created_at: now
@@ -220,7 +220,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Get all the inserted record IDs for conflict detection
-    const { data: insertedRecords, error: recordsError } = await supabase
+    const { error: recordsError } = await supabase
       .from('temp_integrations_scraped_data')
       .select('id')
       .eq('integration_run_id', integrationRun.id)

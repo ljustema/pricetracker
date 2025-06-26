@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { UploadIcon, PlusIcon, GitMergeIcon, DownloadIcon, AlertTriangle } from "lucide-react";
+import { UploadIcon, PlusIcon, GitMergeIcon, DownloadIcon } from "lucide-react";
 import CSVUploadForm from "./csv-upload-form";
 import CSVExportDialog from "./csv-export-dialog";
 import { useSearchParams } from "next/navigation";

@@ -1567,7 +1567,7 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
         // product_id will be handled by DB trigger/matching logic later if implemented
         name: p.name,
         competitor_price: p.competitor_price,
-        currency_code: (p.currency_code ?? 'SEK').toUpperCase(), // Use currency_code instead of currency
+        currency_code: p.currency_code ? p.currency_code.toUpperCase() : null, // Let database set user's primary currency
         competitor_url: p.competitor_url, // Updated field name to match database schema
         image_url: p.image_url,
         sku: p.sku,

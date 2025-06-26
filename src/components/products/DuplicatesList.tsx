@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { MergeModal } from './MergeModal';
 import { BulkMergeProgress } from './BulkMergeProgress';
-import { X, Merge, Eye } from 'lucide-react';
+import { X, Merge, Eye, ArrowLeft } from 'lucide-react';
 
 interface PriceInfo {
   price: number;
@@ -47,6 +48,7 @@ interface DuplicateGroup {
 }
 
 export function DuplicatesList() {
+  const router = useRouter();
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -424,7 +426,18 @@ export function DuplicatesList() {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold">Potential Duplicate Products</h1>
+        <div className="flex items-center gap-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => router.push('/app-routes/products')}
+            className="flex items-center gap-2"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Go Back
+          </Button>
+          <h1 className="text-2xl font-bold">Potential Duplicate Products</h1>
+        </div>
 
         {duplicateGroups.length > 0 && (
           <div className="flex items-center gap-4">

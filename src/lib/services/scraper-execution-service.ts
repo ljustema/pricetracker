@@ -198,10 +198,10 @@ export class ScraperExecutionService {
           }
         }
       } else {
-        // For regular runs, set a 24-hour timeout
-        console.log(`Run ${actualRunId}: Regular run - setting 24-hour timeout`);
+        // For regular runs, set a 2-hour timeout
+        console.log(`Run ${actualRunId}: Regular run - setting 2-hour timeout`);
         const timeoutAt = new Date();
-        timeoutAt.setHours(timeoutAt.getHours() + 24); // 24 hours from now
+        timeoutAt.setHours(timeoutAt.getHours() + 2); // 2 hours from now
 
         const { error: timeoutError } = await supabaseAdmin
           .from('scraper_run_timeouts')

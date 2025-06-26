@@ -166,7 +166,7 @@ export async function POST(req: NextRequest) {
           our_wholesale_price: extractedData.our_wholesale_price,
           image_url: extractedData.image_url || null,
           our_url: extractedData.url || null, // Updated field name to match database schema
-          currency_code: extractedData.currency_code || 'SEK',
+          currency_code: extractedData.currency_code || null, // Let database set user's primary currency
           raw_data: item, // Store the entire XML item for reference
           status: 'conflict_check', // Use special status to prevent automatic processing
           created_at: now
@@ -181,7 +181,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Get all the inserted record IDs for conflict detection
-    const { data: insertedRecords, error: recordsError } = await supabase
+    const { error: recordsError } = await supabase
       .from('temp_integrations_scraped_data')
       .select('id')
       .eq('integration_run_id', integrationRun.id)

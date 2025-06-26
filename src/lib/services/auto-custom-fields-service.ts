@@ -67,7 +67,7 @@ export class AutoCustomFieldsService {
 
     // Get existing custom fields for this user
     const { data: existingFields, error: fetchError } = await supabase
-      .from('user_custom_fields')
+      .from('product_custom_fields')
       .select('id, field_name')
       .eq('user_id', userId);
 
@@ -108,7 +108,7 @@ export class AutoCustomFieldsService {
 
         // Create new custom field
         const { data: newField, error: createError } = await supabase
-          .from('user_custom_fields')
+          .from('product_custom_fields')
           .insert({
             user_id: userId,
             field_name: fieldName,

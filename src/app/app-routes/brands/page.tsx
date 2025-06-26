@@ -510,6 +510,7 @@ export default function BrandsPage() {
           duplicateBrands={duplicates}
           onMerge={handleMergeBrands}
           onDismissDuplicates={handleDismissDuplicates}
+          onSeeProducts={(brandId) => router.push(`/app-routes/products?brand=${brandId}`)}
           isLoading={isMerging} // Use isMerging state for this section
           brandToMerge={brandToMerge}
           onBrandToMergeProcessed={() => setBrandToMerge(null)} // Clear the brandToMerge after it's processed

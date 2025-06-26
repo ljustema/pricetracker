@@ -46,7 +46,7 @@ export async function GET(
         created_by_source,
         created_at,
         updated_at,
-        user_custom_fields (
+        product_custom_fields (
           id,
           field_name,
           field_type,
@@ -118,7 +118,7 @@ export async function PUT(
     const customFieldIds = customFieldValues.map(cfv => cfv.custom_field_id);
     if (customFieldIds.length > 0) {
       const { data: userFields, error: fieldsError } = await supabase
-        .from('user_custom_fields')
+        .from('product_custom_fields')
         .select('id')
         .eq('user_id', session.user.id)
         .in('id', customFieldIds);
