@@ -23,7 +23,7 @@ interface Product {
   our_wholesale_price: number | null; // Renamed from wholesale_price
   is_active: boolean | null;
   ean: string | null;
-  url: string | null;
+  our_url: string | null; // Renamed from url
 }
 
 interface ClientProductPageProps {
@@ -155,16 +155,16 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                   </span>
                 </div>
 
-                {product.url && (
+                {product.our_url && (
                   <div className="col-span-2 mt-2">
                     <h3 className="text-sm font-medium text-gray-500">Product URL</h3>
                     <a
-                      href={product.url}
+                      href={product.our_url}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-indigo-600 hover:text-indigo-900 hover:underline text-sm"
                     >
-                      {product.url}
+                      {product.our_url}
                     </a>
                   </div>
                 )}

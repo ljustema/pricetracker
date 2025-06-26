@@ -207,7 +207,7 @@ export async function POST(req: NextRequest) {
           our_url: row.our_url || row.url || null, // Updated field name, support both old and new
           currency_code: row.currency_code ? row.currency_code.toUpperCase() : 'SEK',
           raw_data: row, // Store all CSV data including custom fields
-          status: 'pending',
+          status: 'conflict_check', // Use special status to prevent automatic processing
           created_at: now
         });
 
@@ -219,9 +219,50 @@ export async function POST(req: NextRequest) {
       recordsInserted++;
     }
 
+    // Get all the inserted record IDs for conflict detection
+    const { data: insertedRecords, error: recordsError } = await supabase
+      .from('temp_integrations_scraped_data')
+      .select('id')
+      .eq('integration_run_id', integrationRun.id)
+      .eq('status', 'conflict_check');
+
+    if (recordsError) {
+      console.error('Error fetching inserted records:', recordsError);
+      return NextResponse.json(
+        { error: 'Failed to fetch inserted records for conflict detection' },
+        { status: 500 }
+      );
+    }
+
+    // Run conflict detection before processing
+    if (insertedRecords && insertedRecords.length > 0) {
+      const { data: conflictResult, error: conflictError } = await supabase.rpc(
+        'detect_ean_conflicts_and_create_reviews',
+        {
+          p_user_id: userId,
+          p_source_table: 'temp_integrations_scraped_data',
+          p_batch_ids: insertedRecords.map(r => r.id)
+        }
+      );
+
+      if (conflictError) {
+        console.error('Error detecting conflicts:', conflictError);
+        // Don't fail the entire upload, just log the error
+      } else {
+        console.log('Conflict detection completed:', conflictResult);
+      }
+
+      // Update status to 'pending' so records can be processed
+      await supabase
+        .from('temp_integrations_scraped_data')
+        .update({ status: 'pending' })
+        .eq('integration_run_id', integrationRun.id)
+        .eq('status', 'conflict_check');
+    }
+
     // Process the staged data using the database function
     const { data: processResult, error: processError } = await supabase
-      .rpc('process_pending_integration_products', { run_id: integrationRun.id });
+      .rpc('process_all_pending_temp_integrations', { p_user_id: userId });
 
     if (processError) {
       console.error('Error processing integration products:', processError);

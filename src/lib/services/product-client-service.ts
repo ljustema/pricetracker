@@ -10,6 +10,7 @@ export interface Product {
   category?: string;
   description?: string;
   image_url?: string;
+  our_url?: string; // Renamed from url
   our_retail_price?: number; // Renamed from our_price
   our_wholesale_price?: number; // Renamed from wholesale_price
   is_active: boolean;
@@ -85,6 +86,7 @@ export interface CreateProductData {
   category?: string;
   description?: string;
   image_url?: string;
+  our_url?: string;
   our_retail_price?: number;
   our_wholesale_price?: number;
   is_active?: boolean;

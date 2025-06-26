@@ -394,6 +394,105 @@ export type Database = {
         ];
       };
 
+      // Product match reviews table for EAN conflicts
+      product_match_reviews: {
+        Row: {
+          id: string;
+          user_id: string;
+          ean: string;
+          existing_product_id: string;
+          existing_product_name: string;
+          existing_product_sku: string | null;
+          existing_product_brand: string | null;
+          existing_product_price: number | null;
+          new_product_name: string;
+          new_product_sku: string | null;
+          new_product_brand: string | null;
+          new_product_price: number | null;
+          new_product_data: Record<string, unknown>; // JSONB
+          source_table: string;
+          source_record_id: string;
+          conflict_reason: string;
+          price_difference_percent: number | null;
+          status: string;
+          reviewed_at: string | null;
+          reviewed_by: string | null;
+          created_at: string | null;
+          updated_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          ean: string;
+          existing_product_id: string;
+          existing_product_name: string;
+          existing_product_sku?: string | null;
+          existing_product_brand?: string | null;
+          existing_product_price?: number | null;
+          new_product_name: string;
+          new_product_sku?: string | null;
+          new_product_brand?: string | null;
+          new_product_price?: number | null;
+          new_product_data: Record<string, unknown>; // JSONB
+          source_table: string;
+          source_record_id: string;
+          conflict_reason: string;
+          price_difference_percent?: number | null;
+          status?: string;
+          reviewed_at?: string | null;
+          reviewed_by?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          ean?: string;
+          existing_product_id?: string;
+          existing_product_name?: string;
+          existing_product_sku?: string | null;
+          existing_product_brand?: string | null;
+          existing_product_price?: number | null;
+          new_product_name?: string;
+          new_product_sku?: string | null;
+          new_product_brand?: string | null;
+          new_product_price?: number | null;
+          new_product_data?: Record<string, unknown>; // JSONB
+          source_table?: string;
+          source_record_id?: string;
+          conflict_reason?: string;
+          price_difference_percent?: number | null;
+          status?: string;
+          reviewed_at?: string | null;
+          reviewed_by?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "product_match_reviews_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "product_match_reviews_existing_product_id_fkey";
+            columns: ["existing_product_id"];
+            isOneToOne: false;
+            referencedRelation: "products";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "product_match_reviews_reviewed_by_fkey";
+            columns: ["reviewed_by"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+
       // Updated temp_suppliers_scraped_data table
       temp_suppliers_scraped_data: {
         Row: {

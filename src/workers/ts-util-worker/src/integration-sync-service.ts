@@ -655,13 +655,19 @@ export class IntegrationSyncService {
       };
     });
 
-    // Insert the batch into the temp_integrations_scraped_data table
+    // Insert the batch into the temp_integrations_scraped_data table with integration_pending status
     console.log(`Inserting ${stagedProducts.length} products into temp_integrations_scraped_data table`);
     console.log('First product in batch:', JSON.stringify(stagedProducts[0], null, 2));
 
+    // Set status to 'integration_pending' to prevent automatic processing until integration run completes
+    const stagedProductsWithStatus = stagedProducts.map(product => ({
+      ...product,
+      status: 'integration_pending'
+    }));
+
     const { data: insertData, error: insertError } = await this.supabase
       .from('temp_integrations_scraped_data')
-      .insert(stagedProducts)
+      .insert(stagedProductsWithStatus)
       .select();
 
     console.log(`Insert response: ${insertError ? 'ERROR' : 'SUCCESS'}`);
@@ -724,6 +730,52 @@ export class IntegrationSyncService {
 
         default:
           throw new Error(`Unsupported platform: ${typedIntegration.platform}`);
+      }
+
+      // Run EAN conflict detection on the entire integration run before processing
+      this.log('info', 'CONFLICT_DETECTION_START', 'Running EAN conflict detection on entire integration run');
+
+      // Get all records from this integration run
+      const { data: integrationRecords, error: recordsError } = await this.supabase
+        .from('temp_integrations_scraped_data')
+        .select('id')
+        .eq('integration_run_id', this.runId)
+        .eq('status', 'integration_pending');
+
+      if (recordsError) {
+        this.log('error', 'CONFLICT_DETECTION_ERROR', `Failed to fetch integration records: ${recordsError.message}`);
+      } else if (integrationRecords && Array.isArray(integrationRecords) && integrationRecords.length > 0) {
+        // Run conflict detection on all records from this integration run
+        const { data: conflictResult, error: conflictError } = await this.supabase.rpc(
+          'detect_ean_conflicts_and_create_reviews',
+          {
+            p_user_id: this.userId,
+            p_source_table: 'temp_integrations_scraped_data',
+            p_batch_ids: integrationRecords.map((r: any) => r.id)
+          }
+        );
+
+        if (conflictError) {
+          this.log('error', 'CONFLICT_DETECTION_ERROR', `Failed to detect conflicts: ${conflictError.message}`);
+        } else {
+          const conflictArray = Array.isArray(conflictResult) ? conflictResult : [];
+          const reviewsCount = conflictArray.length > 0 && conflictArray[0] ? (conflictArray[0] as any).reviews_count || 0 : 0;
+          this.log('info', 'CONFLICT_DETECTION_COMPLETE', `Conflict detection completed. Found conflicts: ${reviewsCount}`);
+        }
+
+        // Update status to 'pending' for records without conflicts so they can be processed
+        // Records with conflicts will have status 'conflict_review' set by the function
+        const { error: updateError } = await this.supabase
+          .from('temp_integrations_scraped_data')
+          .update({ status: 'pending' })
+          .eq('integration_run_id', this.runId)
+          .eq('status', 'integration_pending'); // Only update records still in integration_pending status
+
+        if (updateError) {
+          this.log('error', 'STATUS_UPDATE_ERROR', `Failed to update status to pending: ${updateError.message}`);
+        } else {
+          this.log('info', 'PROCESSING_START', 'Updated non-conflicting records to pending status for processing');
+        }
       }
 
       // Update run status to completed

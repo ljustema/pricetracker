@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { UploadIcon, PlusIcon, GitMergeIcon, DownloadIcon } from "lucide-react";
+import { useState, useEffect } from "react";
+import { UploadIcon, PlusIcon, GitMergeIcon, DownloadIcon, AlertTriangle } from "lucide-react";
 import CSVUploadForm from "./csv-upload-form";
 import CSVExportDialog from "./csv-export-dialog";
 import { useSearchParams } from "next/navigation";
@@ -10,12 +10,62 @@ export default function ProductsHeader() {
   const [showCSVUploadForm, setShowCSVUploadForm] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [counts, setCounts] = useState({ eanConflicts: 0, duplicates: 0 });
+  const [isLoadingCounts, setIsLoadingCounts] = useState(true);
   const searchParams = useSearchParams();
+
+  // Function to fetch counts
+  const fetchCounts = async () => {
+    try {
+      const response = await fetch('/api/products/counts');
+      if (response.ok) {
+        const data = await response.json();
+        setCounts(data);
+      }
+    } catch (error) {
+      console.error('Error fetching counts:', error);
+    } finally {
+      setIsLoadingCounts(false);
+    }
+  };
+
+  // Fetch counts for notification badges
+  useEffect(() => {
+    fetchCounts();
+
+    // Refresh counts every 30 seconds
+    const interval = setInterval(fetchCounts, 30000);
+
+    // Listen for custom events to refresh counts immediately
+    const handleRefreshCounts = () => {
+      fetchCounts();
+    };
+
+    window.addEventListener('refreshProductCounts', handleRefreshCounts);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('refreshProductCounts', handleRefreshCounts);
+    };
+  }, []);
 
   const handleCSVUploadSuccess = () => {
     setShowCSVUploadForm(false);
     // Refresh the page to show the new products
     window.location.reload();
+  };
+
+  // Function to refresh counts (can be called from child components)
+  const _refreshCounts = async () => {
+    try {
+      const response = await fetch('/api/products/counts');
+      if (response.ok) {
+        const data = await response.json();
+        setCounts(data);
+      }
+    } catch (error) {
+      console.error('Error refreshing counts:', error);
+    }
   };
 
   // Get filter parameters from URL search params
@@ -67,11 +117,28 @@ export default function ProductsHeader() {
               Upload CSV
             </button>
             <Link
+              href="/app-routes/products/ean-conflicts"
+              className="flex items-center relative rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+            >
+              <AlertTriangle className="h-4 w-4 mr-2" />
+              Review EAN Conflicts
+              {!isLoadingCounts && counts.eanConflicts > 0 && (
+                <span className="absolute -top-2 -right-2 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/2 -translate-y-1/2 bg-red-600 rounded-full">
+                  {counts.eanConflicts}
+                </span>
+              )}
+            </Link>
+            <Link
               href="/app-routes/products/duplicates"
-              className="flex items-center rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+              className="flex items-center relative rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
             >
               <GitMergeIcon className="h-4 w-4 mr-2" />
               Merge Duplicates
+              {!isLoadingCounts && counts.duplicates > 0 && (
+                <span className="absolute -top-2 -right-2 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/2 -translate-y-1/2 bg-red-600 rounded-full">
+                  {counts.duplicates}
+                </span>
+              )}
             </Link>
             <Link
               href="/app-routes/products/new"
