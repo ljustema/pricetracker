@@ -13,6 +13,11 @@
  * other product data. Just add them to your ScrapedProductData interface and they will be
  * stored as custom fields automatically.
  *
+ * STOCK TRACKING: This template includes comprehensive stock tracking functionality.
+ * Customize the extractStockData() function to extract stock status, quantities, and
+ * availability information from your target site. Stock data is automatically processed
+ * and stored in the stock_changes_competitors table.
+ *
  * Version 1.1.0 - Optimized for performance with memory-only storage, improved
  * concurrency handling, and better error management.
  */
@@ -176,6 +181,23 @@ interface ScriptContext {
   run_id?: string;
 }
 
+interface StockData {
+  quantity: number | null;
+  status: string | null;
+  availability_date: Date | null;
+  total_stock: number | null;
+  combinations_stock: Array<{
+    article_number: string;
+    stock: number;
+    price: number;
+    campaign_price?: number;
+    stock_type: number;
+    empty_stock_text?: string;
+  }> | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  raw_data: Record<string, any> | null;
+}
+
 interface ScrapedProductData {
   name: string;
   competitor_price: number | null; // Updated field name to match temp_competitors_scraped_data table
@@ -188,6 +210,12 @@ interface ScrapedProductData {
   is_available: boolean;
   description?: string | null;
   raw_price?: string | null;
+  stock_quantity?: number | null; // Stock quantity for temp_competitors_scraped_data
+  stock_status?: string | null; // Stock status for temp_competitors_scraped_data
+  availability_date?: Date | null; // Availability date for temp_competitors_scraped_data
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  raw_stock_data?: Record<string, any> | null; // Raw stock data for debugging
+  stock_data?: StockData | null; // Structured stock data to match worker expectations
   raw_data?: Record<string, string | number | boolean | null> | null; // Custom fields data - any additional fields will be automatically processed as custom fields
 }
 
@@ -683,6 +711,101 @@ function extractCustomFieldsFromTable(
 }
 
 // ------------------------------------ //
+// ------ STOCK DATA EXTRACTION ------- //
+// ------------------------------------ //
+
+/**
+ * Extract stock data from product pages
+ * Customize the selectors and logic for your specific site
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractStockData($: any, url: string): StockData | null {
+  const stockData: StockData = {
+    quantity: null,
+    status: null,
+    availability_date: null,
+    total_stock: null,
+    combinations_stock: null,
+    raw_data: null
+  };
+
+  try {
+    // Initialize raw data object to store all stock-related information
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rawStockInfo: Record<string, any> = {};
+
+    // --- Extract stock status from your site's stock display ---
+    // Example: Look for stock information in common selectors
+    const stockSelectors = [
+      '.stock-status',
+      '.availability-status',
+      '.product-availability',
+      '.stock-info',
+      '.stockInfo > .stock', // Common pattern from Bright123/Ljusbutik
+      '.inventory-status'
+    ];
+
+    for (const selector of stockSelectors) {
+      const element = $(selector);
+      if (element.length > 0) {
+        const statusText = element.text().trim();
+        if (statusText) {
+          stockData.status = statusText;
+          rawStockInfo.status_source = selector;
+          rawStockInfo.original_status = statusText;
+          rawStockInfo.stock_element_classes = element.attr('class');
+          break;
+        }
+      }
+    }
+
+    // --- Extract stock quantity if available ---
+    // Example: Look for numeric stock quantities
+    const quantitySelectors = [
+      '.stock-quantity',
+      '.inventory-count',
+      '.items-in-stock'
+    ];
+
+    for (const selector of quantitySelectors) {
+      const element = $(selector);
+      if (element.length > 0) {
+        const quantityText = element.text().trim();
+        const quantity = parseInt(quantityText.replace(/[^0-9]/g, ''));
+        if (!isNaN(quantity)) {
+          stockData.quantity = quantity;
+          rawStockInfo.quantity_source = selector;
+          rawStockInfo.original_quantity = quantityText;
+          break;
+        }
+      }
+    }
+
+    // --- Store all raw data for debugging and future improvements ---
+    rawStockInfo.all_stock_text = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stock_elements: $('.stock, .inventory, .availability').map((_: number, el: any) => $(el).text().trim()).get(),
+      delivery_info: $('.delivery-info, .shipping-info').text().trim()
+    };
+
+    // Only set raw_data if we found any stock information
+    if (Object.keys(rawStockInfo).length > 0) {
+      stockData.raw_data = rawStockInfo;
+    }
+
+    // Log what we found for debugging
+    if (stockData.status !== null || stockData.quantity !== null) {
+      logProgress(`Extracted stock data for ${url}: status="${stockData.status}", quantity=${stockData.quantity}`);
+    }
+
+    return stockData;
+  } catch (error) {
+    logError(`Error extracting stock data from ${url}`, error);
+    return null;
+  }
+}
+
+// ------------------------------------ //
 // ---- PRODUCT DATA EXTRACTION ------- //
 // ------------------------------------ //
 
@@ -705,6 +828,11 @@ async function extractProductData($: cheerio.CheerioAPI, url: string): Promise<S
       is_available: true, // Default to true unless found otherwise
       description: null,
       raw_price: null,
+      stock_quantity: null,
+      stock_status: null,
+      availability_date: null,
+      raw_stock_data: null,
+      stock_data: null,
       raw_data: null
     };
 
@@ -913,7 +1041,27 @@ async function extractProductData($: cheerio.CheerioAPI, url: string): Promise<S
       productData.raw_data = customFields;
     }
 
-    // --- 4. Validate the extracted data ---
+    // --- 4. Extract stock data ---
+    const stockData = extractStockData($, url);
+    if (stockData) {
+      // Set the stock_data object to match worker expectations
+      productData.stock_data = {
+        quantity: stockData.quantity,
+        status: stockData.status,
+        availability_date: stockData.availability_date,
+        total_stock: stockData.total_stock,
+        combinations_stock: stockData.combinations_stock,
+        raw_data: stockData.raw_data
+      };
+
+      // Also set individual fields for backward compatibility
+      productData.stock_quantity = stockData.quantity;
+      productData.stock_status = stockData.status;
+      productData.availability_date = stockData.availability_date;
+      productData.raw_stock_data = stockData.raw_data;
+    }
+
+    // --- 5. Validate the extracted data ---
     // Required field - if no name, the extraction failed
     if (!productData.name) {
       return null;

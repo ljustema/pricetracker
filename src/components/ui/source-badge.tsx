@@ -58,9 +58,9 @@ export function SourceBadge({
   const Icon = config.icon;
 
   return (
-    <Badge 
-      variant="outline" 
-      className={`text-xs ${config.className} ${className}`}
+    <Badge
+      variant="outline"
+      className={`text-xs capitalize ${config.className} ${className}`}
       title={config.description}
     >
       {showIcon && <Icon className="h-3 w-3 mr-1" />}

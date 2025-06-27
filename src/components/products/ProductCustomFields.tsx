@@ -78,9 +78,20 @@ export default function ProductCustomFields({
     return fieldValue?.value || '';
   }, [customFieldValues]);
 
-  const getFieldSource = useCallback((fieldId: string): ProductCustomFieldValue | undefined => {
-    return customFieldValues.find(cfv => cfv.custom_field_id === fieldId);
+  // Helper function to get unique source types from all custom field values
+  const getUniqueSourceTypes = useCallback((): string[] => {
+    const sourceTypes = customFieldValues
+      .map(cfv => cfv.source_type)
+      .filter((sourceType): sourceType is string => Boolean(sourceType));
+    return [...new Set(sourceTypes)];
   }, [customFieldValues]);
+
+  // Helper function to format field names with initial capitalization and replace underscores
+  const formatFieldName = useCallback((fieldName: string): string => {
+    return fieldName
+      .replace(/_/g, ' ') // Replace underscores with spaces
+      .replace(/^./, (char) => char.toUpperCase()); // Only capitalize the very first character
+  }, []);
 
   // Separate fields with values from empty fields
   const fieldsWithValues = customFields.filter(field => {
@@ -256,22 +267,11 @@ export default function ProductCustomFields({
 
   // Helper function to render a field
   const renderField = (field: CustomField) => {
-    const fieldSource = getFieldSource(field.id);
     return (
       <div key={field.id}>
-        <Label htmlFor={`field-${field.id}`} className="flex items-center gap-2 mb-2">
-          <span className="flex items-center gap-1">
-            {field.field_name}
-            {field.is_required && <span className="text-red-500">*</span>}
-          </span>
-          {fieldSource?.source_type && (
-            <SourceBadge
-              sourceType={fieldSource.source_type}
-              confidenceScore={fieldSource.confidence_score}
-              showIcon={true}
-              showScore={false}
-            />
-          )}
+        <Label htmlFor={`field-${field.id}`} className="flex items-center gap-1 mb-2">
+          {formatFieldName(field.field_name)}
+          {field.is_required && <span className="text-red-500">*</span>}
         </Label>
         {(isEditing || alwaysEditable) ? (
           <div className="mt-2">
@@ -288,6 +288,20 @@ export default function ProductCustomFields({
 
   return (
     <Card className="p-6">
+      {/* Source badges above header */}
+      {getUniqueSourceTypes().length > 0 && (
+        <div className="flex items-center gap-2 mb-3">
+          {getUniqueSourceTypes().map(sourceType => (
+            <SourceBadge
+              key={sourceType}
+              sourceType={sourceType}
+              showIcon={true}
+              showScore={false}
+            />
+          ))}
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-medium">Custom Fields</h3>
         {!alwaysEditable && isEditable && !isEditing && (

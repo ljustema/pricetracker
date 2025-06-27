@@ -31,10 +31,9 @@ export function getStockDisplay(
 
   // Handle negative stock (oversold/pre-orders)
   if (stockQuantity !== null && stockQuantity < 0) {
-    const absStock = Math.abs(stockQuantity);
-    return { 
-      text: `Pre-order (${absStock})`, 
-      color: "orange", 
+    return {
+      text: `Pre-order (${stockQuantity})`,
+      color: "orange",
       badge: "Pre-order",
       icon: "📋"
     };
@@ -117,9 +116,8 @@ export function getStockDisplay(
       case 'back_order':
         // If we have a specific quantity for back orders, show it
         if (stockQuantity !== null && stockQuantity < 0) {
-          const absStock = Math.abs(stockQuantity);
           return {
-            text: `Pre-order (${absStock})`,
+            text: `Pre-order (${stockQuantity})`,
             color: "orange",
             badge: "Pre-order",
             icon: "📋"

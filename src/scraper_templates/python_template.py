@@ -21,6 +21,11 @@ custom fields, so feel free to extract specifications, descriptions, dimensions,
 other product data. Just add them to your product_data dictionary and they will be
 stored as custom fields automatically.
 
+STOCK TRACKING: This template includes stock tracking support. Add stock extraction
+logic to capture stock status, quantities, and availability information from your target
+site. Include stock_quantity, stock_status, availability_date, and raw_stock_data fields
+in your product_data dictionary for full stock tracking functionality.
+
 IMPORTANT: The worker system imports and runs functions separately!
 For reliability, define all constants *inside* each function that uses them,
 rather than at the global scope. This prevents "name not defined" errors.
@@ -294,6 +299,11 @@ def scrape(context: Dict[str, Any]):
                 "brand": brand,
                 "ean": ean,
                 "is_available": True,  # Add availability field
+                # Stock tracking fields - customize extraction logic for your site
+                "stock_quantity": None,  # Extract numeric stock quantity if available
+                "stock_status": None,  # Extract stock status text (e.g., "In Stock", "Out of Stock")
+                "availability_date": None,  # Extract availability date if applicable
+                "raw_stock_data": None,  # Store raw stock data for debugging
                 "raw_data": {}  # Custom fields data - any additional fields will be automatically processed as custom fields
             }
 

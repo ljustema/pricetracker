@@ -6,7 +6,7 @@
  *
  * This template is specifically designed for scraping supplier websites to collect
  * procurement and sourcing data including wholesale prices, minimum order quantities,
- * lead times, and stock levels.
+ * lead times, and comprehensive stock level tracking.
  *
  * CUSTOM FIELDS: You can scrape any additional fields you want! PriceTracker now supports
  * custom fields, so feel free to extract specifications, descriptions, dimensions, or any
@@ -29,7 +29,7 @@ import { hideBin } from 'yargs/helpers';
  * Align this with the `temp_suppliers_scraped_data` table schema.
  */
 interface ScrapedSupplierData {
-    supplier_url: string; // Renamed from url to match database schema
+    supplier_url: string; // Matches database schema
     name: string;
     supplier_price: number | null; // Supplier's selling price to us
     supplier_recommended_price?: number | null; // Supplier's recommended retail price
@@ -42,11 +42,15 @@ interface ScrapedSupplierData {
     image_url?: string | null;
     minimum_order_quantity?: number | null;
     lead_time_days?: number | null;
-    stock_level?: number | null;
-    is_available: boolean;
-    raw_price?: string | null; // Optional: Store the raw price string
-    // Add other supplier-specific fields as needed
-    // Examples: volume_discounts, shipping_cost, payment_terms, etc.
+    stock_quantity?: number | null; // FIXED: Changed from stock_level to match database
+    stock_status?: string | null; // Stock status text (e.g., "In Stock", "Low Stock", "Back Order")
+    availability_date?: Date | null; // Expected availability date for back orders
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    raw_stock_data?: Record<string, any> | null; // Raw stock data for debugging
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    raw_data?: Record<string, any> | null; // Custom fields data - matches database jsonb column
+    // Note: is_available is not in the database schema, remove if not needed
+    // Add other supplier-specific fields as needed and they'll be stored in raw_data
 }
 
 /**
@@ -183,7 +187,8 @@ async function scrape(context: ScriptContext): Promise<void> {
             // const ean = $('.ean').text().trim() || undefined;
             // const minOrderQty = parseInt($('.min-order').text().replace(/[^0-9]/g, '')) || 1;
             // const leadTime = parseInt($('.lead-time').text().replace(/[^0-9]/g, '')) || null;
-            // const stockLevel = parseInt($('.stock-level').text().replace(/[^0-9]/g, '')) || null;
+            // const stockQuantity = parseInt($('.stock-quantity').text().replace(/[^0-9]/g, '')) || null;
+            // const stockStatus = $('.stock-status').text().trim() || null;
             // const imageUrl = $('img.product-image').attr('src');
             // const isAvailable = $('.availability').text().toLowerCase().includes('available');
 
@@ -196,26 +201,28 @@ async function scrape(context: ScriptContext): Promise<void> {
             const ean = productCount % 3 === 0 ? `1234567890${productCount.toString().padStart(3, '0')}` : undefined;
             const minOrderQty = [1, 5, 10, 25][productCount % 4];
             const leadTime = [7, 14, 21, 30][productCount % 4];
-            const stockLevel = Math.floor(Math.random() * 1000) + 100;
+            const stockQuantity = Math.floor(Math.random() * 1000) + 100;
             const imageUrl = `${link}/supplier-image.jpg`;
-            const isAvailable = true;
 
             const supplierData: ScrapedSupplierData = {
                 name: name,
                 supplier_price: supplierPrice,
                 supplier_recommended_price: supplierRecommendedPrice,
                 currency_code: "SEK", // Or detect from page
-                supplier_url: link, // Updated field name to match database schema
+                supplier_url: link, // Matches database schema
                 image_url: imageUrl,
                 sku: sku,
                 brand: brand,
                 ean: ean,
                 minimum_order_quantity: minOrderQty,
                 lead_time_days: leadTime,
-                stock_level: stockLevel,
-                is_available: isAvailable,
+                stock_quantity: stockQuantity, // FIXED: Changed from stock_level to match database
+                stock_status: stockQuantity > 50 ? "In Stock" : "Low Stock", // Example stock status
+                availability_date: null, // Set if back order
+                raw_stock_data: { original_stock: stockQuantity }, // Example raw stock data
                 product_description: `High-quality ${name} from trusted supplier`,
                 category: "Electronics", // Extract from page
+                raw_data: {} // Custom fields will be stored here
             };
 
             // --- Filtering Logic (Optional) ---

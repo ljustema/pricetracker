@@ -11,6 +11,10 @@
  * custom fields, so feel free to extract specifications, descriptions, dimensions, or any
  * other product data. Just add them to your ScrapedProductData interface and they will be
  * stored as custom fields automatically.
+ *
+ * STOCK TRACKING: This template includes stock tracking interfaces. Add stock extraction
+ * logic to capture stock status, quantities, and availability information from your target
+ * site. Set both individual stock fields and the stock_data object for full compatibility.
  */
 
 // --- Dependencies ---
@@ -23,6 +27,23 @@ import { hideBin } from 'yargs/helpers';
 // import * as cheerio from 'cheerio';
 
 // --- Types/Interfaces ---
+
+interface StockData {
+    quantity: number | null;
+    status: string | null;
+    availability_date: Date | null;
+    total_stock: number | null;
+    combinations_stock: Array<{
+        article_number: string;
+        stock: number;
+        price: number;
+        campaign_price?: number;
+        stock_type: number;
+        empty_stock_text?: string;
+    }> | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    raw_data: Record<string, any> | null;
+}
 
 /**
  * Defines the structure for scraped product data.
@@ -40,6 +61,12 @@ interface ScrapedProductData {
     image_url?: string | null;
     is_available: boolean;
     raw_price?: string | null; // Optional: Store the raw price string
+    stock_quantity?: number | null; // Stock quantity for temp_competitors_scraped_data
+    stock_status?: string | null; // Stock status for temp_competitors_scraped_data
+    availability_date?: Date | null; // Availability date for temp_competitors_scraped_data
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    raw_stock_data?: Record<string, any> | null; // Raw stock data for debugging
+    stock_data?: StockData | null; // Structured stock data to match worker expectations
     // Add other fields as needed
 }
 
