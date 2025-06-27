@@ -361,7 +361,7 @@ export class ScraperExecutionService {
     const processedProducts = await Promise.all(processedProductsPromises);
 
     // --- Batch Insert Logic ---
-    const BATCH_SIZE = 500; // Define the size of each insert chunk
+    const BATCH_SIZE = 100; // Reduced from 500 to prevent database timeouts
     let insertedCount = 0;
     console.log(`processBatch: Starting insert of ${processedProducts.length} products in chunks of ${BATCH_SIZE}...`);
 

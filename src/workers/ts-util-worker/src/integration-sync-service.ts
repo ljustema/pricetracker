@@ -430,8 +430,8 @@ export class IntegrationSyncService {
         throw new Error('No product items found in XML feed');
       }
 
-      // Process items in batches
-      const batchSize = 500;
+      // Process items in batches (reduced from 500 to prevent database timeouts)
+      const batchSize = 100;
       const totalBatches = Math.ceil(items.length / batchSize);
 
       for (let i = 0; i < items.length; i += batchSize) {

@@ -1583,7 +1583,7 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
     }));
 
     // Insert products in chunks to avoid exceeding Supabase limits
-    const BATCH_SIZE = 500; // Adjust as needed
+    const BATCH_SIZE = 100; // Reduced from 500 to prevent database timeouts
     const MAX_RETRIES = 3;
     const RETRY_DELAY_MS = 1000;
     let insertedCount = 0;
