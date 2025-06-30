@@ -18,6 +18,8 @@ export interface ComplexFiltersState {
   // New price comparison filters
   price_lower_than_competitors: boolean;
   price_higher_than_competitors: boolean;
+  // New stock filters
+  in_stock_only: boolean;
   // Add itemsPerPage to manage pagination size
   itemsPerPage: number;
 }
@@ -70,6 +72,8 @@ export default function ProductsClientWrapper({
     // Initialize new price comparison filters
     price_lower_than_competitors: initialSearchParams.price_lower_than_competitors === "true",
     price_higher_than_competitors: initialSearchParams.price_higher_than_competitors === "true",
+    // Initialize stock filters
+    in_stock_only: initialSearchParams.in_stock_only === "true",
     // Initialize itemsPerPage from URL params, default to 16, validate allowed values
     itemsPerPage: (() => {
       if (typeof initialSearchParams.itemsPerPage === 'string') {
@@ -134,6 +138,12 @@ export default function ProductsClientWrapper({
       params.set("price_higher_than_competitors", "true");
     } else {
       params.delete("price_higher_than_competitors");
+    }
+    // Add stock filters to URL
+    if (complexFilters.in_stock_only) {
+      params.set("in_stock_only", "true");
+    } else {
+      params.delete("in_stock_only");
     }
     // # Reason: Add sort parameters to the URL based on the state.
     if (complexFilters.sortBy) {

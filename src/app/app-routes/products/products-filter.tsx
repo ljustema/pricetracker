@@ -96,6 +96,24 @@ export default function ProductsFilter({
     debouncedSearchHandler("");
   };
 
+  // Handler for resetting all filters
+  const handleResetFilters = () => {
+    setSearchValue("");
+    onComplexFilterChange({
+      brand: "",
+      competitor: [],
+      search: "",
+      inactive: false,
+      has_price: false,
+      price_lower_than_competitors: false,
+      price_higher_than_competitors: false,
+      in_stock_only: false,
+      sortBy: "created_at",
+      sortOrder: "desc",
+      itemsPerPage: 16
+    });
+  };
+
   // # Reason: No longer managing URL updates directly in this component.
   // The useEffect for URL updates and the refs (isFirstRender, prevUrlRef) are removed.
 
@@ -160,7 +178,7 @@ export default function ProductsFilter({
         )}
       </form>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <div>
           <label htmlFor="brand" className="block text-sm font-medium text-gray-700">
             Brand
@@ -229,6 +247,8 @@ export default function ProductsFilter({
             <option value="name-desc">Name (Z-A)</option>
             <option value="created_at-desc">Newest First</option>
             <option value="created_at-asc">Oldest First</option>
+            <option value="stock_quantity-desc">Most in Stock</option>
+            <option value="stock_quantity-asc">Least in Stock</option>
             {/* Add other sort options as needed */}
           </select>
         </div>
@@ -245,6 +265,7 @@ export default function ProductsFilter({
               currentFilters.has_price ? "our_products" :
               currentFilters.price_lower_than_competitors ? "price_lower" :
               currentFilters.price_higher_than_competitors ? "price_higher" :
+              currentFilters.in_stock_only ? "in_stock" :
               "all"
             }
             onChange={(e) => {
@@ -254,7 +275,8 @@ export default function ProductsFilter({
                 inactive: false,
                 has_price: false,
                 price_lower_than_competitors: false,
-                price_higher_than_competitors: false
+                price_higher_than_competitors: false,
+                in_stock_only: false
               };
 
               // Set the selected filter
@@ -271,6 +293,9 @@ export default function ProductsFilter({
                 case "price_higher":
                   onComplexFilterChange({ ...resetFilters, price_higher_than_competitors: true });
                   break;
+                case "in_stock":
+                  onComplexFilterChange({ ...resetFilters, in_stock_only: true });
+                  break;
                 default:
                   onComplexFilterChange(resetFilters);
                   break;
@@ -282,7 +307,19 @@ export default function ProductsFilter({
             <option value="our_products">Our Products</option>
             <option value="price_lower">Price lower than competitor</option>
             <option value="price_higher">Price higher than competitor</option>
+            <option value="in_stock">In Stock Only</option>
           </select>
+        </div>
+
+        {/* Reset Filters Button */}
+        <div className="flex items-end">
+          <button
+            type="button"
+            onClick={handleResetFilters}
+            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+          >
+            Reset Filters
+          </button>
         </div>
       </div>
     </div>

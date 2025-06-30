@@ -41,8 +41,14 @@ export function useCurrencyFormatter() {
   /**
    * Format a price according to the user's currency settings
    */
-  const formatPrice = (price: number | null | undefined): string => {
+  const formatPrice = (price: number | string | null | undefined): string => {
     if (price === null || price === undefined) return "-";
+
+    // Convert string to number if needed
+    const numericPrice = typeof price === 'string' ? parseFloat(price) : price;
+
+    // Check if the conversion resulted in a valid number
+    if (isNaN(numericPrice)) return "-";
 
     // Get currency symbol and format based on currency code
     const currencySymbols: Record<string, string> = {
@@ -64,28 +70,28 @@ export function useCurrencyFormatter() {
         formattedNumber = new Intl.NumberFormat('en-US', { 
           minimumFractionDigits: 2,
           maximumFractionDigits: 2
-        }).format(price);
+        }).format(numericPrice);
         break;
       case "#.##0,00": // 1.234,56
-        formattedNumber = new Intl.NumberFormat('de-DE', { 
+        formattedNumber = new Intl.NumberFormat('de-DE', {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2
-        }).format(price);
+        }).format(numericPrice);
         break;
       case "# ##0.00": // 1 234.56
-        formattedNumber = new Intl.NumberFormat('en-CA', { 
+        formattedNumber = new Intl.NumberFormat('en-CA', {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2
-        }).format(price);
+        }).format(numericPrice);
         break;
       case "# ##0,00": // 1 234,56
-        formattedNumber = new Intl.NumberFormat('sv-SE', { 
+        formattedNumber = new Intl.NumberFormat('sv-SE', {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2
-        }).format(price);
+        }).format(numericPrice);
         break;
       default:
-        formattedNumber = (price || 0).toFixed(2);
+        formattedNumber = numericPrice.toFixed(2);
     }
 
     // Return the formatted price with the currency symbol

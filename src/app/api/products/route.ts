@@ -4,6 +4,27 @@ import { authOptions } from "@/lib/auth/options";
 import { createClient } from '@supabase/supabase-js';
 import { ensureUUID } from '@/lib/utils/uuid';
 
+// Type definitions for the RPC function response data
+interface CompetitorPriceItem {
+  competitor_id?: string;
+  integration_id?: string;
+  competitor_price: number | null;
+  competitor_name?: string;
+}
+
+interface SourcePriceItem {
+  supplier_id?: string;
+  integration_id?: string;
+  supplier_price: number | null;
+  supplier_name?: string;
+}
+
+interface RawProductData {
+  competitor_prices?: CompetitorPriceItem[];
+  source_prices?: SourcePriceItem[];
+  [key: string]: unknown;
+}
+
 // GET handler to fetch all products for the current user
 export async function POST(request: NextRequest) { // Changed from GET to POST
   try {
@@ -66,7 +87,9 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       p_has_price: body.has_price === true ? true : null,
       // Add new price comparison filters
       p_price_lower_than_competitors: body.price_lower_than_competitors === true ? true : null,
-      p_price_higher_than_competitors: body.price_higher_than_competitors === true ? true : null
+      p_price_higher_than_competitors: body.price_higher_than_competitors === true ? true : null,
+      // Add new stock filter
+      p_in_stock_only: body.in_stock_only === true ? true : null
     };
 
     // Execute the RPC call
@@ -82,12 +105,69 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
 
     // The RPC function returns a JSON object like { "data": [], "totalCount": 0 }
     // Extract data and count from the result
-    const data = rpcResult?.data || [];
+    const rawData = rpcResult?.data || [];
     const count = rpcResult?.totalCount || 0;
+
+    // Transform the data to match the expected Product interface format
+    const transformedData = rawData.map((product: RawProductData) => {
+      // Transform competitor_prices from array to object format
+      const competitor_prices: { [key: string]: number } = {};
+      if (Array.isArray(product.competitor_prices)) {
+        product.competitor_prices.forEach((item: CompetitorPriceItem) => {
+          if (item.competitor_id && item.competitor_price !== null && item.competitor_price !== undefined) {
+            competitor_prices[item.competitor_id] = item.competitor_price;
+          }
+          if (item.integration_id && item.competitor_price !== null && item.competitor_price !== undefined) {
+            competitor_prices[item.integration_id] = item.competitor_price;
+          }
+        });
+      }
+
+      // Transform source_prices from array to object format
+      const source_prices: { [key: string]: { price: number; source_type: 'competitor' | 'integration'; source_name: string; } } = {};
+      if (Array.isArray(product.competitor_prices)) {
+        product.competitor_prices.forEach((item: CompetitorPriceItem) => {
+          if (item.competitor_price !== null && item.competitor_price !== undefined) {
+            const sourceId = item.competitor_id || item.integration_id;
+            const sourceType = item.competitor_id ? 'competitor' : 'integration';
+            if (sourceId && item.competitor_name) {
+              source_prices[sourceId] = {
+                price: item.competitor_price,
+                source_type: sourceType,
+                source_name: item.competitor_name
+              };
+            }
+          }
+        });
+      }
+
+      // Also process source_prices array if it exists
+      if (Array.isArray(product.source_prices)) {
+        product.source_prices.forEach((item: SourcePriceItem) => {
+          if (item.supplier_price !== null && item.supplier_price !== undefined) {
+            const sourceId = item.supplier_id || item.integration_id;
+            const sourceType = item.supplier_id ? 'competitor' : 'integration'; // Suppliers are treated as competitors in the UI
+            if (sourceId && item.supplier_name) {
+              source_prices[sourceId] = {
+                price: item.supplier_price,
+                source_type: sourceType,
+                source_name: item.supplier_name
+              };
+            }
+          }
+        });
+      }
+
+      return {
+        ...product,
+        competitor_prices,
+        source_prices
+      };
+    });
 
     // Return paginated data and total count
     return NextResponse.json({
-      data: data || [], // Ensure data is always an array
+      data: transformedData || [], // Ensure data is always an array
       totalCount: count || 0, // Total count matching filters
     });
   } catch (error) {

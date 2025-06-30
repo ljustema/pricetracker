@@ -67,6 +67,7 @@ export default function ProductsContent({
   const hasPriceFilter = complexFilters.has_price;
   const priceLowerThanCompetitors = complexFilters.price_lower_than_competitors;
   const priceHigherThanCompetitors = complexFilters.price_higher_than_competitors;
+  const inStockOnly = complexFilters.in_stock_only;
 
   useEffect(() => {
     // Function to fetch products based on current searchParams
@@ -103,6 +104,7 @@ export default function ProductsContent({
           has_price: has_price, // Send boolean based on filter state
           price_lower_than_competitors: priceLowerThanCompetitors, // Add new price comparison filter
           price_higher_than_competitors: priceHigherThanCompetitors, // Add new price comparison filter
+          in_stock_only: inStockOnly, // Add new stock filter
         };
 
         // Use the cookieHeader passed down from the parent Server Component
@@ -221,6 +223,7 @@ export default function ProductsContent({
       hasPriceFilter,
       priceLowerThanCompetitors, // Add new price comparison filter
       priceHigherThanCompetitors, // Add new price comparison filter
+      inStockOnly, // Add new stock filter
       itemsPerPage, // Add itemsPerPage to trigger refetch when pagination size changes
       cookieHeader // Keep cookieHeader dependency
     ]);
@@ -299,7 +302,12 @@ export default function ProductsContent({
           ) : (
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
               {products.map((product: Product) => (
-                <ProductCard key={product.id} product={product} competitors={competitors as Competitor[]} />
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  competitors={competitors as Competitor[]}
+                  stockData={stockData}
+                />
               ))}
             </div>
           )}

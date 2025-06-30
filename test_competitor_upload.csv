@@ -1,3 +1,0 @@
-name,competitor_price,currency_code,sku,brand,ean,image_url,url
-Competitor Product 1,299.99,SEK,OWN-002,OwnBrand,1234567890144,https://example.com/image1.jpg,https://example.com/product1
-Shared Test Product,395.00,SEK,SHARED-001,TestBrand,1234567890123,https://example.com/shared.jpg,https://example.com/shared

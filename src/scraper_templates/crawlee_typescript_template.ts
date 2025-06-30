@@ -793,10 +793,7 @@ function extractStockData($: any, url: string): StockData | null {
       stockData.raw_data = rawStockInfo;
     }
 
-    // Log what we found for debugging
-    if (stockData.status !== null || stockData.quantity !== null) {
-      logProgress(`Extracted stock data for ${url}: status="${stockData.status}", quantity=${stockData.quantity}`);
-    }
+    // Stock data extracted successfully
 
     return stockData;
   } catch (error) {

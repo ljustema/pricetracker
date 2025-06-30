@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-06-27 11:27:38
+-- Generated: 2025-06-30 09:13:36
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -1600,12 +1600,12 @@ BEGIN
     LIMIT p_limit;
 
 --
--- Name: get_products_filtered(uuid, integer, integer, text, text, text, text, text, boolean, uuid[], boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
+-- Name: get_products_filtered(uuid, integer, integer, text, text, text, text, text, boolean, uuid[], boolean, boolean, boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean) RETURNS json
+CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 16, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean, p_in_stock_only boolean DEFAULT NULL::boolean) RETURNS json
     LANGUAGE plpgsql
-    AS $$
+    AS $_$
 DECLARE
     _offset integer;
 
@@ -2245,7 +2245,7 @@ DECLARE
 -- Name: process_temp_competitors_batch_with_conflict_detection(uuid, integer); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.process_temp_competitors_batch_with_conflict_detection(p_competitor_id uuid DEFAULT NULL::uuid, batch_size integer DEFAULT 100) RETURNS TABLE(processed integer, errors integer, new_products integer, price_changes integer, conflicts integer, reviews integer)
+CREATE FUNCTION public.process_temp_competitors_batch_with_conflict_detection(p_competitor_id uuid, batch_size integer DEFAULT 500) RETURNS TABLE(processed integer, errors integer, new_products integer, price_changes integer, conflicts integer, reviews integer)
     LANGUAGE plpgsql
     AS $$
 DECLARE
@@ -2383,11 +2383,9 @@ BEGIN
 
 CREATE FUNCTION public.standardize_stock_status(raw_status text) RETURNS text
     LANGUAGE plpgsql
-    SET search_path TO 'public'
-    AS $$
-BEGIN
-    IF raw_status IS NULL OR raw_status = '' THEN
-        RETURN 'unknown';
+    AS $_$
+DECLARE
+    numeric_value INTEGER;
 
 --
 -- Name: FUNCTION standardize_stock_status(raw_status text); Type: COMMENT; Schema: public; Owner: -

@@ -3,19 +3,21 @@
 import Link from "next/link";
 import Image from "next/image";
 import DeleteButton from "@/components/ui/delete-button";
-import type { Product } from "@/lib/services/product-service"; // Import the shared type
+import type { Product, StockChange } from "@/lib/services/product-service"; // Import the shared type
 import type { Competitor } from "@/lib/services/competitor-service"; // Import Competitor type
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter"; // Import our new hook
+import { StockBadgeCompact } from "@/components/ui/stock-badge";
 
 // Removed local CompetitorPrice and Product interfaces
 
 interface ProductCardProps {
   product: Product;
   competitors: Competitor[]; // Add competitors prop
+  stockData?: Map<string, StockChange[]>; // Add stock data prop
   onDelete?: () => void;
 }
 
-export default function ProductCard({ product, competitors, onDelete }: ProductCardProps) {
+export default function ProductCard({ product, competitors, stockData, onDelete }: ProductCardProps) {
   // No need for router or isDeleting state as they're not used
   const { formatPrice } = useCurrencyFormatter();
 
@@ -95,7 +97,6 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                 // Try direct image URL as fallback
                 const imgElement = e.currentTarget;
                 if (imgElement.src.includes('/api/proxy-image')) {
-                  console.log('Attempting direct image load as fallback');
                   imgElement.src = productWithPrices.image_url || '';
                 } else {
                   console.error('Direct image load also failed, using placeholder');
@@ -165,6 +166,15 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                     if (sourceData.source_type === 'integration') {
                       return false;
                     }
+                    // Only show competitors that have valid prices
+                    if (!sourceData || sourceData.price === null || sourceData.price === undefined || sourceData.price === 0) {
+                      return false;
+                    }
+                    // Also check if price is a valid number
+                    const numericPrice = typeof sourceData.price === 'string' ? parseFloat(sourceData.price) : sourceData.price;
+                    if (isNaN(numericPrice) || numericPrice <= 0) {
+                      return false;
+                    }
                     return true;
                   })
                   .sort((a, b) => a[1].price - b[1].price) // Sort by price (lowest to highest)
@@ -216,6 +226,15 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                     if (sourceData.source_type === 'integration') {
                       return false;
                     }
+                    // Only show competitors that have valid prices
+                    if (!sourceData || sourceData.price === null || sourceData.price === undefined || sourceData.price === 0) {
+                      return false;
+                    }
+                    // Also check if price is a valid number
+                    const numericPrice = typeof sourceData.price === 'string' ? parseFloat(sourceData.price) : sourceData.price;
+                    if (isNaN(numericPrice) || numericPrice <= 0) {
+                      return false;
+                    }
                     return true;
                   });
 
@@ -241,7 +260,12 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                         }
                       }
 
-                      if (price === undefined) return null;
+                      // Only include competitors with valid prices
+                      if (price === undefined || price === null || price === 0) return null;
+
+                      // Also check if price is a valid number
+                      const numericPrice = typeof price === 'string' ? parseFloat(price) : price;
+                      if (isNaN(numericPrice) || numericPrice <= 0) return null;
 
                       return { competitor, price };
                     })
@@ -252,18 +276,42 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                   return competitorsWithPrices.slice(0, 3).map((item) => {
                     if (!item) return null;
                     const { competitor, price } = item;
+
+                    // Get stock data for this competitor
+                    const productStockData = stockData?.get(product.id) || [];
+                    const competitorStock = productStockData.find(
+                      (stock) => stock.competitor_id === competitor.id || stock.integration_id === competitor.id
+                    );
+
+
+
                     return (
-                    <li key={competitor.id} className="text-xs flex justify-between">
-                      <span className="font-medium">{competitor.name}:</span>
-                      <span className={`${
-                        productWithPrices.our_retail_price && price < productWithPrices.our_retail_price
-                          ? "text-red-600 font-medium"
-                          : productWithPrices.our_retail_price && price > productWithPrices.our_retail_price
-                            ? "text-green-600 font-medium"
-                            : "text-gray-600"
-                      }`}>
-                        {formatPrice(price)}
-                      </span>
+                    <li key={competitor.id} className="text-xs">
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-1">
+                          <span className="font-medium">{competitor.name}:</span>
+                          {competitorStock && (
+                            <StockBadgeCompact
+                              stockQuantity={competitorStock.current_stock_quantity ?? null}
+                              stockStatus={competitorStock.current_stock_status ?? null}
+                              availabilityDate={competitorStock.current_availability_date ?? null}
+                              className="text-xs"
+                            />
+                          )}
+                          {competitorStock?.current_stock_quantity !== null && competitorStock?.current_stock_quantity !== undefined && (
+                            <span className="text-xs text-gray-500">({competitorStock.current_stock_quantity})</span>
+                          )}
+                        </div>
+                        <span className={`${
+                          productWithPrices.our_retail_price && price < productWithPrices.our_retail_price
+                            ? "text-red-600 font-medium"
+                            : productWithPrices.our_retail_price && price > productWithPrices.our_retail_price
+                              ? "text-green-600 font-medium"
+                              : "text-gray-600"
+                        }`}>
+                          {formatPrice(price)}
+                        </span>
+                      </div>
                     </li>
                     );
                   });
@@ -276,6 +324,15 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                   .filter(([_sourceId, sourceData]) => {
                     // Filter out all integration prices from product list cards
                     if (sourceData.source_type === 'integration') {
+                      return false;
+                    }
+                    // Only show competitors that have valid prices
+                    if (!sourceData || sourceData.price === null || sourceData.price === undefined || sourceData.price === 0) {
+                      return false;
+                    }
+                    // Also check if price is a valid number
+                    const numericPrice = typeof sourceData.price === 'string' ? parseFloat(sourceData.price) : sourceData.price;
+                    if (isNaN(numericPrice) || numericPrice <= 0) {
                       return false;
                     }
                     return true;
@@ -295,6 +352,15 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                   if (sourceData.source_type === 'integration') {
                     return false;
                   }
+                  // Only show competitors that have valid prices
+                  if (!sourceData || sourceData.price === null || sourceData.price === undefined || sourceData.price === 0) {
+                    return false;
+                  }
+                  // Also check if price is a valid number
+                  const numericPrice = typeof sourceData.price === 'string' ? parseFloat(sourceData.price) : sourceData.price;
+                  if (isNaN(numericPrice) || numericPrice <= 0) {
+                    return false;
+                  }
                   return true;
                 });
 
@@ -311,6 +377,15 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                   if (sourceData.source_type === 'integration') {
                     return false;
                   }
+                  // Only show competitors that have valid prices
+                  if (!sourceData || sourceData.price === null || sourceData.price === undefined || sourceData.price === 0) {
+                    return false;
+                  }
+                  // Also check if price is a valid number
+                  const numericPrice = typeof sourceData.price === 'string' ? parseFloat(sourceData.price) : sourceData.price;
+                  if (isNaN(numericPrice) || numericPrice <= 0) {
+                    return false;
+                  }
                   return true;
                 });
 
@@ -321,6 +396,60 @@ export default function ProductCard({ product, competitors, onDelete }: ProductC
                 </p>
               );
             })()}
+          </div>
+        )}
+
+        {/* Stock Information Section - Show stock data only for competitors with prices */}
+        {stockData && stockData.has(product.id) && (
+          <div className="mt-2 border-t border-gray-100 pt-2">
+            <p className="text-xs font-medium text-gray-500">Stock Status:</p>
+            <ul className="mt-1 space-y-1">
+              {stockData.get(product.id)?.map((stockChange) => {
+                // Find the competitor name
+                const competitor = competitors.find(c =>
+                  c.id === stockChange.competitor_id || c.id === stockChange.integration_id
+                );
+
+                if (!competitor) return null;
+
+                // Only show stock for competitors that have prices
+                const competitorIdStr = String(competitor.id);
+                let hasPrice = productWithPrices.competitor_prices[competitorIdStr] !== undefined;
+
+                // If we don't have a price, try searching through all keys
+                if (!hasPrice) {
+                  const competitorPricesKeys = Object.keys(productWithPrices.competitor_prices || {});
+                  for (const key of competitorPricesKeys) {
+                    if (key.includes(competitor.id) || competitor.id.includes(key)) {
+                      hasPrice = true;
+                      break;
+                    }
+                  }
+                }
+
+                // Only show if competitor has a price
+                if (!hasPrice) return null;
+
+                return (
+                  <li key={stockChange.id} className="text-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="font-medium">{competitor.name}:</span>
+                      <div className="flex items-center gap-1">
+                        {stockChange.current_stock_quantity !== null && stockChange.current_stock_quantity !== undefined && (
+                          <span className="text-xs text-gray-500">({stockChange.current_stock_quantity})</span>
+                        )}
+                        <StockBadgeCompact
+                          stockQuantity={stockChange.current_stock_quantity ?? null}
+                          stockStatus={stockChange.current_stock_status ?? null}
+                          availabilityDate={stockChange.current_availability_date ?? null}
+                          className="text-xs"
+                        />
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         )}
       </div>

@@ -17,8 +17,6 @@ export function getStockDisplay(
   stockStatus: string | null,
   availabilityDate?: string | null
 ): StockDisplayInfo {
-  // Debug logging
-  console.log('getStockDisplay called with:', { stockQuantity, stockStatus, availabilityDate });
   // Handle null/undefined stock
   if (stockQuantity === null && !stockStatus) {
     return { 
