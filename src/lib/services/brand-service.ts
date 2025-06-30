@@ -115,25 +115,31 @@ export class BrandService {
    * Identifies potential duplicate brands based on normalized names and similarity.
    * Returns a list of brands that share a normalized name or are very similar to at least one other active brand.
    * Excludes brand pairs that have been previously dismissed as duplicates.
+   * Includes product counts for each brand.
    */
-  async findPotentialDuplicateBrands(userId: string): Promise<Brand[]> {
+  async findPotentialDuplicateBrands(userId: string): Promise<Array<Brand & { product_count?: number; our_products_count?: number; competitor_count?: number; }>> {
     const supabase = createSupabaseAdminClient();
 
-    // 1. Fetch all active brands for the user
-    const { data: activeBrands, error: fetchError } = await supabase
-      .from('brands')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('is_active', true); // Only consider active brands for duplication checks
+    // 1. Fetch all active brands with analytics data (including product counts)
+    const { data: activeBrands, error: fetchError } = await supabase.rpc(
+      'get_brand_analytics',
+      {
+        p_user_id: userId,
+        p_brand_id: null
+      }
+    );
 
     if (fetchError) {
-      console.error('Error fetching active brands:', fetchError);
+      console.error('Error fetching active brands with analytics:', fetchError);
       throw fetchError;
     }
 
     if (!activeBrands || activeBrands.length < 2) {
       return []; // Need at least two brands to have duplicates
     }
+
+    // Filter to only active brands for duplication checks
+    const activeOnlyBrands = activeBrands.filter((brand: BrandWithAnalytics) => brand.is_active);
 
     // 1.5. Fetch dismissed duplicate pairs to exclude them
     const { data: dismissedPairs, error: dismissedError } = await supabase
@@ -168,7 +174,7 @@ export class BrandService {
     const processedBrands = new Set<string>();
 
     // First pass: exact normalized name matches
-    for (const brand of activeBrands) {
+    for (const brand of activeOnlyBrands) {
       const normalized = this.normalizeBrandName(brand.name);
       if (normalized) { // Ignore empty names after normalization
         const group = brandsByNormalizedName.get(normalized) || [];
@@ -191,8 +197,8 @@ export class BrandService {
     }
 
     // Second pass: find similar brands that weren't caught in the first pass
-    for (let i = 0; i < activeBrands.length; i++) {
-      const brand1 = activeBrands[i];
+    for (let i = 0; i < activeOnlyBrands.length; i++) {
+      const brand1 = activeOnlyBrands[i];
 
       // Skip if this brand is already in a duplicate group
       if (processedBrands.has(brand1.id)) continue;
@@ -202,8 +208,8 @@ export class BrandService {
 
       const similarBrands: Brand[] = [brand1];
 
-      for (let j = i + 1; j < activeBrands.length; j++) {
-        const brand2 = activeBrands[j];
+      for (let j = i + 1; j < activeOnlyBrands.length; j++) {
+        const brand2 = activeOnlyBrands[j];
 
         // Skip if this brand is already in a duplicate group
         if (processedBrands.has(brand2.id)) continue;

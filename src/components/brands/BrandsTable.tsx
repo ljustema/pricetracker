@@ -223,12 +223,14 @@ const BrandsTable: React.FC<BrandsTableProps> = ({
                   Edit
                 </button>
                 {onSeeProducts && (
-                  <button
-                    onClick={() => onSeeProducts(brand.id)}
+                  <a
+                    href={`/app-routes/products?brand=${brand.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="text-green-600 hover:text-green-900"
                   >
                     See Products
-                  </button>
+                  </a>
                 )}
                 <button onClick={() => onDelete(brand.id)} className="text-red-600 hover:text-red-900">
                   Delete

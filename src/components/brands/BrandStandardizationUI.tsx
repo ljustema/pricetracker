@@ -5,7 +5,11 @@ import { useRouter } from 'next/navigation';
 import { Database } from '@/lib/supabase/database.types';
 // TODO: Import UI components (e.g., Card, Button, Checkbox, Select) from your library
 
-type Brand = Database['public']['Tables']['brands']['Row'];
+type Brand = Database['public']['Tables']['brands']['Row'] & {
+  product_count?: number;
+  our_products_count?: number;
+  competitor_count?: number;
+};
 
 interface BrandStandardizationUIProps {
   duplicateBrands: Brand[]; // Array containing all brands identified as potential duplicates
@@ -304,16 +308,22 @@ const BrandStandardizationUI: React.FC<BrandStandardizationUIProps> = ({
                 />
                 <label htmlFor={`select-${groupKey}-${brand.id}`} className="flex-1">
                   {brand.name} <span className="text-xs text-gray-500">(ID: {brand.id})</span>
+                  {brand.product_count !== undefined && (
+                    <span className="ml-2 text-xs text-blue-600 font-medium">
+                      ({brand.product_count} products)
+                    </span>
+                  )}
                   {!brand.is_active && <span className="ml-2 text-xs text-red-500">(Inactive)</span>}
                 </label>
                 {onSeeProducts && (
-                  <button
-                    onClick={() => onSeeProducts(brand.id)}
-                    disabled={isLoading}
-                    className="px-2 py-1 text-xs font-medium text-green-700 bg-green-100 border border-transparent rounded hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50"
+                  <a
+                    href={`/app-routes/products?brand=${brand.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2 py-1 text-xs font-medium text-green-700 bg-green-100 border border-transparent rounded hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 inline-block"
                   >
                     See Products
-                  </button>
+                  </a>
                 )}
                  <label htmlFor={`primary-${groupKey}-${brand.id}`} className="text-sm text-gray-600">
                   Set as Primary
