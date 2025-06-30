@@ -90,17 +90,39 @@ export default function ProductsClientWrapper({
   // # Reason: Ref to track the first render to avoid overriding initial deep links.
   const isFirstRender = useRef(true);
 
+  // # Reason: Ref to track previous filter values to detect changes that should reset pagination
+  const prevFiltersRef = useRef<ComplexFiltersState>(complexFilters);
+
   // # Reason: Effect to synchronize complexFilters state with the URL.
   // This effect runs whenever complexFilters or searchParams change.
   useEffect(() => {
     // Skip URL update on first render to avoid overriding initial deep links.
     if (isFirstRender.current) {
       isFirstRender.current = false;
+      prevFiltersRef.current = complexFilters;
       return;
     }
 
     // # Reason: Build the new URLSearchParams based on the current URL and complexFilters state.
     const params = new URLSearchParams(searchParams.toString());
+
+    // # Reason: Check if any filter that should reset pagination has changed
+    const shouldResetPage = (
+      prevFiltersRef.current.search !== complexFilters.search ||
+      prevFiltersRef.current.brand !== complexFilters.brand ||
+      JSON.stringify(prevFiltersRef.current.competitor) !== JSON.stringify(complexFilters.competitor) ||
+      prevFiltersRef.current.inactive !== complexFilters.inactive ||
+      prevFiltersRef.current.has_price !== complexFilters.has_price ||
+      prevFiltersRef.current.price_lower_than_competitors !== complexFilters.price_lower_than_competitors ||
+      prevFiltersRef.current.price_higher_than_competitors !== complexFilters.price_higher_than_competitors ||
+      prevFiltersRef.current.in_stock_only !== complexFilters.in_stock_only ||
+      prevFiltersRef.current.itemsPerPage !== complexFilters.itemsPerPage
+    );
+
+    // # Reason: Reset page to 1 when filters change (except for sort and itemsPerPage changes)
+    if (shouldResetPage) {
+      params.delete("page"); // Deleting page param defaults to page 1
+    }
 
     // # Reason: Update/delete complex filter parameters in the URL based on the state.
     if (complexFilters.brand) {
@@ -163,6 +185,8 @@ export default function ProductsClientWrapper({
         params.delete("itemsPerPage");
     }
 
+    // # Reason: Update the previous filters reference for next comparison
+    prevFiltersRef.current = complexFilters;
 
     // # Reason: Construct the new URL and push it using the router.
     const queryString = params.toString();

@@ -24,7 +24,7 @@ export default function PaginationSizeSelector({ currentSize, onSizeChange }: Pa
     const params = new URLSearchParams(searchParams.toString());
 
     // Reset to page 1 when changing page size
-    params.set("page", "1");
+    params.delete("page"); // Deleting page param defaults to page 1
 
     // Set the new page size (only if different from default)
     if (newSize !== 16) {

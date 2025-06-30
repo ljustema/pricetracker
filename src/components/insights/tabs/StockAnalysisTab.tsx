@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Download, Filter, Calendar, Building2 } from 'lucide-react';
+import { Download, Filter, Calendar, Building2, ChevronUp, ChevronDown } from 'lucide-react';
 import { BarChart, PieChart } from '@/components/charts';
+import Link from 'next/link';
 
 interface StockAnalysisTabProps {
   competitors: Array<{
@@ -51,6 +52,7 @@ interface AnalysisFilters {
 
 // Type definitions for analysis data
 interface SalesAnalysisItem {
+  product_id: string;
   product_name: string;
   brand: string;
   sku: string;
@@ -130,6 +132,75 @@ export default function StockAnalysisTab({
 
   // Available brands for filtering
   const [availableBrands, setAvailableBrands] = useState<string[]>([]);
+
+  // Sorting state for sales table
+  const [sortConfig, setSortConfig] = useState<{
+    key: keyof SalesAnalysisItem | null;
+    direction: 'asc' | 'desc';
+  }>({ key: null, direction: 'asc' });
+
+  // Sorting function
+  const handleSort = (key: keyof SalesAnalysisItem) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  // Get sorted sales data
+  const getSortedSalesData = () => {
+    if (!salesData?.data || !sortConfig.key) {
+      return salesData?.data || [];
+    }
+
+    return [...salesData.data].sort((a, b) => {
+      const aValue = a[sortConfig.key!];
+      const bValue = b[sortConfig.key!];
+
+      if (aValue === null || aValue === undefined) return 1;
+      if (bValue === null || bValue === undefined) return -1;
+
+      if (typeof aValue === 'string' && typeof bValue === 'string') {
+        return sortConfig.direction === 'asc'
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue);
+      }
+
+      if (typeof aValue === 'number' && typeof bValue === 'number') {
+        return sortConfig.direction === 'asc'
+          ? aValue - bValue
+          : bValue - aValue;
+      }
+
+      return 0;
+    });
+  };
+
+  // Sortable header component
+  const SortableHeader = ({
+    sortKey,
+    children,
+    className = "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+  }: {
+    sortKey: keyof SalesAnalysisItem;
+    children: React.ReactNode;
+    className?: string;
+  }) => (
+    <th
+      className={`${className} cursor-pointer hover:bg-gray-100 select-none`}
+      onClick={() => handleSort(sortKey)}
+    >
+      <div className="flex items-center space-x-1">
+        <span>{children}</span>
+        {sortConfig.key === sortKey && (
+          sortConfig.direction === 'asc' ?
+            <ChevronUp className="h-3 w-3" /> :
+            <ChevronDown className="h-3 w-3" />
+        )}
+      </div>
+    </th>
+  );
 
   // Data fetching functions
   const fetchSalesAnalysis = useCallback(async () => {
@@ -572,6 +643,7 @@ export default function StockAnalysisTab({
                   {salesData?.data && (
                     <BarChart
                       data={salesData.data.slice(0, 10).map(item => ({
+                        product_id: item.product_id,
                         product_name: item.product_name,
                         brand: item.brand,
                         sku: item.sku,
@@ -628,36 +700,43 @@ export default function StockAnalysisTab({
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
                   </div>
                 ) : salesData?.data ? (
-                  <div className="overflow-x-auto">
+                  <div className="overflow-x-auto max-h-96 overflow-y-auto">
                     <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
+                      <thead className="bg-gray-50 sticky top-0 z-10">
                         <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <SortableHeader sortKey="product_name">
                             Product
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          </SortableHeader>
+                          <SortableHeader sortKey="brand">
                             Brand
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          </SortableHeader>
+                          <SortableHeader sortKey="total_sold">
                             Total Sold
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          </SortableHeader>
+                          <SortableHeader sortKey="total_revenue">
                             Total Revenue
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          </SortableHeader>
+                          <SortableHeader sortKey="revenue_percentage">
                             Revenue %
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          </SortableHeader>
+                          <SortableHeader sortKey="avg_daily_sales">
                             Avg Daily Sales
-                          </th>
+                          </SortableHeader>
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {salesData.data.slice(0, 20).map((item: SalesAnalysisItem, index: number) => (
+                        {getSortedSalesData().slice(0, 100).map((item: SalesAnalysisItem, index: number) => (
                           <tr key={index}>
                             <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm font-medium text-gray-900">
-                                {item.product_name}
+                              <div className="text-sm font-medium">
+                                <Link
+                                  href={`/app-routes/products/${item.product_id}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-indigo-600 hover:text-indigo-900 hover:underline"
+                                >
+                                  {item.product_name}
+                                </Link>
                               </div>
                               {item.sku && (
                                 <div className="text-sm text-gray-500">

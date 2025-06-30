@@ -105,8 +105,9 @@ export default async function DashboardPage() {
     aliases?: string[];
   };
 
-  // Get top price drops
-  const { data: topPriceDrops, error: topPriceDropsError } = await supabase
+  // Get top price drops from the last 7 days
+  // Fetch more results to allow for deduplication by product
+  const { data: allPriceDrops, error: topPriceDropsError } = await supabase
     .from("price_changes_competitors")
     .select(`
       id,
@@ -133,8 +134,25 @@ export default async function DashboardPage() {
     `)
     .eq("user_id", userId)
     .lt("price_change_percentage", 0) // Only price drops
+    .gte("changed_at", sevenDaysAgo.toISOString()) // Only last 7 days
     .order("price_change_percentage", { ascending: true }) // Biggest drops first
-    .limit(5) as { data: PriceChange[] | null; error: Error | null };
+    .limit(50) as { data: PriceChange[] | null; error: Error | null };
+
+  // Deduplicate by product_id to show only the biggest drop per product
+  const topPriceDrops = allPriceDrops ?
+    Array.from(
+      allPriceDrops
+        .reduce((map, priceChange) => {
+          const existing = map.get(priceChange.product_id);
+          // Keep the one with the bigger drop (more negative percentage)
+          if (!existing || priceChange.price_change_percentage < existing.price_change_percentage) {
+            map.set(priceChange.product_id, priceChange);
+          }
+          return map;
+        }, new Map<string, PriceChange>())
+        .values()
+    ).slice(0, 5) // Take top 5 after deduplication
+    : null;
 
   // Get brands with analytics data using the RPC function
   // Add timeout handling for the brands query that was causing issues
@@ -350,7 +368,7 @@ export default async function DashboardPage() {
 
       {/* Top price drops */}
       <div className="mb-8">
-        <h2 className="mb-4 text-xl font-semibold">Top Price Drops</h2>
+        <h2 className="mb-4 text-xl font-semibold">Top Price Drops (Last 7 Days)</h2>
         <div className="rounded-lg bg-white p-6 shadow-sm">
           {topPriceDrops && topPriceDrops.length > 0 ? (
             <div className="divide-y">

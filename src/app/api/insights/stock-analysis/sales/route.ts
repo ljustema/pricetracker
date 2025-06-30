@@ -6,6 +6,7 @@ import { ensureUUID } from '@/lib/utils/uuid';
 
 // Type definitions for sales analysis data
 interface SalesAnalysisItem {
+  product_id: string;
   product_name: string;
   brand: string;
   sku: string;
@@ -144,8 +145,9 @@ export async function POST(request: NextRequest) {
     if (format === 'csv') {
       // Generate CSV content
       const headers = [
+        'Product ID',
         'Product Name',
-        'Brand', 
+        'Brand',
         'SKU',
         'Total Sold',
         'Average Price',
@@ -159,6 +161,7 @@ export async function POST(request: NextRequest) {
       const csvRows = [
         headers.join(','),
         ...typedExportData.map((item: SalesAnalysisItem) => [
+          `"${item.product_id || ''}"`,
           `"${item.product_name || ''}"`,
           `"${item.brand || ''}"`,
           `"${item.sku || ''}"`,
