@@ -10,6 +10,7 @@ interface ProductForExport {
   sku: string;
   ean: string;
   brand: string;
+  brand_name?: string; // Add brand_name property from database
   image_url: string;
   our_retail_price: number | null;
   our_wholesale_price: number | null;
@@ -105,8 +106,12 @@ export async function POST(request: NextRequest) {
 
     } while (currentPage <= totalPages);
 
-    // Use all collected products for the CSV
-    const data = allProducts;
+    // Use all collected products for the CSV and map brand_name to brand
+    const data = allProducts.map(product => ({
+      ...product,
+      // Map brand_name from database to brand for CSV compatibility
+      brand: product.brand_name || product.brand || null
+    }));
 
     // Get all competitors for this user to include their names in the CSV
     const { data: competitors } = await supabase

@@ -72,6 +72,13 @@ export async function GET(
       .single();
 
     if (error) {
+      // Handle the specific case where no rows are returned (product doesn't exist)
+      if (error.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: "Product not found" },
+          { status: 404 }
+        );
+      }
       console.error("Error fetching product:", error);
       return NextResponse.json(
         { error: error.message },
@@ -152,7 +159,22 @@ export async function PUT(
       .eq("user_id", userId)
       .single();
 
-    if (fetchError || !existingProduct) {
+    if (fetchError) {
+      // Handle the specific case where no rows are returned (product doesn't exist)
+      if (fetchError.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: "Product not found or you don't have permission to update it" },
+          { status: 404 }
+        );
+      }
+      console.error("Error fetching product for update:", fetchError);
+      return NextResponse.json(
+        { error: fetchError.message },
+        { status: 500 }
+      );
+    }
+
+    if (!existingProduct) {
       return NextResponse.json(
         { error: "Product not found or you don't have permission to update it" },
         { status: 404 }
@@ -280,7 +302,22 @@ export async function DELETE(
       .eq("user_id", userId)
       .single();
 
-    if (fetchError || !existingProduct) {
+    if (fetchError) {
+      // Handle the specific case where no rows are returned (product doesn't exist)
+      if (fetchError.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: "Product not found or you don't have permission to delete it" },
+          { status: 404 }
+        );
+      }
+      console.error("Error fetching product for deletion:", fetchError);
+      return NextResponse.json(
+        { error: fetchError.message },
+        { status: 500 }
+      );
+    }
+
+    if (!existingProduct) {
       return NextResponse.json(
         { error: "Product not found or you don't have permission to delete it" },
         { status: 404 }

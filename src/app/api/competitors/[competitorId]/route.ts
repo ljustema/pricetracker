@@ -46,6 +46,13 @@ export async function GET(
       .single();
 
     if (error) {
+      // Handle the specific case where no rows are returned (competitor doesn't exist)
+      if (error.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: "Competitor not found" },
+          { status: 404 }
+        );
+      }
       return NextResponse.json(
         { error: `Failed to get competitor: ${error.message}` },
         { status: 500 }
@@ -209,7 +216,22 @@ export async function DELETE(
       .eq("user_id", userId)
       .single();
 
-    if (fetchError || !competitor) {
+    if (fetchError) {
+      // Handle the specific case where no rows are returned (competitor doesn't exist)
+      if (fetchError.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: "Competitor not found or you don't have permission to delete it" },
+          { status: 404 }
+        );
+      }
+      console.error("Error fetching competitor for deletion:", fetchError);
+      return NextResponse.json(
+        { error: fetchError.message },
+        { status: 500 }
+      );
+    }
+
+    if (!competitor) {
       return NextResponse.json(
         { error: "Competitor not found or you don't have permission to delete it" },
         { status: 404 }

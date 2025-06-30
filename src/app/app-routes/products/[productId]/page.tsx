@@ -44,14 +44,24 @@ export async function generateMetadata({ params }: ProductPageProps): Promise<Me
 
   try {
     // Fetch the product to get its name
-    const { data: product } = await supabase
+    const { data: product, error } = await supabase
       .from("products")
       .select("name, brand")
       .eq("id", productId)
       .eq("user_id", userId)
       .single();
 
-    if (product) {
+    if (error) {
+      // Handle the specific case where no rows are returned (product doesn't exist)
+      if (error.code === 'PGRST116') {
+        // Product not found, return fallback metadata without logging error
+        return {
+          title: "Product Not Found | PriceTracker",
+          description: "The requested product could not be found",
+        };
+      }
+      console.error("Error fetching product for metadata:", error);
+    } else if (product) {
       const productTitle = product.brand ? `${product.name} - ${product.brand}` : product.name;
       return {
         title: `${productTitle} | PriceTracker`,
@@ -114,6 +124,16 @@ export default async function ProductPage({ params }: ProductPageProps) {
     .single();
 
   if (productError) {
+    // Handle the specific case where no rows are returned (product doesn't exist)
+    if (productError.code === 'PGRST116') {
+      return (
+        <div className="container mx-auto px-4 py-8">
+          <div className="rounded-lg bg-yellow-50 p-4 text-yellow-800">
+            Product not found or you don&apos;t have permission to view it.
+          </div>
+        </div>
+      );
+    }
     console.error("Error fetching product:", productError);
     return (
       <div className="container mx-auto px-4 py-8">

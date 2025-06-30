@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import Link from "next/link";
 import ProductCustomFields from "@/components/products/ProductCustomFields";
 
 interface Brand {
@@ -438,12 +437,13 @@ export default function ProductEditPage() {
           </div>
 
           <div className="flex justify-end space-x-3">
-            <Link
-              href="/app-routes/products"
+            <button
+              type="button"
+              onClick={() => router.back()}
               className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
             >
               Cancel
-            </Link>
+            </button>
             <button
               type="submit"
               disabled={isLoading}

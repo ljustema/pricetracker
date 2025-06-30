@@ -249,6 +249,8 @@ export default function ProductsFilter({
             <option value="created_at-asc">Oldest First</option>
             <option value="stock_quantity-desc">Most in Stock</option>
             <option value="stock_quantity-asc">Least in Stock</option>
+            <option value="competitor_count-desc">Most Competitors</option>
+            <option value="competitor_count-asc">Least Competitors</option>
             {/* Add other sort options as needed */}
           </select>
         </div>

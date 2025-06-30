@@ -43,7 +43,22 @@ export async function GET(
       .eq('id', id)
       .single();
 
-    if (error || !customFieldValue) {
+    if (error) {
+      // Handle the specific case where no rows are returned (custom field value doesn't exist)
+      if (error.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: 'Custom field value not found' },
+          { status: 404 }
+        );
+      }
+      console.error("Error fetching custom field value:", error);
+      return NextResponse.json(
+        { error: error.message },
+        { status: 500 }
+      );
+    }
+
+    if (!customFieldValue) {
       return NextResponse.json(
         { error: 'Custom field value not found' },
         { status: 404 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { getStockDisplay, getStockBadgeClasses, formatAvailabilityDate } from '@/lib/utils/stock-utils';
+import { getStockDisplay, getStockBadgeClasses, formatAvailabilityDate, StockDisplayInfo } from '@/lib/utils/stock-utils';
 
 interface StockBadgeProps {
   stockQuantity: number | null;
@@ -87,6 +87,44 @@ export function StockBadgeCompact({
       showTooltip={true}
       className={className}
     />
+  );
+}
+
+// Text-only version for product cards (same height as price text)
+export function StockText({
+  stockQuantity,
+  stockStatus,
+  availabilityDate,
+  className = ''
+}: Omit<StockBadgeProps, 'size' | 'showIcon' | 'showTooltip'>) {
+  const stockInfo = getStockDisplay(stockQuantity, stockStatus, availabilityDate);
+
+  // Get text color based on stock status
+  const getTextColor = (color: StockDisplayInfo['color']): string => {
+    switch (color) {
+      case 'green':
+        return 'text-green-600';
+      case 'yellow':
+        return 'text-yellow-600';
+      case 'orange':
+        return 'text-orange-600';
+      case 'red':
+        return 'text-red-600';
+      case 'blue':
+        return 'text-blue-600';
+      case 'gray':
+      default:
+        return 'text-gray-600';
+    }
+  };
+
+  return (
+    <span
+      className={`text-xs font-medium ${getTextColor(stockInfo.color)} ${className}`}
+      title={`${stockInfo.text}${stockQuantity !== null ? ` (${stockQuantity})` : ''}`}
+    >
+      {stockInfo.badge}
+    </span>
   );
 }
 

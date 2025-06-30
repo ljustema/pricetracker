@@ -25,7 +25,22 @@ export async function GET(
       .eq('user_id', session.user.id)
       .single();
 
-    if (productError || !product) {
+    if (productError) {
+      // Handle the specific case where no rows are returned (product doesn't exist)
+      if (productError.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: 'Product not found' },
+          { status: 404 }
+        );
+      }
+      console.error("Error fetching product for custom fields:", productError);
+      return NextResponse.json(
+        { error: productError.message },
+        { status: 500 }
+      );
+    }
+
+    if (!product) {
       return NextResponse.json(
         { error: 'Product not found' },
         { status: 404 }

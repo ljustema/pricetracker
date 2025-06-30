@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import Image from "next/image";
 import Link from "next/link";
@@ -37,6 +38,7 @@ interface ClientProductPageProps {
 
 export default function ClientProductPage({ product, retailPrices, retailPriceHistory, supplierPrices, stockData, stockHistory }: ClientProductPageProps) {
   const { formatPrice } = useCurrencyFormatter();
+  const router = useRouter();
   const [showAllPriceChanges, setShowAllPriceChanges] = useState(false);
   const [showAllStockChanges, setShowAllStockChanges] = useState(false);
 
@@ -45,15 +47,15 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="mb-4">
-        <Link
-          href="/app-routes/products"
+        <button
+          onClick={() => router.back()}
           className="inline-flex items-center rounded-md bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
         >
           <svg xmlns="http://www.w3.org/2000/svg" className="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
           </svg>
           Back to Products
-        </Link>
+        </button>
       </div>
 
       <div className="mb-8 flex items-center justify-between">

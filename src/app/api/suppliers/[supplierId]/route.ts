@@ -48,6 +48,13 @@ export async function GET(
       .single();
 
     if (error) {
+      // Handle the specific case where no rows are returned (supplier doesn't exist)
+      if (error.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: "Supplier not found" },
+          { status: 404 }
+        );
+      }
       console.error("Error fetching supplier:", error);
       return NextResponse.json(
         { error: error.message },

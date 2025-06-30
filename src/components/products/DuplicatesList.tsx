@@ -430,7 +430,7 @@ export function DuplicatesList() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.push('/app-routes/products')}
+            onClick={() => router.back()}
             className="flex items-center gap-2"
           >
             <ArrowLeft className="h-4 w-4" />

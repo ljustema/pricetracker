@@ -22,6 +22,8 @@ interface SourcePriceItem {
 interface RawProductData {
   competitor_prices?: CompetitorPriceItem[];
   source_prices?: SourcePriceItem[];
+  brand_name?: string | null; // Brand name from brands table join
+  brand?: string | null; // Legacy brand field from products table
   [key: string]: unknown;
 }
 
@@ -160,6 +162,8 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
 
       return {
         ...product,
+        // Map brand_name from database to brand for frontend compatibility
+        brand: product.brand_name || product.brand || null,
         competitor_prices,
         source_prices
       };

@@ -6,7 +6,7 @@ import DeleteButton from "@/components/ui/delete-button";
 import type { Product, StockChange } from "@/lib/services/product-service"; // Import the shared type
 import type { Competitor } from "@/lib/services/competitor-service"; // Import Competitor type
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter"; // Import our new hook
-import { StockBadgeCompact } from "@/components/ui/stock-badge";
+import { StockText } from "@/components/ui/stock-badge";
 
 // Removed local CompetitorPrice and Product interfaces
 
@@ -113,12 +113,12 @@ export default function ProductCard({ product, competitors, stockData, onDelete 
       <div className="mb-3 flex flex-wrap gap-2">
         {productWithPrices.sku && (
           <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800 whitespace-nowrap">
-            SKU: {productWithPrices.sku}
+            {productWithPrices.sku}
           </span>
         )}
         {productWithPrices.brand && (
           <span className="inline-flex items-center rounded-full bg-purple-100 px-2.5 py-0.5 text-xs font-medium text-purple-800 whitespace-nowrap">
-            Brand: {productWithPrices.brand}
+            {productWithPrices.brand}
           </span>
         )}
 
@@ -178,7 +178,6 @@ export default function ProductCard({ product, competitors, stockData, onDelete 
                     return true;
                   })
                   .sort((a, b) => a[1].price - b[1].price) // Sort by price (lowest to highest)
-                  .slice(0, 3)
                   .map(([sourceId, sourceData]) => {
                 try {
                   // Check if sourceData is valid
@@ -272,8 +271,8 @@ export default function ProductCard({ product, competitors, stockData, onDelete 
                     .filter(Boolean) // Remove null entries
                     .sort((a, b) => a!.price - b!.price); // Sort by price (lowest to highest)
 
-                  // Return the JSX for the top 3 competitors by price
-                  return competitorsWithPrices.slice(0, 3).map((item) => {
+                  // Return the JSX for all competitors by price
+                  return competitorsWithPrices.map((item) => {
                     if (!item) return null;
                     const { competitor, price } = item;
 
@@ -291,7 +290,7 @@ export default function ProductCard({ product, competitors, stockData, onDelete 
                         <div className="flex items-center gap-1">
                           <span className="font-medium">{competitor.name}:</span>
                           {competitorStock && (
-                            <StockBadgeCompact
+                            <StockText
                               stockQuantity={competitorStock.current_stock_quantity ?? null}
                               stockStatus={competitorStock.current_stock_status ?? null}
                               availabilityDate={competitorStock.current_availability_date ?? null}
@@ -344,58 +343,7 @@ export default function ProductCard({ product, competitors, stockData, onDelete 
                 <li className="text-xs text-gray-500">No competitor prices available</li>
               )}
             </ul>
-            {/* Show count of additional prices */}
-            {(() => {
-              const filteredSourcePrices = Object.entries(productWithPrices.source_prices)
-                .filter(([_sourceId, sourceData]) => {
-                  // Filter out all integration prices from product list cards
-                  if (sourceData.source_type === 'integration') {
-                    return false;
-                  }
-                  // Only show competitors that have valid prices
-                  if (!sourceData || sourceData.price === null || sourceData.price === undefined || sourceData.price === 0) {
-                    return false;
-                  }
-                  // Also check if price is a valid number
-                  const numericPrice = typeof sourceData.price === 'string' ? parseFloat(sourceData.price) : sourceData.price;
-                  if (isNaN(numericPrice) || numericPrice <= 0) {
-                    return false;
-                  }
-                  return true;
-                });
 
-              return filteredSourcePrices.length > 3 && (
-                <p className="mt-1 text-xs text-gray-500">
-                  +{filteredSourcePrices.length - 3} more sources with prices
-                </p>
-              );
-            })()}
-            {(() => {
-              const filteredSourcePrices = Object.entries(productWithPrices.source_prices)
-                .filter(([_sourceId, sourceData]) => {
-                  // Filter out all integration prices from product list cards
-                  if (sourceData.source_type === 'integration') {
-                    return false;
-                  }
-                  // Only show competitors that have valid prices
-                  if (!sourceData || sourceData.price === null || sourceData.price === undefined || sourceData.price === 0) {
-                    return false;
-                  }
-                  // Also check if price is a valid number
-                  const numericPrice = typeof sourceData.price === 'string' ? parseFloat(sourceData.price) : sourceData.price;
-                  if (isNaN(numericPrice) || numericPrice <= 0) {
-                    return false;
-                  }
-                  return true;
-                });
-
-              return filteredSourcePrices.length === 0 &&
-                     Object.keys(productWithPrices.competitor_prices).length > 3 && (
-                <p className="mt-1 text-xs text-gray-500">
-                  +{Object.keys(productWithPrices.competitor_prices).length - 3} more competitors with prices
-                </p>
-              );
-            })()}
           </div>
         )}
 
@@ -438,7 +386,7 @@ export default function ProductCard({ product, competitors, stockData, onDelete 
                         {stockChange.current_stock_quantity !== null && stockChange.current_stock_quantity !== undefined && (
                           <span className="text-xs text-gray-500">({stockChange.current_stock_quantity})</span>
                         )}
-                        <StockBadgeCompact
+                        <StockText
                           stockQuantity={stockChange.current_stock_quantity ?? null}
                           stockStatus={stockChange.current_stock_status ?? null}
                           availabilityDate={stockChange.current_availability_date ?? null}
