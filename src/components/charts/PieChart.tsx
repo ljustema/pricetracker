@@ -80,17 +80,27 @@ const PieChart: React.FC<PieChartProps> = ({
   }
 
   const CustomLegend = ({ payload }: PieLegendProps) => {
+    // Calculate total for percentages
+    const total = data.reduce((sum, item) => sum + Number(item[dataKey]), 0);
+
     return (
       <div className="flex flex-wrap justify-center gap-4 mt-4">
-        {payload?.map((entry: PieLegendPayloadItem, index: number) => (
-          <div key={index} className="flex items-center gap-2">
-            <div
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: entry.color }}
-            />
-            <span className="text-sm text-gray-600">{entry.value}</span>
-          </div>
-        ))}
+        {payload?.map((entry: PieLegendPayloadItem, index: number) => {
+          const dataItem = data.find(item => item[nameKey] === entry.value);
+          const percentage = dataItem ? ((Number(dataItem[dataKey]) / total) * 100).toFixed(1) : '0';
+
+          return (
+            <div key={index} className="flex items-center gap-2">
+              <div
+                className="w-3 h-3 rounded-full"
+                style={{ backgroundColor: entry.color }}
+              />
+              <span className="text-sm text-gray-600">
+                {entry.value} ({percentage}%)
+              </span>
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -105,12 +115,12 @@ const PieChart: React.FC<PieChartProps> = ({
           <Pie
             data={data}
             cx="50%"
-            cy="50%"
+            cy="40%"
             labelLine={false}
-            outerRadius={80}
+            outerRadius={Math.min(height * 0.25, 100)}
             fill="#8884d8"
             dataKey={dataKey}
-            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+            label={false}
           >
             {data.map((entry, index) => (
               <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />

@@ -78,12 +78,42 @@ export async function GET(request: NextRequest) {
 
     // Calculate summary statistics
     const typedData = (salesData || []) as SalesAnalysisItem[];
+
+    // Calculate the number of days in the period (inclusive of both start and end dates)
+    const periodStartDate = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const periodEndDate = endDate ? new Date(endDate) : new Date();
+
+    // Calculate days inclusive of both start and end dates
+    const timeDiff = periodEndDate.getTime() - periodStartDate.getTime();
+    const daysDiff = Math.max(1, Math.floor(timeDiff / (1000 * 60 * 60 * 24)) + 1);
+
+    console.log('Date calculation debug:', {
+      startDate,
+      endDate,
+      periodStartDate: periodStartDate.toISOString(),
+      periodEndDate: periodEndDate.toISOString(),
+      timeDiffMs: timeDiff,
+      daysDiff
+    });
+
+    const totalSales = typedData.reduce((sum: number, item: SalesAnalysisItem) => sum + (item.total_sold || 0), 0);
+    const totalRevenue = typedData.reduce((sum: number, item: SalesAnalysisItem) => sum + (item.total_revenue || 0), 0);
+
+    console.log('Summary calculation debug:', {
+      totalProducts: typedData.length,
+      totalSales,
+      totalRevenue,
+      daysDiff,
+      avgDailySales: totalSales / daysDiff,
+      avgDailyRevenue: totalRevenue / daysDiff
+    });
+
     const summary: SalesAnalysisSummary = {
       totalProducts: typedData.length,
-      totalSales: typedData.reduce((sum: number, item: SalesAnalysisItem) => sum + (item.total_sold || 0), 0),
-      totalRevenue: typedData.reduce((sum: number, item: SalesAnalysisItem) => sum + (item.total_revenue || 0), 0),
-      avgDailySales: typedData.length > 0 ? typedData.reduce((sum: number, item: SalesAnalysisItem) => sum + (item.avg_daily_sales || 0), 0) / typedData.length : 0,
-      avgDailyRevenue: typedData.length > 0 ? typedData.reduce((sum: number, item: SalesAnalysisItem) => sum + (item.avg_daily_revenue || 0), 0) / typedData.length : 0
+      totalSales,
+      totalRevenue,
+      avgDailySales: totalSales / daysDiff,
+      avgDailyRevenue: totalRevenue / daysDiff
     };
 
     // Add cache headers to the response

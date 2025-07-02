@@ -73,20 +73,34 @@ export async function GET(request: NextRequest) {
 
     console.timeEnd('api-stock-analysis-brands');
 
+    // Calculate period days (inclusive of both start and end dates)
+    const periodStartDate = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const periodEndDate = endDate ? new Date(endDate) : new Date();
+    const timeDiff = periodEndDate.getTime() - periodStartDate.getTime();
+    const daysDiff = Math.max(1, Math.floor(timeDiff / (1000 * 60 * 60 * 24)) + 1);
+
     // Calculate summary statistics
     const typedData = (brandData || []) as BrandPerformanceItem[];
+
+    // Recalculate daily averages using correct period days
+    const correctedData = typedData.map(item => ({
+      ...item,
+      avg_daily_sales: (item.total_sold || 0) / daysDiff,
+      avg_daily_revenue: (item.total_revenue || 0) / daysDiff
+    }));
+
     const summary: BrandPerformanceSummary = {
-      totalBrands: typedData.length,
-      totalProducts: typedData.reduce((sum: number, item: BrandPerformanceItem) => sum + (item.products_tracked || 0), 0),
-      totalSales: typedData.reduce((sum: number, item: BrandPerformanceItem) => sum + (item.total_sold || 0), 0),
-      totalRevenue: typedData.reduce((sum: number, item: BrandPerformanceItem) => sum + (item.total_revenue || 0), 0),
-      topBrand: typedData[0]?.brand || null,
-      topBrandRevenue: typedData[0]?.total_revenue || 0
+      totalBrands: correctedData.length,
+      totalProducts: correctedData.reduce((sum: number, item: BrandPerformanceItem) => sum + (item.products_tracked || 0), 0),
+      totalSales: correctedData.reduce((sum: number, item: BrandPerformanceItem) => sum + (item.total_sold || 0), 0),
+      totalRevenue: correctedData.reduce((sum: number, item: BrandPerformanceItem) => sum + (item.total_revenue || 0), 0),
+      topBrand: correctedData[0]?.brand || null,
+      topBrandRevenue: correctedData[0]?.total_revenue || 0
     };
 
     // Add cache headers to the response
     const response = NextResponse.json({
-      data: brandData || [],
+      data: correctedData || [],
       summary
     });
 
@@ -140,6 +154,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (format === 'csv') {
+      // Calculate period days for export (inclusive of both start and end dates)
+      const periodStartDate = start_date ? new Date(start_date) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const periodEndDate = end_date ? new Date(end_date) : new Date();
+      const timeDiff = periodEndDate.getTime() - periodStartDate.getTime();
+      const daysDiff = Math.max(1, Math.floor(timeDiff / (1000 * 60 * 60 * 24)) + 1);
+
       // Generate CSV content
       const headers = [
         'Brand',
@@ -153,9 +173,15 @@ export async function POST(request: NextRequest) {
       ];
 
       const typedExportData = (brandData || []) as BrandPerformanceItem[];
+      // Correct daily averages for export
+      const correctedExportData = typedExportData.map(item => ({
+        ...item,
+        avg_daily_sales: (item.total_sold || 0) / daysDiff,
+        avg_daily_revenue: (item.total_revenue || 0) / daysDiff
+      }));
       const csvRows = [
         headers.join(','),
-        ...typedExportData.map((item: BrandPerformanceItem) => [
+        ...correctedExportData.map((item: BrandPerformanceItem) => [
           `"${item.brand || ''}"`,
           item.products_tracked || 0,
           item.total_sold || 0,

@@ -4,9 +4,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Download, Filter, Calendar, Building2, ChevronUp, ChevronDown } from 'lucide-react';
+import { Download, Filter, Calendar, Building2, ChevronUp, ChevronDown, Package, TrendingUp, DollarSign, Trophy, BarChart3, PieChart as PieChartIcon, Archive, CheckCircle, Zap, Target } from 'lucide-react';
 import { BarChart, PieChart } from '@/components/charts';
 import Link from 'next/link';
+import BrandProductsModal from '@/components/insights/BrandProductsModal';
 
 interface StockAnalysisTabProps {
   competitors: Array<{
@@ -120,7 +121,7 @@ export default function StockAnalysisTab({
 
   // Data states for each module
   const [salesData, setSalesData] = useState<SalesAnalysisData | null>(null);
-  const [_brandData, setBrandData] = useState<BrandPerformanceData | null>(null);
+  const [brandData, setBrandData] = useState<BrandPerformanceData | null>(null);
   const [_currentStockData, setCurrentStockData] = useState<GenericAnalysisData | null>(null);
   const [_availabilityData, setAvailabilityData] = useState<GenericAnalysisData | null>(null);
   const [_turnoverData, setTurnoverData] = useState<GenericAnalysisData | null>(null);
@@ -133,9 +134,19 @@ export default function StockAnalysisTab({
   // Available brands for filtering
   const [availableBrands, setAvailableBrands] = useState<string[]>([]);
 
+  // Brand products modal state
+  const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
+  const [isBrandModalOpen, setIsBrandModalOpen] = useState(false);
+
   // Sorting state for sales table
   const [sortConfig, setSortConfig] = useState<{
     key: keyof SalesAnalysisItem | null;
+    direction: 'asc' | 'desc';
+  }>({ key: null, direction: 'asc' });
+
+  // Sorting state for brand table
+  const [brandSortConfig, setBrandSortConfig] = useState<{
+    key: keyof BrandPerformanceItem | null;
     direction: 'asc' | 'desc';
   }>({ key: null, direction: 'asc' });
 
@@ -146,6 +157,15 @@ export default function StockAnalysisTab({
       direction = 'desc';
     }
     setSortConfig({ key, direction });
+  };
+
+  // Brand sorting function
+  const handleBrandSort = (key: keyof BrandPerformanceItem) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (brandSortConfig.key === key && brandSortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setBrandSortConfig({ key, direction });
   };
 
   // Get sorted sales data
@@ -177,6 +197,35 @@ export default function StockAnalysisTab({
     });
   };
 
+  // Get sorted brand data
+  const getSortedBrandData = () => {
+    if (!brandData?.data || !brandSortConfig.key) {
+      return brandData?.data || [];
+    }
+
+    return [...brandData.data].sort((a, b) => {
+      const aValue = a[brandSortConfig.key!];
+      const bValue = b[brandSortConfig.key!];
+
+      if (aValue === null || aValue === undefined) return 1;
+      if (bValue === null || bValue === undefined) return -1;
+
+      if (typeof aValue === 'string' && typeof bValue === 'string') {
+        return brandSortConfig.direction === 'asc'
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue);
+      }
+
+      if (typeof aValue === 'number' && typeof bValue === 'number') {
+        return brandSortConfig.direction === 'asc'
+          ? aValue - bValue
+          : bValue - aValue;
+      }
+
+      return 0;
+    });
+  };
+
   // Sortable header component
   const SortableHeader = ({
     sortKey,
@@ -195,6 +244,31 @@ export default function StockAnalysisTab({
         <span>{children}</span>
         {sortConfig.key === sortKey && (
           sortConfig.direction === 'asc' ?
+            <ChevronUp className="h-3 w-3" /> :
+            <ChevronDown className="h-3 w-3" />
+        )}
+      </div>
+    </th>
+  );
+
+  // Sortable header component for brands
+  const BrandSortableHeader = ({
+    sortKey,
+    children,
+    className = "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+  }: {
+    sortKey: keyof BrandPerformanceItem;
+    children: React.ReactNode;
+    className?: string;
+  }) => (
+    <th
+      className={`${className} cursor-pointer hover:bg-gray-100 select-none`}
+      onClick={() => handleBrandSort(sortKey)}
+    >
+      <div className="flex items-center space-x-1">
+        <span>{children}</span>
+        {brandSortConfig.key === sortKey && (
+          brandSortConfig.direction === 'asc' ?
             <ChevronUp className="h-3 w-3" /> :
             <ChevronDown className="h-3 w-3" />
         )}
@@ -382,6 +456,16 @@ export default function StockAnalysisTab({
     setFilters(prev => ({ ...prev, [key]: value }));
   };
 
+  const handleBrandClick = (brandName: string) => {
+    setSelectedBrand(brandName);
+    setIsBrandModalOpen(true);
+  };
+
+  const handleCloseBrandModal = () => {
+    setIsBrandModalOpen(false);
+    setSelectedBrand(null);
+  };
+
   const handleExport = async (module: string, format: string = 'csv') => {
     try {
       const exportData = {
@@ -498,13 +582,34 @@ export default function StockAnalysisTab({
       {/* Analysis Modules */}
       <Tabs value={activeModule} onValueChange={setActiveModule} className="w-full">
         <TabsList className="grid w-full grid-cols-7">
-          <TabsTrigger value="sales">📈 Sales</TabsTrigger>
-          <TabsTrigger value="brands">🏷️ Brands</TabsTrigger>
-          <TabsTrigger value="currentStock">📦 Stock</TabsTrigger>
-          <TabsTrigger value="availability">✅ Availability</TabsTrigger>
-          <TabsTrigger value="turnover">⚡ Turnover</TabsTrigger>
-          <TabsTrigger value="priceRanges">💰 Price Ranges</TabsTrigger>
-          <TabsTrigger value="summary">📊 Summary</TabsTrigger>
+          <TabsTrigger value="sales">
+            <BarChart3 className="h-4 w-4 mr-2" />
+            Sales
+          </TabsTrigger>
+          <TabsTrigger value="brands">
+            <Building2 className="h-4 w-4 mr-2" />
+            Brands
+          </TabsTrigger>
+          <TabsTrigger value="currentStock">
+            <Archive className="h-4 w-4 mr-2" />
+            Stock
+          </TabsTrigger>
+          <TabsTrigger value="availability">
+            <CheckCircle className="h-4 w-4 mr-2" />
+            Availability
+          </TabsTrigger>
+          <TabsTrigger value="turnover">
+            <Zap className="h-4 w-4 mr-2" />
+            Turnover
+          </TabsTrigger>
+          <TabsTrigger value="priceRanges">
+            <Target className="h-4 w-4 mr-2" />
+            Price Ranges
+          </TabsTrigger>
+          <TabsTrigger value="summary">
+            <PieChartIcon className="h-4 w-4 mr-2" />
+            Summary
+          </TabsTrigger>
         </TabsList>
         {/* Sales Analysis Module */}
         <TabsContent value="sales">
@@ -517,7 +622,7 @@ export default function StockAnalysisTab({
                     <div className="flex items-center">
                       <div className="flex-shrink-0">
                         <div className="w-8 h-8 bg-blue-500 rounded-md flex items-center justify-center">
-                          <span className="text-white text-sm font-medium">📦</span>
+                          <Package className="h-4 w-4 text-white" />
                         </div>
                       </div>
                       <div className="ml-5 w-0 flex-1">
@@ -561,7 +666,7 @@ export default function StockAnalysisTab({
                     <div className="flex items-center">
                       <div className="flex-shrink-0">
                         <div className="w-8 h-8 bg-purple-500 rounded-md flex items-center justify-center">
-                          <span className="text-white text-sm font-medium">💰</span>
+                          <DollarSign className="h-4 w-4 text-white" />
                         </div>
                       </div>
                       <div className="ml-5 w-0 flex-1">
@@ -583,7 +688,7 @@ export default function StockAnalysisTab({
                     <div className="flex items-center">
                       <div className="flex-shrink-0">
                         <div className="w-8 h-8 bg-orange-500 rounded-md flex items-center justify-center">
-                          <span className="text-white text-sm font-medium">📊</span>
+                          <TrendingUp className="h-4 w-4 text-white" />
                         </div>
                       </div>
                       <div className="ml-5 w-0 flex-1">
@@ -655,7 +760,7 @@ export default function StockAnalysisTab({
                       }))}
                       xKey="product_name"
                       yKey="total_sold"
-                      height={300}
+                      height={400}
                       formatValue={formatNumber}
                       formatLabel={(label) => {
                         const strLabel = String(label);
@@ -674,14 +779,17 @@ export default function StockAnalysisTab({
                 <CardContent>
                   {salesData?.data && (
                     <PieChart
-                      data={salesData.data.slice(0, 10).map(item => ({
-                        name: item.product_name.length > 15 ? item.product_name.substring(0, 15) + '...' : item.product_name,
-                        value: item.total_revenue,
-                        percentage: item.revenue_percentage || 0
-                      }))}
+                      data={[...salesData.data]
+                        .sort((a, b) => (b.total_revenue || 0) - (a.total_revenue || 0))
+                        .slice(0, 10)
+                        .map(item => ({
+                          name: item.product_name.length > 15 ? item.product_name.substring(0, 15) + '...' : item.product_name,
+                          value: item.total_revenue,
+                          percentage: item.revenue_percentage || 0
+                        }))}
                       dataKey="value"
                       nameKey="name"
-                      height={300}
+                      height={400}
                       formatValue={formatCurrency}
                     />
                   )}
@@ -774,16 +882,247 @@ export default function StockAnalysisTab({
           </div>
         </TabsContent>
 
-        {/* Placeholder tabs for other modules - to be implemented */}
+        {/* Brand Performance Analysis Module */}
         <TabsContent value="brands">
-          <Card>
-            <CardContent className="p-6">
-              <div className="text-center py-8">
-                <h3 className="text-lg font-medium text-gray-900 mb-2">Brand Performance Analysis</h3>
-                <p className="text-gray-500">Coming soon - Brand-level sales and revenue analysis</p>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="space-y-6">
+            {/* Summary Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+              <Card>
+                <CardContent className="p-6">
+                  <div className="flex items-center">
+                    <Building2 className="h-8 w-8 text-blue-600" />
+                    <div className="ml-4">
+                      <p className="text-sm font-medium text-gray-500">Brands with Sales</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {loading.brands ? '...' : (brandData?.summary?.totalBrands || 0)}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="p-6">
+                  <div className="flex items-center">
+                    <div className="h-8 w-8 bg-green-100 rounded-lg flex items-center justify-center">
+                      <Package className="h-5 w-5 text-green-600" />
+                    </div>
+                    <div className="ml-4">
+                      <p className="text-sm font-medium text-gray-500">Products Sold</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {loading.brands ? '...' : (brandData?.summary?.totalProducts || 0)}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="p-6">
+                  <div className="flex items-center">
+                    <div className="h-8 w-8 bg-purple-100 rounded-lg flex items-center justify-center">
+                      <TrendingUp className="h-5 w-5 text-purple-600" />
+                    </div>
+                    <div className="ml-4">
+                      <p className="text-sm font-medium text-gray-500">Total Sales</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {loading.brands ? '...' : (brandData?.summary?.totalSales || 0)}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="p-6">
+                  <div className="flex items-center">
+                    <div className="h-8 w-8 bg-yellow-100 rounded-lg flex items-center justify-center">
+                      <DollarSign className="h-5 w-5 text-yellow-600" />
+                    </div>
+                    <div className="ml-4">
+                      <p className="text-sm font-medium text-gray-500">Total Revenue</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {loading.brands ? '...' : `${(brandData?.summary?.totalRevenue || 0).toLocaleString()}`}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="p-6">
+                  <div className="flex items-center">
+                    <div className="h-8 w-8 bg-red-100 rounded-lg flex items-center justify-center">
+                      <Trophy className="h-5 w-5 text-red-600" />
+                    </div>
+                    <div className="ml-4">
+                      <p className="text-sm font-medium text-gray-500">Top Brand</p>
+                      <p className="text-lg font-bold text-gray-900 truncate">
+                        {loading.brands ? '...' : (brandData?.summary?.topBrand || 'N/A')}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Charts Section */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Sales by Brand Bar Chart */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Top 15 Brands by Sales Volume</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {loading.brands ? (
+                    <div className="h-64 flex items-center justify-center">
+                      <div className="text-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                        <p className="mt-2 text-sm text-gray-500">Loading chart...</p>
+                      </div>
+                    </div>
+                  ) : brandData?.data && brandData.data.length > 0 ? (
+                    <BarChart
+                      data={brandData.data
+                        .sort((a, b) => b.total_sold - a.total_sold)
+                        .slice(0, 15)
+                        .map(item => ({
+                          name: item.brand,
+                          value: item.total_sold,
+                          label: `${item.brand}: ${item.total_sold} units`
+                        }))}
+                      xKey="name"
+                      yKey="value"
+                      height={300}
+                      color="#3B82F6"
+                    />
+                  ) : (
+                    <div className="h-64 flex items-center justify-center text-gray-500">
+                      <p>No brand sales data available for the selected period.</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Revenue Distribution Pie Chart */}
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <CardTitle>Revenue Distribution by Brand</CardTitle>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleExport('brands', 'csv')}
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Export
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  {loading.brands ? (
+                    <div className="h-64 flex items-center justify-center">
+                      <div className="text-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                        <p className="mt-2 text-sm text-gray-500">Loading chart...</p>
+                      </div>
+                    </div>
+                  ) : brandData?.data && brandData.data.length > 0 ? (
+                    <PieChart
+                      data={brandData.data
+                        .sort((a, b) => (b.revenue_percentage || 0) - (a.revenue_percentage || 0))
+                        .slice(0, 10)
+                        .map(item => ({
+                          name: item.brand,
+                          value: item.revenue_percentage || 0,
+                          label: `${item.brand}: ${(item.revenue_percentage || 0).toFixed(1)}%`
+                        }))}
+                      dataKey="value"
+                      nameKey="name"
+                      height={300}
+                    />
+                  ) : (
+                    <div className="h-64 flex items-center justify-center text-gray-500">
+                      <p>No brand revenue data available for the selected period.</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Brand Performance Table */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Brand Performance Details</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {loading.brands ? (
+                  <div className="text-center py-8">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                    <p className="mt-2 text-sm text-gray-500">Loading brand data...</p>
+                  </div>
+                ) : brandData?.data && brandData.data.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr>
+                          <BrandSortableHeader sortKey="brand">Brand</BrandSortableHeader>
+                          <BrandSortableHeader sortKey="products_tracked">Products</BrandSortableHeader>
+                          <BrandSortableHeader sortKey="total_sold">Total Sold</BrandSortableHeader>
+                          <BrandSortableHeader sortKey="total_revenue">Total Revenue</BrandSortableHeader>
+                          <BrandSortableHeader sortKey="revenue_percentage">Revenue %</BrandSortableHeader>
+                          <BrandSortableHeader sortKey="avg_daily_sales">Avg Daily Sales</BrandSortableHeader>
+                          <BrandSortableHeader sortKey="avg_daily_revenue">Avg Daily Revenue</BrandSortableHeader>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {getSortedBrandData().map((brand, index) => (
+                          <tr key={brand.brand} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <button
+                                onClick={() => handleBrandClick(brand.brand)}
+                                className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                              >
+                                {brand.brand}
+                              </button>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm text-gray-900">{brand.products_tracked}</div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm font-bold text-gray-900">{brand.total_sold}</div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm font-bold text-gray-900">
+                                {brand.total_revenue.toLocaleString()}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm text-gray-900">
+                                {(brand.revenue_percentage || 0).toFixed(1)}%
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm text-gray-900">
+                                {brand.avg_daily_sales.toFixed(1)}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm text-gray-900">
+                                {brand.avg_daily_revenue.toFixed(2)}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    <p>No brand data available for the selected period.</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="currentStock">
@@ -841,6 +1180,16 @@ export default function StockAnalysisTab({
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Brand Products Modal */}
+      {selectedBrand && (
+        <BrandProductsModal
+          isOpen={isBrandModalOpen}
+          onClose={handleCloseBrandModal}
+          brandName={selectedBrand}
+          filters={filters}
+        />
+      )}
     </div>
   );
 }
