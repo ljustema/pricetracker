@@ -50,13 +50,17 @@ export class ScraperCreationService {
     // Import here to avoid circular dependencies
     const { createSupabaseAdminClient } = await import('@/lib/supabase/server');
     const supabase = createSupabaseAdminClient();
-    
+
+    if (!config.competitor_id) {
+      throw new Error('competitor_id is required for Python scrapers');
+    }
+
     const { data: competitor, error: competitorError } = await supabase
       .from('competitors')
       .select('name')
       .eq('id', config.competitor_id)
       .single();
-    
+
     if (competitorError) {
       throw new Error(`Failed to get competitor: ${competitorError.message}`);
     }
@@ -163,6 +167,10 @@ export class ScraperCreationService {
     // Get competitor name for the naming convention
     const { createSupabaseAdminClient } = await import('@/lib/supabase/server');
     const supabase = createSupabaseAdminClient();
+
+    if (!config.competitor_id) {
+      throw new Error('competitor_id is required for TypeScript scrapers');
+    }
 
     const { data: competitor, error: competitorError } = await supabase
       .from('competitors')

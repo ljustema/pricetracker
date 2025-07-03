@@ -27,7 +27,9 @@ import { hideBin } from 'yargs/helpers';
 /**
  * Defines the structure for scraped supplier product data.
  * Align this with the `temp_suppliers_scraped_data` table schema.
+ * Note: This interface is used in the commented example code below.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 interface ScrapedSupplierData {
     supplier_url: string; // Matches database schema
     name: string;
@@ -150,12 +152,10 @@ async function scrape(context: ScriptContext): Promise<void> {
     logProgress(`Using supplier: ${supplierInfo.name} (${supplierInfo.id})`);
 
     // --- Import required libraries listed in get_metadata() HERE ---
-    let _fetch: unknown;
-    let _cheerio: unknown;
     try {
         // Use dynamic import for libraries that might not be globally available
-        // fetch = (await import('node-fetch')).default;
-        // cheerio = await import('cheerio');
+        // const fetch = (await import('node-fetch')).default;
+        // const cheerio = await import('cheerio');
         // import other libraries...
     } catch (e) {
         logError(`Failed to import required libraries. Ensure they are installed and listed in get_metadata().`, e);
@@ -165,10 +165,8 @@ async function scrape(context: ScriptContext): Promise<void> {
     // --- Extract context variables ---
     const isTestRun = context.isTestRun ?? false;
     const isValidation = context.isValidation ?? false;
-    const filterByActiveBrands = context.filterByActiveBrands ?? false;
-    const activeBrandNames = filterByActiveBrands ? new Set(context.activeBrandNames || []) : null;
-    const scrapeOnlyOwnProducts = context.scrapeOnlyOwnProducts ?? false;
-    const ownProductEans = scrapeOnlyOwnProducts ? new Set(context.ownProductEans || []) : null;
+    // Note: filterByActiveBrands and scrapeOnlyOwnProducts are available in context
+    // but not used in this template. Implement filtering logic as needed.
 
     // Handle validation mode - get real data but limit quantity
     if (isValidation) {
@@ -193,7 +191,7 @@ async function scrape(context: ScriptContext): Promise<void> {
         productLinks = productLinks.slice(0, 10);
     }
 
-    let productCount = 0;
+    const productCount = 0;
     for (const link of productLinks) {
         try {
             logProgress(`Processing supplier product link: ${link}`);

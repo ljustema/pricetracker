@@ -19,7 +19,8 @@ export interface ScraperMetadata {
 export interface ScraperConfig {
   id?: string;
   user_id: string;
-  competitor_id: string;
+  competitor_id?: string; // Made optional since supplier scrapers don't have competitor_id
+  supplier_id?: string; // Added for supplier scrapers
   name: string;
   url: string;
   scraper_type: 'python' | 'typescript'; // Only Python and TypeScript scrapers are supported
