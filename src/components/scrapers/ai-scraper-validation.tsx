@@ -37,7 +37,10 @@ export default function AiScraperValidation({
         throw new Error('No TypeScript script found for this scraper');
       }
       
-      // Validate the script
+      // Validate the script with supplier/competitor context
+      // IMPORTANT: When modifying validation request body, also update:
+      // - pricetracker/src/components/scrapers/script-scraper-form.tsx (validation calls)
+      // - pricetracker/src/app/app-routes/scrapers/[scraperId]/edit/page.tsx (props passed to ScriptScraperForm)
       const validateResponse = await fetch('/api/scrapers/validate-script', {
         method: 'POST',
         headers: {
@@ -46,6 +49,9 @@ export default function AiScraperValidation({
         body: JSON.stringify({
           scraper_type: 'typescript',
           scriptContent: scraper.typescript_script,
+          // Include supplier/competitor ID for context
+          ...(scraper.supplier_id && { supplierId: scraper.supplier_id }),
+          ...(scraper.competitor_id && { competitorId: scraper.competitor_id }),
         }),
       });
       

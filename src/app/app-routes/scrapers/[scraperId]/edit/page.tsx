@@ -139,8 +139,14 @@ export default function EditScraperPage() {
           <p className="mb-4 text-sm text-gray-500">
             To edit this {scraper.scraper_type === 'python' ? 'Python' : 'TypeScript'} scraper, please use the validation process to ensure your script works correctly.
           </p>
+          {/*
+            IMPORTANT: When modifying ScriptScraperForm props, also update:
+            - pricetracker/src/components/scrapers/ai-scraper-validation.tsx (validation calls)
+            - Any other places that use ScriptScraperForm for consistency
+          */}
           <ScriptScraperForm
             competitorId={scraper.competitor_id}
+            supplierId={scraper.supplier_id}
             scraperType={scraper.scraper_type}
             onSuccess={handleScriptScraperSuccess}
             onCancel={handleCancel}

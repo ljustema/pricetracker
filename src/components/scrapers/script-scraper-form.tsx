@@ -150,6 +150,9 @@ export default function ScriptScraperForm({ // Renamed component
 
     try {
       // Call the API endpoint directly using fetch
+      // IMPORTANT: When modifying validation request body, also update:
+      // - pricetracker/src/components/scrapers/ai-scraper-validation.tsx (validation calls)
+      // - pricetracker/src/app/app-routes/scrapers/[scraperId]/edit/page.tsx (props passed to this component)
       const response = await fetch('/api/scrapers/validate-script', {
         method: 'POST',
         headers: {

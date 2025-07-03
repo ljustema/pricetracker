@@ -174,8 +174,6 @@ async function scrape(context: ScriptContext): Promise<void> {
     if (isValidation) {
         logProgress("Validation mode detected - fetching real data with limited quantity");
         // Continue with real scraping but limit the number of products
-        // Set isTestRun to true to limit products for validation
-        context.isTestRun = true;
     }
 
     // --- Supplier Scraper Implementation ---
@@ -188,9 +186,11 @@ async function scrape(context: ScriptContext): Promise<void> {
     let productLinks = Array.from({ length: 20 }, (_, i) => `${base_url}/supplier-item-${i + 1}`);
     logProgress(`Found ${productLinks.length} potential supplier product links.`);
 
-    if (isTestRun) {
-        logProgress("Test run detected, limiting to 5 products.");
-        productLinks = productLinks.slice(0, 5);
+    // Both validation and test runs should limit to 10 products
+    if (isValidation || isTestRun) {
+        const mode = isValidation ? "Validation" : "Test run";
+        logProgress(`${mode} detected, limiting to 10 products.`);
+        productLinks = productLinks.slice(0, 10);
     }
 
     let productCount = 0;
@@ -223,67 +223,40 @@ async function scrape(context: ScriptContext): Promise<void> {
             // const imageUrl = $('img.product-image').attr('src');
             // const isAvailable = $('.availability').text().toLowerCase().includes('available');
 
-            // Dummy data for example:
-            const name = `Supplier Product from ${link}`;
-            const supplierPrice = 8.99 + productCount; // Wholesale/supplier price
-            const supplierRecommendedPrice = supplierPrice * 1.8; // Example: 80% markup
-            const sku = `SUPP_SKU_${productCount}`;
-            const brand = productCount % 2 === 0 ? "SupplierBrand" : "WholesaleBrand";
-            const ean = productCount % 3 === 0 ? `1234567890${productCount.toString().padStart(3, '0')}` : undefined;
-            const minOrderQty = [1, 5, 10, 25][productCount % 4];
-            const leadTime = [7, 14, 21, 30][productCount % 4];
-            const stockQuantity = Math.floor(Math.random() * 1000) + 100;
-            const imageUrl = `${link}/supplier-image.jpg`;
-
+            // TODO: Replace this section with actual data extraction from supplier pages
+            // Example structure for supplier data:
+            /*
             const supplierData: ScrapedSupplierData = {
-                name: name,
-                supplier_price: supplierPrice,
-                supplier_recommended_price: supplierRecommendedPrice,
+                name: "Product Name from page",
+                supplier_price: 123.45, // Wholesale/supplier price
+                supplier_recommended_price: 199.99, // Supplier's recommended retail price
                 currency_code: "SEK", // Or detect from page
-                supplier_url: link, // Matches database schema
-                image_url: imageUrl,
-                sku: sku,
-                brand: brand,
-                ean: ean,
-                minimum_order_quantity: minOrderQty,
-                lead_time_days: leadTime,
-                stock_quantity: stockQuantity, // FIXED: Changed from stock_level to match database
-                stock_status: stockQuantity > 50 ? "In Stock" : "Low Stock", // Example stock status
+                supplier_url: link, // Product URL on supplier site
+                image_url: "https://supplier.com/image.jpg",
+                sku: "SUPPLIER_SKU_123",
+                brand: "Brand Name",
+                ean: "1234567890123",
+                minimum_order_quantity: 1,
+                lead_time_days: 14,
+                stock_quantity: 100,
+                stock_status: "In Stock",
                 availability_date: null, // Set if back order
-                raw_stock_data: { original_stock: stockQuantity }, // Example raw stock data
-                product_description: `High-quality ${name} from trusted supplier`,
-                category: "Electronics", // Extract from page
-                raw_data: {} // Custom fields will be stored here
+                raw_stock_data: { original_stock: 100 },
+                product_description: "Product description",
+                category: "Category Name",
+                raw_data: {} // Custom fields
             };
 
-            // --- Price Validation (Required) ---
-            // Skip products with no valid price (validation requirement)
-            if (!supplierData.supplier_price || supplierData.supplier_price <= 0) {
-                logProgress(`Skipping product - no valid price (${supplierData.supplier_price})`);
-                continue;
-            }
-
-            // --- Filtering Logic (Optional) ---
-            let passesFilter = true;
-            if (filterByActiveBrands && activeBrandNames) {
-                if (!supplierData.brand || !activeBrandNames.has(supplierData.brand)) {
-                    logProgress(`Skipping product (inactive brand): ${name} (${supplierData.brand})`);
-                    passesFilter = false;
-                }
-            }
-            if (passesFilter && scrapeOnlyOwnProducts && ownProductEans) {
-                if (!supplierData.ean || !ownProductEans.has(supplierData.ean)) {
-                    logProgress(`Skipping product (not own EAN): ${name} (${supplierData.ean})`);
-                    passesFilter = false;
-                }
-            }
-
-            // --- Output Product JSON ---
-            if (passesFilter) {
-                // Print the valid supplier product data as a JSON string to stdout
+            // Apply filtering and output
+            if (shouldIncludeProduct(supplierData, filterByActiveBrands, activeBrandNames,
+                                   scrapeOnlyOwnProducts, ownProductEans, ownProductSkuBrands)) {
                 console.log(JSON.stringify(supplierData));
                 productCount++;
             }
+            */
+
+            // This is a placeholder - implement real scraping logic here
+            throw new Error("Template placeholder: Replace this section with actual supplier data extraction logic");
 
         } catch (error) {
             logError(`Error processing supplier link ${link}`, error);
