@@ -113,7 +113,12 @@ export default function StockAnalysisTab({
   const [activeModule, setActiveModule] = useState('sales');
   const [filters, setFilters] = useState<AnalysisFilters>({
     competitorId: 'all',
-    startDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 30 days ago
+    startDate: (() => {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = (now.getMonth() + 1).toString().padStart(2, '0');
+      return `${year}-${month}-01`;
+    })(), // 1st of current month
     endDate: new Date().toISOString().split('T')[0], // today
     brandFilter: '',
     deadStockDays: 30
@@ -520,7 +525,7 @@ export default function StockAnalysisTab({
               <select
                 value={filters.competitorId}
                 onChange={(e) => handleFilterChange('competitorId', e.target.value)}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm py-2.5"
               >
                 <option value="all">All Competitors</option>
                 {competitors.map((competitor) => (
@@ -541,7 +546,7 @@ export default function StockAnalysisTab({
                 type="date"
                 value={filters.startDate}
                 onChange={(e) => handleFilterChange('startDate', e.target.value)}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm py-2.5"
               />
             </div>
 
@@ -553,7 +558,7 @@ export default function StockAnalysisTab({
                 type="date"
                 value={filters.endDate}
                 onChange={(e) => handleFilterChange('endDate', e.target.value)}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm py-2.5"
               />
             </div>
 
@@ -565,7 +570,7 @@ export default function StockAnalysisTab({
               <select
                 value={filters.brandFilter}
                 onChange={(e) => handleFilterChange('brandFilter', e.target.value)}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm py-2.5"
               >
                 <option value="">All Brands</option>
                 {availableBrands.map((brand) => (

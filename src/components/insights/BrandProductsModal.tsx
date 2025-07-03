@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ExternalLink, Package, TrendingUp, Calendar, DollarSign } from 'lucide-react';
 import Image from 'next/image';
+import Link from 'next/link';
 
 interface BrandProductItem {
   product_id: string;
@@ -210,7 +211,16 @@ export default function BrandProductsModal({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-start justify-between">
                             <div className="flex-1">
-                              <h4 className="font-medium text-gray-900 truncate">{product.product_name}</h4>
+                              <h4 className="font-medium text-gray-900 truncate">
+                                <Link
+                                  href={`/app-routes/products/${product.product_id}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="hover:text-blue-600 hover:underline cursor-pointer"
+                                >
+                                  {product.product_name}
+                                </Link>
+                              </h4>
                               <p className="text-sm text-gray-500">SKU: {product.sku}</p>
                               <div className="flex items-center space-x-4 mt-2">
                                 <Badge variant="secondary">
