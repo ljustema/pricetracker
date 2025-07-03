@@ -151,14 +151,27 @@ interface _ScriptContext {
 
 interface _ScrapedProductData {
   name: string;
-  competitor_price: number; // Updated field name to match temp_competitors_scraped_data table
-  currency_code?: string; // Updated field name to match temp_competitors_scraped_data table
-  competitor_url?: string; // Renamed from url to match database schema
+  // Price fields - either competitor_price OR supplier_price should be present
+  competitor_price?: number; // For competitor scrapers
+  supplier_price?: number; // For supplier scrapers
+  supplier_recommended_price?: number; // For supplier scrapers
+  currency_code?: string; // Updated field name to match database schema
+  competitor_url?: string; // For competitor scrapers
+  supplier_url?: string; // For supplier scrapers
   image_url?: string;
   sku?: string;
   brand?: string;
   ean?: string;
-  competitor_id?: string; // Added competitor_id field
+  competitor_id?: string; // For competitor scrapers
+  supplier_id?: string; // For supplier scrapers
+  // Supplier-specific fields
+  minimum_order_quantity?: number;
+  lead_time_days?: number;
+  stock_quantity?: number;
+  stock_status?: string;
+  availability_date?: Date;
+  product_description?: string;
+  category?: string;
   raw_data?: Record<string, string | number | boolean | null> | null; // Custom fields data
   // Stock tracking fields
   stock_data?: {
@@ -745,7 +758,13 @@ async function fetchAndProcessJob() {
 
                     try {
                         const product = JSON.parse(line);
-                        if (typeof product === 'object' && product !== null && product.name && product.competitor_price !== undefined) {
+                        // Validate product structure for both competitor and supplier scrapers
+                        const hasName = typeof product === 'object' && product !== null && product.name;
+                        const hasCompetitorPrice = product.competitor_price !== undefined && product.competitor_price !== null;
+                        const hasSupplierPrice = product.supplier_price !== undefined && product.supplier_price !== null;
+                        const hasValidPrice = hasCompetitorPrice || hasSupplierPrice;
+
+                        if (hasName && hasValidPrice) {
                             productsBuffer.push(product as _ScrapedProductData);
                             productCount++;
 
@@ -774,7 +793,7 @@ async function fetchAndProcessJob() {
                                 logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Saving batch of ${batchToSave.length} products...`);
                                 // Use job.fetched_competitor_id from the RPC response
                                 try {
-                                    await saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave, supabase);
+                                    await saveScrapedProducts(job.id, job.user_id, job.scraper_id, job.fetched_competitor_id ?? undefined, scraper.supplier_id ?? undefined, batchToSave, supabase);
                                     logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted batch.`);
                                 } catch (err) {
                                     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -1098,7 +1117,7 @@ async function fetchAndProcessJob() {
                     productsBuffer.length = 0;
                     logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Saving final batch of ${batchToSave.length} products...`);
                     try {
-                        await saveScrapedProducts(job.id, job.user_id, job.fetched_competitor_id ?? undefined, batchToSave, supabase);
+                        await saveScrapedProducts(job.id, job.user_id, job.scraper_id, job.fetched_competitor_id ?? undefined, scraper.supplier_id ?? undefined, batchToSave, supabase);
                         logStructured(job.id, 'info', 'DB_BATCH_SAVE', `Successfully inserted final batch.`);
                     } catch (err) {
                         const batchErrorMessage = err instanceof Error ? err.message : String(err);
@@ -1615,40 +1634,73 @@ $$;
 
 
 // --- Function to save scraped products ---
-async function saveScrapedProducts(runId: string, userId: string, competitorId: string | undefined, products: _ScrapedProductData[], supabaseClient?: SupabaseClient<Database>) {
+async function saveScrapedProducts(runId: string, userId: string, scraperId: string, competitorId: string | undefined, supplierId: string | undefined, products: _ScrapedProductData[], supabaseClient?: SupabaseClient<Database>) {
     if (!products || products.length === 0) return;
 
-    // Check if competitorId is provided
-    if (!competitorId) {
-        logStructured(runId, 'error', 'DB_INSERT', `Missing competitor_id for run ${runId}. Cannot save products.`);
+    // Check if either competitorId or supplierId is provided
+    if (!competitorId && !supplierId) {
+        logStructured(runId, 'error', 'DB_INSERT', `Missing competitor_id or supplier_id for run ${runId}. Cannot save products.`);
         return;
     }
 
-    logStructured(runId, 'debug', 'DB_INSERT', `Attempting to save ${products.length} products with competitor_id: ${competitorId}...`);
+    const isSupplierScraper = !!supplierId;
+    const targetTable = isSupplierScraper ? 'temp_suppliers_scraped_data' : 'temp_competitors_scraped_data';
+    const targetId = isSupplierScraper ? supplierId : competitorId;
 
-    // Map ScrapedProductData to the structure needed for temp_competitors_scraped_data table
-    const productsToInsert = products.map(p => ({
-        // Let DB generate UUID for id
-        user_id: userId,
-        scraper_id: null, // Use the scraper_id column instead of scraper_run_id
-        competitor_id: p.competitor_id || competitorId, // Use product's competitor_id if available, otherwise use the one passed to the function
-        // product_id will be handled by DB trigger/matching logic later if implemented
-        name: p.name,
-        competitor_price: p.competitor_price,
-        currency_code: p.currency_code ? p.currency_code.toUpperCase() : null, // Let database set user's primary currency
-        competitor_url: p.competitor_url, // Updated field name to match database schema
-        image_url: p.image_url,
-        sku: p.sku,
-        brand: p.brand,
-        ean: p.ean,
-        raw_data: p.raw_data || null, // Include custom fields data
-        // Stock tracking fields
-        stock_quantity: p.stock_data?.quantity || null,
-        stock_status: p.stock_data?.status || null,
-        availability_date: p.stock_data?.availability_date || null,
-        raw_stock_data: p.stock_data?.raw_data || null,
-        scraped_at: new Date().toISOString(),
-    }));
+    logStructured(runId, 'debug', 'DB_INSERT', `Attempting to save ${products.length} products to ${targetTable} with ${isSupplierScraper ? 'supplier_id' : 'competitor_id'}: ${targetId}...`);
+
+    // Map ScrapedProductData to the structure needed for the appropriate table
+    const productsToInsert = products.map(p => {
+        if (isSupplierScraper) {
+            // Map to temp_suppliers_scraped_data structure
+            return {
+                user_id: userId,
+                supplier_id: supplierId!,
+                scraper_id: scraperId,
+                run_id: runId,
+                name: p.name,
+                sku: p.sku,
+                brand: p.brand,
+                ean: p.ean,
+                supplier_price: p.supplier_price,
+                supplier_recommended_price: p.supplier_recommended_price,
+                currency_code: p.currency_code ? p.currency_code.toUpperCase() : 'SEK',
+                supplier_url: p.supplier_url,
+                image_url: p.image_url,
+                minimum_order_quantity: p.minimum_order_quantity || 1,
+                lead_time_days: p.lead_time_days,
+                stock_quantity: p.stock_quantity,
+                product_description: p.product_description,
+                category: p.category,
+                stock_status: p.stock_status,
+                availability_date: p.availability_date,
+                raw_data: p.raw_data || null,
+                raw_stock_data: p.stock_data?.raw_data || null,
+                scraped_at: new Date().toISOString(),
+            };
+        } else {
+            // Map to temp_competitors_scraped_data structure
+            return {
+                user_id: userId,
+                scraper_id: scraperId,
+                competitor_id: p.competitor_id || competitorId!,
+                name: p.name,
+                competitor_price: p.competitor_price!,
+                currency_code: p.currency_code ? p.currency_code.toUpperCase() : null,
+                competitor_url: p.competitor_url,
+                image_url: p.image_url,
+                sku: p.sku,
+                brand: p.brand,
+                ean: p.ean,
+                raw_data: p.raw_data || null,
+                stock_quantity: p.stock_data?.quantity || null,
+                stock_status: p.stock_data?.status || null,
+                availability_date: p.stock_data?.availability_date || null,
+                raw_stock_data: p.stock_data?.raw_data || null,
+                scraped_at: new Date().toISOString(),
+            };
+        }
+    });
 
     // Insert products in chunks to avoid exceeding Supabase limits
     const BATCH_SIZE = 100; // Reduced from 500 to prevent database timeouts
@@ -1667,7 +1719,7 @@ async function saveScrapedProducts(runId: string, userId: string, competitorId: 
             try {
                 logStructured(runId, 'debug', 'DB_INSERT', `Attempt ${attempt}/${MAX_RETRIES} inserting chunk ${chunkNumber} (${chunk.length} products)...`);
                 const supabase = supabaseClient || await getSupabaseClient();
-                const { error } = await supabase.from('temp_competitors_scraped_data').insert(chunk);
+                const { error } = await supabase.from(targetTable).insert(chunk);
 
                 if (error) {
                     logStructured(runId, 'warn', 'DB_INSERT', `Attempt ${attempt} failed for chunk ${chunkNumber}: ${error.message}`);
