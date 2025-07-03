@@ -131,6 +131,19 @@ interface _ScriptContext {
   isTestRun?: boolean;
   isValidation?: boolean; // Scraper template expects this
   run_id?: string; // Scraper template expects this
+  // Supplier information for supplier scrapers
+  supplierInfo?: {
+    id: string;
+    name: string;
+    website?: string;
+    login_url?: string;
+    login_username?: string;
+    login_password?: string;
+    api_key?: string;
+    api_url?: string;
+    contact_email?: string;
+    notes?: string;
+  };
   // The scraper template defines a log function in its context,
   // but it seems to use console.error for PROGRESS/ERROR which this worker already captures.
   // So, we might not need to pass a log function in the context object itself.
@@ -308,10 +321,10 @@ async function fetchAndProcessJob() {
     // Update last job time when a job is successfully claimed
     lastJobTime = Date.now();
 
-    // 3. Fetch the scraper script
+    // 3. Fetch the scraper script and related information
     const { data: scraper, error: scraperError } = await supabase
       .from('scrapers')
-      .select('typescript_script, filter_by_active_brands, scrape_only_own_products') // Add other needed fields
+      .select('typescript_script, filter_by_active_brands, scrape_only_own_products, supplier_id, competitor_id') // Add supplier_id and competitor_id
       .eq('id', job.scraper_id)
       .single();
 
@@ -327,6 +340,59 @@ async function fetchAndProcessJob() {
         })
         .eq('id', job.id);
       return; // Stop processing this job
+    }
+
+    // 4. Fetch supplier information if this is a supplier scraper
+    let supplierInfo = null;
+    if (scraper.supplier_id) {
+      try {
+        const { data: supplier, error: supplierError } = await supabase
+          .from('suppliers')
+          .select('*')
+          .eq('id', scraper.supplier_id)
+          .single();
+
+        if (supplierError || !supplier) {
+          console.error(`Error fetching supplier info for job ${job.id}:`, supplierError || 'Supplier not found');
+          // Update job status to 'failed'
+          await supabase
+            .from('scraper_runs')
+            .update({
+              status: 'failed',
+              completed_at: new Date().toISOString(),
+              error_message: 'Failed to fetch supplier information',
+            })
+            .eq('id', job.id);
+          return; // Stop processing this job
+        }
+
+        supplierInfo = {
+          id: supplier.id,
+          name: supplier.name,
+          website: supplier.website,
+          login_url: supplier.login_url,
+          login_username: supplier.login_username,
+          login_password: supplier.login_password,
+          api_key: supplier.api_key,
+          api_url: supplier.api_url,
+          contact_email: supplier.contact_email,
+          notes: supplier.notes,
+        };
+
+        debugLog(`Fetched supplier info for ${supplier.name} (${supplier.id})`);
+      } catch (error) {
+        console.error(`Error fetching supplier info for job ${job.id}:`, error);
+        // Update job status to 'failed'
+        await supabase
+          .from('scraper_runs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: 'Failed to fetch supplier information',
+          })
+          .eq('id', job.id);
+        return; // Stop processing this job
+      }
     }
 
     console.log(`Script fetched for job ${job.id}. Starting execution...`);
@@ -495,6 +561,8 @@ async function fetchAndProcessJob() {
           isTestRun: job.is_test_run ?? false, // Default to false if undefined
           isValidation: job.is_validation_run ?? false, // Assuming a field like is_validation_run on the job, or default
           run_id: job.id,
+          // Include supplier information if this is a supplier scraper
+          ...(supplierInfo && { supplierInfo }),
         };
         const scriptContextString = JSON.stringify(scriptContextForScraper);
         const base64ContextString = Buffer.from(scriptContextString).toString('base64');

@@ -141,6 +141,14 @@ async function scrape(context: ScriptContext): Promise<void> {
     logProgress("Supplier scrape function started.");
     logProgress(`Received context: ${JSON.stringify(context)}`);
 
+    // --- Validate supplier information ---
+    if (!context.supplierInfo) {
+        throw new Error("Supplier information not provided in context. Please ensure the worker is configured to fetch supplier data for supplier scrapers.");
+    }
+
+    const supplierInfo = context.supplierInfo;
+    logProgress(`Using supplier: ${supplierInfo.name} (${supplierInfo.id})`);
+
     // --- Import required libraries listed in get_metadata() HERE ---
     let _fetch: unknown;
     let _cheerio: unknown;

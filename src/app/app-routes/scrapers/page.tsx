@@ -164,12 +164,20 @@ export default function ScrapersPage() {
     <div className="container mx-auto px-4 py-8">
       <div className="mb-8 flex items-center justify-between">
         <h1 className="text-3xl font-bold">Web Scrapers</h1>
-        <Link
-          href="/app-routes/competitors"
-          className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-        >
-          Manage Competitors
-        </Link>
+        <div className="flex space-x-3">
+          <Link
+            href="/app-routes/suppliers"
+            className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+          >
+            Manage Suppliers
+          </Link>
+          <Link
+            href="/app-routes/competitors"
+            className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+          >
+            Manage Competitors
+          </Link>
+        </div>
       </div>
 
       {scraperData.length > 0 ? ( // Use scraperData
