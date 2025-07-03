@@ -78,13 +78,7 @@ export default function ProductCustomFields({
     return fieldValue?.value || '';
   }, [customFieldValues]);
 
-  // Helper function to get unique source types from all custom field values
-  const getUniqueSourceTypes = useCallback((): string[] => {
-    const sourceTypes = customFieldValues
-      .map(cfv => cfv.source_type)
-      .filter((sourceType): sourceType is string => Boolean(sourceType));
-    return [...new Set(sourceTypes)];
-  }, [customFieldValues]);
+
 
   // Helper function to format field names with initial capitalization and replace underscores
   const formatFieldName = useCallback((fieldName: string): string => {
@@ -106,6 +100,29 @@ export default function ProductCustomFields({
 
   // For backward compatibility with showOnlyWithValues prop
   const fieldsToShow = showOnlyWithValues ? fieldsWithValues : customFields;
+
+  // Helper function to group fields by source type
+  const getFieldsBySourceType = useCallback(() => {
+    const fieldsBySource: Record<string, Array<{ field: CustomField; value: string; sourceType: string }>> = {};
+
+    fieldsToShow.forEach(field => {
+      const fieldValue = customFieldValues.find(cfv => cfv.custom_field_id === field.id);
+      const value = fieldValue?.value || '';
+      const sourceType = fieldValue?.source_type || 'manual';
+
+      if (!fieldsBySource[sourceType]) {
+        fieldsBySource[sourceType] = [];
+      }
+
+      fieldsBySource[sourceType].push({
+        field,
+        value,
+        sourceType
+      });
+    });
+
+    return fieldsBySource;
+  }, [fieldsToShow, customFieldValues]);
 
   const handleEdit = () => {
     // Initialize editing values with current values
@@ -266,7 +283,9 @@ export default function ProductCustomFields({
   }
 
   // Helper function to render a field
-  const renderField = (field: CustomField) => {
+  const renderField = (field: CustomField, value?: string) => {
+    const fieldValue = value !== undefined ? value : getFieldValue(field.id);
+
     return (
       <div key={field.id}>
         <Label htmlFor={`field-${field.id}`} className="flex items-center gap-1 mb-2">
@@ -279,7 +298,7 @@ export default function ProductCustomFields({
           </div>
         ) : (
           <div className="mt-2 p-2 bg-gray-50 rounded-md text-sm">
-            {CustomFieldsClientService.formatFieldValue(field, getFieldValue(field.id))}
+            {CustomFieldsClientService.formatFieldValue(field, fieldValue)}
           </div>
         )}
       </div>
@@ -288,20 +307,6 @@ export default function ProductCustomFields({
 
   return (
     <Card className="p-6">
-      {/* Source badges above header */}
-      {getUniqueSourceTypes().length > 0 && (
-        <div className="flex items-center gap-2 mb-3">
-          {getUniqueSourceTypes().map(sourceType => (
-            <SourceBadge
-              key={sourceType}
-              sourceType={sourceType}
-              showIcon={true}
-              showScore={false}
-            />
-          ))}
-        </div>
-      )}
-
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-medium">Custom Fields</h3>
         {!alwaysEditable && isEditable && !isEditing && (
@@ -336,8 +341,33 @@ export default function ProductCustomFields({
 
       {/* For backward compatibility - show all fields if showOnlyWithValues is true */}
       {showOnlyWithValues ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {fieldsToShow.map(renderField)}
+        <div className="space-y-6">
+          {Object.entries(getFieldsBySourceType()).length > 0 ? (
+            Object.entries(getFieldsBySourceType()).map(([sourceType, fields]) => (
+              <div key={sourceType} className="space-y-4">
+                {/* Source type badge */}
+                <div className="flex items-center gap-2">
+                  <SourceBadge
+                    sourceType={sourceType}
+                    showIcon={true}
+                    showScore={false}
+                  />
+                  <span className="text-sm text-gray-500">
+                    ({fields.length} field{fields.length !== 1 ? 's' : ''})
+                  </span>
+                </div>
+
+                {/* Fields for this source type */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pl-4 border-l-2 border-gray-100">
+                  {fields.map(({ field, value }) => renderField(field, value))}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="text-center text-gray-500">
+              <p>No custom field values available for this product.</p>
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-6">
@@ -345,7 +375,7 @@ export default function ProductCustomFields({
           {fieldsWithValues.length > 0 && (
             <div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {fieldsWithValues.map(renderField)}
+                {fieldsWithValues.map(field => renderField(field))}
               </div>
             </div>
           )}
@@ -369,7 +399,7 @@ export default function ProductCustomFields({
 
               {showEmptyFields && (
                 <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {emptyFields.map(renderField)}
+                  {emptyFields.map(field => renderField(field))}
                 </div>
               )}
             </div>

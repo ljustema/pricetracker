@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-07-03 11:48:45
+-- Generated: 2025-07-03 16:46:41
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -750,7 +750,7 @@ CREATE TABLE public.price_changes_suppliers (
     our_url text,
     CONSTRAINT check_exactly_one_source CHECK ((((supplier_id IS NOT NULL) AND (integration_id IS NULL)) OR ((supplier_id IS NULL) AND (integration_id IS NOT NULL)))),
     CONSTRAINT check_our_wholesale_price_has_integration_id CHECK ((((old_our_wholesale_price IS NULL) AND (new_our_wholesale_price IS NULL)) OR ((integration_id IS NOT NULL) AND (supplier_id IS NULL)))),
-    CONSTRAINT check_supplier_price_consistency CHECK (((old_supplier_price IS NULL) = (new_supplier_price IS NULL))),
+    CONSTRAINT check_supplier_price_consistency CHECK ((((old_supplier_price IS NULL) AND (new_supplier_price IS NULL)) OR ((old_supplier_price IS NULL) AND (new_supplier_price IS NOT NULL)) OR ((old_supplier_price IS NOT NULL) AND (new_supplier_price IS NOT NULL)) OR ((old_supplier_price IS NOT NULL) AND (new_supplier_price IS NULL)))),
     CONSTRAINT check_supplier_price_has_supplier_id CHECK ((((old_supplier_price IS NULL) AND (new_supplier_price IS NULL)) OR ((supplier_id IS NOT NULL) AND (integration_id IS NULL)))),
     CONSTRAINT price_changes_suppliers_change_source_check CHECK ((change_source = ANY (ARRAY['manual'::text, 'csv'::text, 'scraper'::text, 'integration'::text])))
 );

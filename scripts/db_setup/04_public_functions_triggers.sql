@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-07-03 11:48:45
+-- Generated: 2025-07-03 16:46:41
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -2333,14 +2333,18 @@ DECLARE
     temp_record RECORD;
 
 --
--- Name: process_temp_suppliers_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: process_temp_suppliers_scraped_data_trigger(); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.process_temp_suppliers_scraped_data() RETURNS trigger
+CREATE FUNCTION public.process_temp_suppliers_scraped_data_trigger() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
-DECLARE
-    matched_product_id UUID;
+BEGIN
+    -- Only process records that are not marked as processed
+    IF NEW.processed = false THEN
+        -- Call the batch processing function for this specific record
+        -- We'll process it immediately in small batches
+        PERFORM process_temp_suppliers_batch(NEW.supplier_id, 1);
 
 --
 -- Name: retry_error_integration_products(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -3201,6 +3205,12 @@ CREATE TRIGGER auto_process_temp_competitors_trigger AFTER INSERT ON public.temp
 --
 
 CREATE TRIGGER auto_process_temp_integrations_trigger AFTER INSERT ON public.temp_integrations_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_integrations_scraped_data();
+
+--
+-- Name: temp_suppliers_scraped_data auto_process_temp_suppliers_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER auto_process_temp_suppliers_trigger AFTER INSERT ON public.temp_suppliers_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_suppliers_scraped_data_trigger();
 
 --
 -- Name: integration_runs integration_runs_progress_update_trigger; Type: TRIGGER; Schema: public; Owner: -

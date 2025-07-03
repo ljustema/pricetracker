@@ -6878,183 +6878,267 @@ DECLARE
     start_time TIMESTAMP;
     old_category TEXT;
     new_category TEXT;
+    last_supplier_price NUMERIC(10,2);
+    last_supplier_recommended_price NUMERIC(10,2);
+    custom_fields_result JSONB;
 BEGIN
     start_time := clock_timestamp();
-    RAISE NOTICE 'Starting batch processing for suppliers with stock tracking (batch size: %)', batch_size;
     
+    -- Debug: Log start of batch processing
+    INSERT INTO debug_logs (message, created_at) VALUES 
+        ('SUPPLIER_BATCH: Starting batch processing for supplier_id: ' || COALESCE(p_supplier_id::text, 'ALL') || ', batch_size: ' || batch_size, NOW());
+    
+    -- Process records in batches
     FOR temp_record IN 
-        SELECT * FROM temp_suppliers_scraped_data 
-        WHERE (p_supplier_id IS NULL OR supplier_id = p_supplier_id)
-        ORDER BY scraped_at
+        SELECT * FROM temp_suppliers_scraped_data t
+        WHERE (p_supplier_id IS NULL OR t.supplier_id = p_supplier_id)
+          AND t.processed = false
+        ORDER BY t.created_at
         LIMIT batch_size
     LOOP
         BEGIN
-            -- STEP 1: Brand lookup using the proper function that respects aliases
+            -- Debug: Log processing start for each record
+            INSERT INTO debug_logs (message, created_at) VALUES 
+                ('SUPPLIER_BATCH: Processing record ' || temp_record.id || ' - Name: ' || COALESCE(temp_record.name, 'NULL') || ', SKU: ' || COALESCE(temp_record.sku, 'NULL') || ', Has raw_data: ' || (temp_record.raw_data IS NOT NULL)::text, NOW());
+            
+            -- Validate that the record has minimum required data
+            IF (temp_record.ean IS NULL OR temp_record.ean = '') AND 
+               (temp_record.sku IS NULL OR temp_record.sku = '' OR temp_record.brand IS NULL OR temp_record.brand = '') THEN
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Validation failed for record ' || temp_record.id || ' - Missing EAN and SKU+Brand', NOW());
+                -- Delete unprocessable records immediately
+                DELETE FROM temp_suppliers_scraped_data WHERE id = temp_record.id;
+                total_errors := total_errors + 1;
+                CONTINUE;
+            END IF;
+            
+            INSERT INTO debug_logs (message, created_at) VALUES 
+                ('SUPPLIER_BATCH: Validation passed for record ' || temp_record.id, NOW());
+            
+            -- Find or create brand if we have brand name
             v_brand_id := NULL;
             IF temp_record.brand IS NOT NULL AND temp_record.brand != '' THEN
-                -- Use the find_or_create_brand function that properly checks aliases
                 SELECT find_or_create_brand(temp_record.user_id, temp_record.brand) INTO v_brand_id;
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Brand ID for "' || temp_record.brand || '": ' || COALESCE(v_brand_id::text, 'NULL'), NOW());
             END IF;
             
-            -- STEP 2: Product matching using resolved brand_id
-            matched_product_id := NULL;
+            -- Use enhanced fuzzy matching to find existing product
+            SELECT find_product_with_fuzzy_matching(
+                temp_record.user_id,
+                temp_record.ean,
+                temp_record.brand,
+                temp_record.sku,
+                temp_record.name,
+                v_brand_id
+            ) INTO matched_product_id;
             
-            -- Try EAN match first
-            IF temp_record.ean IS NOT NULL AND temp_record.ean != '' AND is_valid_ean(temp_record.ean) THEN
-                SELECT id INTO matched_product_id
-                FROM products
-                WHERE user_id = temp_record.user_id AND ean = temp_record.ean
-                LIMIT 1;
-            END IF;
+            INSERT INTO debug_logs (message, created_at) VALUES 
+                ('SUPPLIER_BATCH: Fuzzy matching result: ' || COALESCE(matched_product_id::text, 'NULL'), NOW());
             
-            -- Try brand_id + SKU match (using resolved brand_id)
-            IF matched_product_id IS NULL AND v_brand_id IS NOT NULL AND temp_record.sku IS NOT NULL THEN
-                SELECT id INTO matched_product_id
-                FROM products
-                WHERE user_id = temp_record.user_id
-                  AND brand_id = v_brand_id  -- Use resolved brand_id
-                  AND normalize_sku_for_matching(sku) = normalize_sku_for_matching(temp_record.sku)
-                LIMIT 1;
-            END IF;
-            
-            -- Fuzzy matching as last resort
-            IF matched_product_id IS NULL THEN
-                SELECT find_product_with_fuzzy_matching(
-                    temp_record.user_id, temp_record.ean, temp_record.brand,
-                    temp_record.sku, temp_record.name, v_brand_id
-                ) INTO matched_product_id;
-            END IF;
-            
-            -- Create new product if needed
-            IF matched_product_id IS NULL THEN
-                INSERT INTO products (
-                    user_id, name, sku, ean, brand, brand_id, image_url, currency_code,
-                    our_wholesale_price
-                ) VALUES (
-                    temp_record.user_id, temp_record.name, temp_record.sku, temp_record.ean,
-                    temp_record.brand, v_brand_id, temp_record.image_url, temp_record.currency_code,
-                    temp_record.supplier_price
-                ) RETURNING id INTO matched_product_id;
-                
-                total_new_products := total_new_products + 1;
-            ELSE
-                -- Update existing product with supplier data
+            IF matched_product_id IS NOT NULL THEN
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Updating existing product ' || matched_product_id, NOW());
+                    
+                -- Update existing product with supplier data (only fill missing fields)
+                -- REMOVED: our_url update - suppliers should not populate our_url
                 UPDATE products SET
-                    our_wholesale_price = COALESCE(temp_record.supplier_price, our_wholesale_price),
-                    image_url = COALESCE(temp_record.image_url, image_url),
+                    name = CASE WHEN (name IS NULL OR name = '') AND temp_record.name IS NOT NULL AND temp_record.name != '' THEN temp_record.name ELSE name END,
+                    sku = CASE WHEN (sku IS NULL OR sku = '') AND temp_record.sku IS NOT NULL AND temp_record.sku != '' THEN temp_record.sku ELSE sku END,
+                    ean = CASE WHEN (ean IS NULL OR ean = '') AND temp_record.ean IS NOT NULL AND temp_record.ean != '' THEN temp_record.ean ELSE ean END,
+                    brand = CASE WHEN (brand IS NULL OR brand = '') AND temp_record.brand IS NOT NULL AND temp_record.brand != '' THEN temp_record.brand ELSE brand END,
+                    brand_id = CASE WHEN brand_id IS NULL AND v_brand_id IS NOT NULL THEN v_brand_id ELSE brand_id END,
+                    image_url = CASE WHEN (image_url IS NULL OR image_url = '') AND temp_record.image_url IS NOT NULL AND temp_record.image_url != '' THEN temp_record.image_url ELSE image_url END,
+                    currency_code = CASE WHEN (currency_code IS NULL OR currency_code = '') AND temp_record.currency_code IS NOT NULL AND temp_record.currency_code != '' THEN temp_record.currency_code ELSE currency_code END,
                     updated_at = NOW()
                 WHERE id = matched_product_id;
+            ELSE
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Creating new product', NOW());
+                    
+                -- Create new product
+                -- REMOVED: our_url field - suppliers should not populate our_url
+                INSERT INTO products (
+                    user_id,
+                    name,
+                    sku,
+                    ean,
+                    brand,
+                    brand_id,
+                    image_url,
+                    currency_code
+                ) VALUES (
+                    temp_record.user_id,
+                    temp_record.name,
+                    temp_record.sku,
+                    temp_record.ean,
+                    temp_record.brand,
+                    v_brand_id,
+                    temp_record.image_url,
+                    temp_record.currency_code
+                ) RETURNING id INTO matched_product_id;
+                
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Created new product with ID: ' || matched_product_id, NOW());
+                    
+                total_new_products := total_new_products + 1;
             END IF;
             
-            -- Process custom fields
+            -- PROCESS CUSTOM FIELDS from raw_data
             IF matched_product_id IS NOT NULL AND temp_record.raw_data IS NOT NULL THEN
-                PERFORM process_custom_fields_from_raw_data(
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Processing custom fields from raw_data', NOW());
+                    
+                SELECT process_custom_fields_from_raw_data(
                     temp_record.user_id,
                     matched_product_id,
                     temp_record.raw_data,
                     'supplier',
                     temp_record.supplier_id
-                );
-            END IF;
-            
-            -- Handle price changes
-            SELECT new_our_wholesale_price INTO current_wholesale_price
-            FROM price_changes_suppliers
-            WHERE user_id = temp_record.user_id
-              AND product_id = matched_product_id
-              AND (supplier_id = temp_record.supplier_id OR supplier_id IS NULL)
-            ORDER BY changed_at DESC
-            LIMIT 1;
-            
-            IF current_wholesale_price IS NULL OR ABS(current_wholesale_price - temp_record.supplier_price) > 0.01 THEN
-                INSERT INTO price_changes_suppliers (
-                    user_id, product_id, supplier_id, old_our_wholesale_price, new_our_wholesale_price,
-                    changed_at, supplier_url, our_url, change_source
-                ) VALUES (
-                    temp_record.user_id, matched_product_id, temp_record.supplier_id,
-                    current_wholesale_price, temp_record.supplier_price, NOW(),
-                    temp_record.supplier_url,
-                    (SELECT our_url FROM products WHERE id = matched_product_id),
-                    'supplier'
-                );
+                ) INTO custom_fields_result;
                 
-                total_price_changes := total_price_changes + 1;
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Custom fields result: ' || COALESCE(custom_fields_result::text, 'NULL'), NOW());
+            ELSE
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: No custom fields to process - Product ID: ' || COALESCE(matched_product_id::text, 'NULL') || ', Has raw_data: ' || (temp_record.raw_data IS NOT NULL)::text, NOW());
             END IF;
             
-            -- NEW: Handle stock changes for suppliers
-            IF temp_record.stock_quantity IS NOT NULL OR temp_record.stock_status IS NOT NULL THEN
-                SELECT new_stock_quantity, new_stock_status, new_availability_date
-                INTO current_stock_quantity, current_stock_status, current_availability_date
-                FROM stock_changes_suppliers
-                WHERE user_id = temp_record.user_id
-                  AND product_id = matched_product_id
+            -- Process price changes if we have a product and price
+            IF matched_product_id IS NOT NULL AND temp_record.supplier_price IS NOT NULL THEN
+                -- Get last supplier price for comparison
+                SELECT 
+                    new_supplier_price,
+                    new_supplier_recommended_price
+                INTO 
+                    last_supplier_price,
+                    last_supplier_recommended_price
+                FROM price_changes_suppliers 
+                WHERE product_id = matched_product_id 
                   AND supplier_id = temp_record.supplier_id
-                ORDER BY changed_at DESC
+                ORDER BY changed_at DESC 
                 LIMIT 1;
                 
-                standardized_status := standardize_stock_status(temp_record.stock_status);
-                
-                -- Map statuses to major business categories
-                old_category := CASE 
-                    WHEN current_stock_status IN ('in_stock', 'limited_stock') THEN 'available'
-                    WHEN current_stock_status IN ('out_of_stock', 'discontinued') THEN 'unavailable'
-                    WHEN current_stock_status IN ('back_order', 'coming_soon') THEN 'pre_order'
-                    ELSE 'unknown'
+                -- Only create price change if price actually changed or this is the first price
+                IF last_supplier_price IS NULL OR last_supplier_price != temp_record.supplier_price THEN
+                    INSERT INTO price_changes_suppliers (
+                        user_id,
+                        product_id,
+                        supplier_id,
+                        old_supplier_price,
+                        new_supplier_price,
+                        old_supplier_recommended_price,
+                        new_supplier_recommended_price,
+                        price_change_percentage,
+                        changed_at,
+                        currency_code,
+                        supplier_url
+                    ) VALUES (
+                        temp_record.user_id,
+                        matched_product_id,
+                        temp_record.supplier_id,
+                        last_supplier_price,
+                        temp_record.supplier_price,
+                        last_supplier_recommended_price,
+                        temp_record.supplier_recommended_price,
+                        CASE 
+                            WHEN last_supplier_price IS NULL OR last_supplier_price = 0 THEN 0
+                            ELSE ROUND(((temp_record.supplier_price - last_supplier_price) / last_supplier_price * 100)::numeric, 2)
+                        END,
+                        NOW(),
+                        temp_record.currency_code,
+                        temp_record.supplier_url
+                    );
+                    
+                    total_price_changes := total_price_changes + 1;
+                END IF;
+            END IF;
+            
+            -- STOCK PROCESSING
+            IF matched_product_id IS NOT NULL AND (temp_record.stock_quantity IS NOT NULL OR temp_record.stock_status IS NOT NULL OR temp_record.availability_date IS NOT NULL) THEN
+                -- Get current stock data for comparison
+                SELECT 
+                    new_stock_quantity,
+                    new_stock_status,
+                    new_availability_date
+                INTO 
+                    current_stock_quantity,
+                    current_stock_status,
+                    current_availability_date
+                FROM stock_changes_suppliers 
+                WHERE product_id = matched_product_id 
+                  AND supplier_id = temp_record.supplier_id
+                ORDER BY changed_at DESC 
+                LIMIT 1;
+
+                -- Standardize stock status
+                standardized_status := CASE 
+                    WHEN temp_record.stock_status ILIKE '%in stock%' OR temp_record.stock_status ILIKE '%available%' THEN 'in_stock'
+                    WHEN temp_record.stock_status ILIKE '%out of stock%' OR temp_record.stock_status ILIKE '%unavailable%' THEN 'out_of_stock'
+                    WHEN temp_record.stock_status ILIKE '%pre%order%' OR temp_record.stock_status ILIKE '%backorder%' THEN 'pre_order'
+                    WHEN temp_record.stock_status ILIKE '%discontinued%' THEN 'discontinued'
+                    ELSE COALESCE(temp_record.stock_status, 'unknown')
                 END;
-                
-                new_category := CASE 
-                    WHEN standardized_status IN ('in_stock', 'limited_stock') THEN 'available'
-                    WHEN standardized_status IN ('out_of_stock', 'discontinued') THEN 'unavailable'
-                    WHEN standardized_status IN ('back_order', 'coming_soon') THEN 'pre_order'
-                    ELSE 'unknown'
-                END;
-                
-                -- Only record stock changes if meaningful
-                IF (current_stock_quantity IS DISTINCT FROM temp_record.stock_quantity) OR 
-                   (current_stock_status IS NULL) OR 
-                   (old_category IS DISTINCT FROM new_category) THEN
+
+                -- Check if stock has changed (or this is the first stock entry)
+                IF current_stock_quantity IS NULL OR 
+                   (COALESCE(current_stock_quantity, -999) != COALESCE(temp_record.stock_quantity, -999)) OR
+                   (COALESCE(current_stock_status, '') != COALESCE(standardized_status, '')) OR
+                   (COALESCE(current_availability_date, '1900-01-01'::date) != COALESCE(temp_record.availability_date, '1900-01-01'::date)) THEN
                     
                     INSERT INTO stock_changes_suppliers (
-                        user_id, product_id, supplier_id,
-                        old_stock_quantity, new_stock_quantity,
-                        old_stock_status, new_stock_status,
-                        old_availability_date, new_availability_date,
-                        stock_change_quantity, changed_at, raw_stock_data,
-                        supplier_url, our_url
+                        user_id,
+                        product_id,
+                        supplier_id,
+                        old_stock_quantity,
+                        new_stock_quantity,
+                        old_stock_status,
+                        new_stock_status,
+                        old_availability_date,
+                        new_availability_date,
+                        stock_change_quantity,
+                        changed_at,
+                        supplier_url,
+                        raw_stock_data
                     ) VALUES (
-                        temp_record.user_id, matched_product_id, temp_record.supplier_id,
-                        current_stock_quantity, temp_record.stock_quantity,
-                        current_stock_status, standardized_status,
-                        current_availability_date, temp_record.availability_date,
+                        temp_record.user_id,
+                        matched_product_id,
+                        temp_record.supplier_id,
+                        current_stock_quantity,
+                        temp_record.stock_quantity,
+                        current_stock_status,
+                        standardized_status,
+                        current_availability_date,
+                        temp_record.availability_date,
                         COALESCE(temp_record.stock_quantity, 0) - COALESCE(current_stock_quantity, 0),
-                        NOW(), temp_record.raw_stock_data,
+                        NOW(),
                         temp_record.supplier_url,
-                        (SELECT our_url FROM products WHERE id = matched_product_id)
+                        temp_record.raw_stock_data
                     );
                     
                     total_stock_changes := total_stock_changes + 1;
                 END IF;
             END IF;
             
+            -- CLEANUP: Delete the processed record from temp table
             DELETE FROM temp_suppliers_scraped_data WHERE id = temp_record.id;
             total_processed := total_processed + 1;
             
-            IF total_processed % 50 = 0 THEN
-                RAISE NOTICE 'Processed % supplier records (%.2f ms avg)', 
-                    total_processed, 
-                    EXTRACT(EPOCH FROM (clock_timestamp() - start_time)) * 1000 / total_processed;
-            END IF;
+            INSERT INTO debug_logs (message, created_at) VALUES 
+                ('SUPPLIER_BATCH: Completed processing and deleted record ' || temp_record.id, NOW());
             
         EXCEPTION WHEN OTHERS THEN
+            INSERT INTO debug_logs (message, created_at) VALUES 
+                ('SUPPLIER_BATCH: Error processing record ' || temp_record.id || ': ' || SQLERRM, NOW());
             total_errors := total_errors + 1;
-            RAISE WARNING 'Error processing supplier record %: %', temp_record.id, SQLERRM;
+            -- Delete record even on error to avoid infinite loops
             DELETE FROM temp_suppliers_scraped_data WHERE id = temp_record.id;
         END;
     END LOOP;
     
-    RAISE NOTICE 'Supplier batch complete! Processed: %, Errors: %, New: %, Price changes: %, Stock changes: % (%.2f ms)', 
-                 total_processed, total_errors, total_new_products, total_price_changes, total_stock_changes,
-                 EXTRACT(EPOCH FROM (clock_timestamp() - start_time)) * 1000;
+    -- Debug: Log completion
+    INSERT INTO debug_logs (message, created_at) VALUES 
+        ('SUPPLIER_BATCH: Completed batch processing - Processed: ' || total_processed || ', Errors: ' || total_errors || ', New products: ' || total_new_products || ', Price changes: ' || total_price_changes || ', Stock changes: ' || total_stock_changes, NOW());
     
     RETURN QUERY SELECT total_processed, total_errors, total_new_products, total_price_changes;
 END;
@@ -7062,227 +7146,21 @@ $$;
 
 
 --
--- Name: process_temp_suppliers_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: process_temp_suppliers_scraped_data_trigger(); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.process_temp_suppliers_scraped_data() RETURNS trigger
+CREATE FUNCTION public.process_temp_suppliers_scraped_data_trigger() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
-DECLARE
-    matched_product_id UUID;
-    v_brand_id UUID;
-    last_supplier_price DECIMAL(10, 2);
-    last_our_wholesale_price DECIMAL(10, 2);
-    last_supplier_recommended_price DECIMAL(10, 2);
-    price_change_pct DECIMAL(10, 2);
-    existing_product RECORD;
-    custom_fields_result JSONB;
-    price_changed BOOLEAN := FALSE;
-    -- Stock processing variables
-    current_stock_quantity INTEGER;
-    current_stock_status TEXT;
-    current_availability_date DATE;
-    standardized_status TEXT;
 BEGIN
-    -- Find or create brand if we have brand name
-    IF NEW.brand IS NOT NULL AND NEW.brand != '' THEN
-        SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
+    -- Only process records that are not marked as processed
+    IF NEW.processed = false THEN
+        -- Call the batch processing function for this specific record
+        -- We'll process it immediately in small batches
+        PERFORM process_temp_suppliers_batch(NEW.supplier_id, 1);
     END IF;
-
-    -- Use enhanced fuzzy matching to find existing product
-    SELECT find_product_with_fuzzy_matching(
-        NEW.user_id,
-        NEW.ean,
-        NEW.brand,
-        NEW.sku,
-        NEW.name,
-        v_brand_id
-    ) INTO matched_product_id;
-
-    IF matched_product_id IS NOT NULL THEN
-        -- Product exists, get current data for comparison
-        SELECT * INTO existing_product
-        FROM products
-        WHERE id = matched_product_id;
-
-        -- Update existing product with supplier data (only fill missing fields)
-        UPDATE products SET
-            name = CASE WHEN (name IS NULL OR name = '') AND NEW.name IS NOT NULL AND NEW.name != '' THEN NEW.name ELSE name END,
-            sku = CASE WHEN (sku IS NULL OR sku = '') AND NEW.sku IS NOT NULL AND NEW.sku != '' THEN NEW.sku ELSE sku END,
-            ean = CASE WHEN (ean IS NULL OR ean = '') AND NEW.ean IS NOT NULL AND NEW.ean != '' THEN NEW.ean ELSE ean END,
-            brand = CASE WHEN (brand IS NULL OR brand = '') AND NEW.brand IS NOT NULL AND NEW.brand != '' THEN NEW.brand ELSE brand END,
-            brand_id = CASE WHEN brand_id IS NULL AND v_brand_id IS NOT NULL THEN v_brand_id ELSE brand_id END,
-            image_url = CASE WHEN (image_url IS NULL OR image_url = '') AND NEW.image_url IS NOT NULL AND NEW.image_url != '' THEN NEW.image_url ELSE image_url END,
-            our_url = CASE WHEN (our_url IS NULL OR our_url = '') AND NEW.supplier_url IS NOT NULL AND NEW.supplier_url != '' THEN NEW.supplier_url ELSE our_url END,
-            currency_code = CASE WHEN (currency_code IS NULL OR currency_code = '') AND NEW.currency_code IS NOT NULL AND NEW.currency_code != '' THEN NEW.currency_code ELSE currency_code END,
-            updated_at = NOW()
-        WHERE id = matched_product_id;
-    ELSE
-        -- Create new product
-        INSERT INTO products (
-            user_id,
-            name,
-            sku,
-            ean,
-            brand,
-            brand_id,
-            image_url,
-            currency_code,
-            our_url
-        ) VALUES (
-            NEW.user_id,
-            NEW.name,
-            NEW.sku,
-            NEW.ean,
-            NEW.brand,
-            v_brand_id,
-            NEW.image_url,
-            NEW.currency_code,
-            NEW.supplier_url
-        ) RETURNING id INTO matched_product_id;
-    END IF;
-
-    -- Process custom fields from raw_data if we have a product
-    -- Pass source information: 'supplier' as source_type and supplier_id as source_id
-    IF matched_product_id IS NOT NULL AND NEW.raw_data IS NOT NULL THEN
-        SELECT process_custom_fields_from_raw_data(
-            NEW.user_id,
-            matched_product_id,
-            NEW.raw_data,
-            'supplier',
-            NEW.supplier_id
-        ) INTO custom_fields_result;
-    END IF;
-
-    -- PRICE PROCESSING (existing logic)
-    -- Get last supplier prices for comparison
-    SELECT 
-        new_supplier_price,
-        new_our_wholesale_price,
-        new_supplier_recommended_price
-    INTO 
-        last_supplier_price,
-        last_our_wholesale_price,
-        last_supplier_recommended_price
-    FROM price_changes_suppliers
-    WHERE product_id = matched_product_id
-      AND supplier_id = NEW.supplier_id
-      AND user_id = NEW.user_id
-    ORDER BY changed_at DESC
-    LIMIT 1;
-
-    -- Check if any price has changed
-    IF (last_supplier_price IS NULL AND NEW.supplier_price IS NOT NULL) OR
-       (last_supplier_price IS NOT NULL AND NEW.supplier_price IS NOT NULL AND last_supplier_price != NEW.supplier_price) OR
-       (last_supplier_recommended_price IS NULL AND NEW.supplier_recommended_price IS NOT NULL) OR
-       (last_supplier_recommended_price IS NOT NULL AND NEW.supplier_recommended_price IS NOT NULL AND last_supplier_recommended_price != NEW.supplier_recommended_price) THEN
-        price_changed := TRUE;
-    END IF;
-
-    -- Calculate price change percentage for supplier price
-    IF last_supplier_price IS NOT NULL AND last_supplier_price > 0 AND NEW.supplier_price IS NOT NULL THEN
-        price_change_pct := ROUND(((NEW.supplier_price - last_supplier_price) / last_supplier_price * 100)::numeric, 2);
-    ELSE
-        price_change_pct := 0;
-    END IF;
-
-    -- Insert supplier price change record ONLY if price has changed
-    IF price_changed AND (NEW.supplier_price IS NOT NULL OR NEW.supplier_recommended_price IS NOT NULL) THEN
-        INSERT INTO price_changes_suppliers (
-            user_id,
-            product_id,
-            supplier_id,
-            old_supplier_price,
-            new_supplier_price,
-            old_supplier_recommended_price,
-            new_supplier_recommended_price,
-            price_change_percentage,
-            changed_at,
-            currency_code,
-            supplier_url,
-            our_url
-        ) VALUES (
-            NEW.user_id,
-            matched_product_id,
-            NEW.supplier_id,
-            COALESCE(last_supplier_price, NEW.supplier_price),
-            NEW.supplier_price,
-            COALESCE(last_supplier_recommended_price, NEW.supplier_recommended_price),
-            NEW.supplier_recommended_price,
-            price_change_pct,
-            NOW(),
-            NEW.currency_code,
-            NEW.supplier_url,
-            (SELECT our_url FROM products WHERE id = matched_product_id)
-        );
-    END IF;
-
-    -- STOCK PROCESSING (new logic)
-    -- Only process stock if we have stock data
-    IF NEW.stock_quantity IS NOT NULL OR NEW.stock_status IS NOT NULL THEN
-        -- Get current stock data for this product/supplier combination
-        SELECT 
-            new_stock_quantity,
-            new_stock_status,
-            new_availability_date
-        INTO 
-            current_stock_quantity,
-            current_stock_status,
-            current_availability_date
-        FROM stock_changes_suppliers
-        WHERE user_id = NEW.user_id 
-          AND product_id = matched_product_id 
-          AND supplier_id = NEW.supplier_id
-        ORDER BY changed_at DESC
-        LIMIT 1;
-
-        -- Standardize the new stock status
-        standardized_status := standardize_stock_status(NEW.stock_status);
-
-        -- Only insert if stock has changed
-        IF (current_stock_quantity IS DISTINCT FROM NEW.stock_quantity) OR
-           (current_stock_status IS DISTINCT FROM standardized_status) OR
-           (current_availability_date IS DISTINCT FROM NEW.availability_date) THEN
-            
-            INSERT INTO stock_changes_suppliers (
-                user_id,
-                product_id,
-                supplier_id,
-                old_stock_quantity,
-                new_stock_quantity,
-                old_stock_status,
-                new_stock_status,
-                old_availability_date,
-                new_availability_date,
-                stock_change_quantity,
-                changed_at,
-                supplier_url,
-                our_url,
-                raw_stock_data
-            ) VALUES (
-                NEW.user_id,
-                matched_product_id,
-                NEW.supplier_id,
-                current_stock_quantity,
-                NEW.stock_quantity,
-                current_stock_status,
-                standardized_status,
-                current_availability_date,
-                NEW.availability_date,
-                COALESCE(NEW.stock_quantity, 0) - COALESCE(current_stock_quantity, 0),
-                NOW(),
-                NEW.supplier_url,
-                (SELECT our_url FROM products WHERE id = matched_product_id),
-                NEW.raw_stock_data
-            );
-        END IF;
-    END IF;
-
-    -- IMMEDIATE CLEANUP: Delete the processed record from temp table
-    DELETE FROM temp_suppliers_scraped_data WHERE id = NEW.id;
     
-    -- Return NULL to prevent the INSERT (since we deleted the record)
-    RETURN NULL;
+    RETURN NEW;
 END;
 $$;
 
@@ -10056,7 +9934,7 @@ CREATE TABLE public.price_changes_suppliers (
     our_url text,
     CONSTRAINT check_exactly_one_source CHECK ((((supplier_id IS NOT NULL) AND (integration_id IS NULL)) OR ((supplier_id IS NULL) AND (integration_id IS NOT NULL)))),
     CONSTRAINT check_our_wholesale_price_has_integration_id CHECK ((((old_our_wholesale_price IS NULL) AND (new_our_wholesale_price IS NULL)) OR ((integration_id IS NOT NULL) AND (supplier_id IS NULL)))),
-    CONSTRAINT check_supplier_price_consistency CHECK (((old_supplier_price IS NULL) = (new_supplier_price IS NULL))),
+    CONSTRAINT check_supplier_price_consistency CHECK ((((old_supplier_price IS NULL) AND (new_supplier_price IS NULL)) OR ((old_supplier_price IS NULL) AND (new_supplier_price IS NOT NULL)) OR ((old_supplier_price IS NOT NULL) AND (new_supplier_price IS NOT NULL)) OR ((old_supplier_price IS NOT NULL) AND (new_supplier_price IS NULL)))),
     CONSTRAINT check_supplier_price_has_supplier_id CHECK ((((old_supplier_price IS NULL) AND (new_supplier_price IS NULL)) OR ((supplier_id IS NOT NULL) AND (integration_id IS NULL)))),
     CONSTRAINT price_changes_suppliers_change_source_check CHECK ((change_source = ANY (ARRAY['manual'::text, 'csv'::text, 'scraper'::text, 'integration'::text])))
 );
@@ -12964,6 +12842,13 @@ CREATE TRIGGER auto_process_temp_competitors_trigger AFTER INSERT ON public.temp
 --
 
 CREATE TRIGGER auto_process_temp_integrations_trigger AFTER INSERT ON public.temp_integrations_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_integrations_scraped_data();
+
+
+--
+-- Name: temp_suppliers_scraped_data auto_process_temp_suppliers_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER auto_process_temp_suppliers_trigger AFTER INSERT ON public.temp_suppliers_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_suppliers_scraped_data_trigger();
 
 
 --
