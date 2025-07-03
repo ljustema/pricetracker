@@ -143,7 +143,8 @@ export class ScraperClientService {
    * Create a script-based scraper (Python or TypeScript)
    */
   static async createScriptScraper(config: {
-    competitor_id: string;
+    competitor_id?: string; // Made optional for supplier scrapers
+    supplier_id?: string; // Added for supplier scrapers
     url: string;
     scraper_type: 'python' | 'typescript'; // Updated type
     scriptContent: string;
@@ -163,6 +164,7 @@ export class ScraperClientService {
       },
       body: JSON.stringify({
         competitor_id: config.competitor_id,
+        supplier_id: config.supplier_id,
         url: config.url,
         scraper_type: config.scraper_type, // Use updated type 'typescript'
         schedule: config.schedule,

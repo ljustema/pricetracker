@@ -47,8 +47,12 @@ function formatExecutionTime(milliseconds?: number): string {
 
 export default function ScrapersPage() {
   const { data: session, status } = useSession(); // Use client hook
-  // Combined scraper and competitor data state
-  const [scraperData, setScraperData] = useState<(ScraperConfig & { competitor: { name: string; website: string } | null })[]>([]);
+  // Combined scraper and competitor/supplier data state
+  const [scraperData, setScraperData] = useState<(ScraperConfig & {
+    competitor: { name: string; website: string } | null;
+    supplier: { name: string; website: string } | null;
+    scraper_target_type: 'competitor' | 'supplier';
+  })[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [selectedScraperId, setSelectedScraperId] = useState<string | null>(null);
@@ -184,7 +188,7 @@ export default function ScrapersPage() {
                   scope="col"
                   className="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
                 >
-                  Competitor
+                  Target
                 </th>
                 <th
                   scope="col"
@@ -245,8 +249,22 @@ export default function ScrapersPage() {
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-4">
-                      <div className="text-sm text-gray-900">
-                        {scraper.competitor?.name ?? "Unknown"}
+                      <div className="flex items-center space-x-2">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
+                            scraper.scraper_target_type === 'competitor'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-green-100 text-green-800'
+                          }`}
+                        >
+                          {scraper.scraper_target_type === 'competitor' ? 'Competitor' : 'Supplier'}
+                        </span>
+                        <span className="text-sm text-gray-900">
+                          {scraper.scraper_target_type === 'competitor'
+                            ? (scraper.competitor?.name ?? "Unknown")
+                            : (scraper.supplier?.name ?? "Unknown")
+                          }
+                        </span>
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-4">

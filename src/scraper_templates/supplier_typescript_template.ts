@@ -76,7 +76,21 @@ interface ScriptContext {
     ownProductSkuBrands?: { sku: string; brand: string }[];
     scrapeOnlyOwnProducts?: boolean;
     isTestRun?: boolean;
+    isValidation?: boolean; // Added for validation mode
     run_id?: string;
+    // Supplier information provided by the worker from database
+    supplierInfo?: {
+        id: string;
+        name: string;
+        website?: string;
+        login_url?: string;
+        login_username?: string;
+        login_password?: string;
+        api_key?: string;
+        api_url?: string;
+        contact_email?: string;
+        notes?: string;
+    };
     // Worker might inject helper functions like log, safeFetch, dbClient etc.
     log?: (level: 'info' | 'warn' | 'error' | 'debug', message: string, data?: unknown) => void;
 }
@@ -142,10 +156,19 @@ async function scrape(context: ScriptContext): Promise<void> {
 
     // --- Extract context variables ---
     const isTestRun = context.isTestRun ?? false;
+    const isValidation = context.isValidation ?? false;
     const filterByActiveBrands = context.filterByActiveBrands ?? false;
     const activeBrandNames = filterByActiveBrands ? new Set(context.activeBrandNames || []) : null;
     const scrapeOnlyOwnProducts = context.scrapeOnlyOwnProducts ?? false;
     const ownProductEans = scrapeOnlyOwnProducts ? new Set(context.ownProductEans || []) : null;
+
+    // Handle validation mode - get real data but limit quantity
+    if (isValidation) {
+        logProgress("Validation mode detected - fetching real data with limited quantity");
+        // Continue with real scraping but limit the number of products
+        // Set isTestRun to true to limit products for validation
+        context.isTestRun = true;
+    }
 
     // --- Supplier Scraper Implementation ---
     // Replace this example logic with your actual supplier scraping code.
@@ -225,6 +248,13 @@ async function scrape(context: ScriptContext): Promise<void> {
                 raw_data: {} // Custom fields will be stored here
             };
 
+            // --- Price Validation (Required) ---
+            // Skip products with no valid price (validation requirement)
+            if (!supplierData.supplier_price || supplierData.supplier_price <= 0) {
+                logProgress(`Skipping product - no valid price (${supplierData.supplier_price})`);
+                continue;
+            }
+
             // --- Filtering Logic (Optional) ---
             let passesFilter = true;
             if (filterByActiveBrands && activeBrandNames) {
@@ -265,7 +295,7 @@ const argv = yargs(hideBin(process.argv))
     .command('scrape', 'Run the supplier scraper', (yargs: any) => {
         return yargs.option('context', {
             type: 'string',
-            description: 'JSON string containing execution context',
+            description: 'Base64 encoded JSON string containing execution context',
             demandOption: true,
         });
     })
@@ -293,15 +323,23 @@ const argv = yargs(hideBin(process.argv))
             let contextData: ScriptContext;
             const contextString = argv.context as string;
 
-            // First try to decode as Base64 (for TypeScript worker)
+            // Parse context - try Base64 first (most common), then direct JSON
             try {
+                // First try Base64 decoding (most common case for validation)
                 const jsonContext = Buffer.from(contextString, 'base64').toString('utf-8');
                 contextData = JSON.parse(jsonContext) as ScriptContext;
-            } catch (_decodeError) {
-                // If Base64 decoding fails, try parsing directly as JSON (for validation)
+                logProgress("Context parsed as Base64 encoded JSON");
+            } catch (base64ParseError) {
+                // If Base64 parsing fails, try direct JSON parsing
                 try {
                     contextData = JSON.parse(contextString) as ScriptContext;
-                } catch (_parseError) {
+                    logProgress("Context parsed as direct JSON");
+                } catch (directParseError) {
+                    logError("Failed to parse context", {
+                        base64ParseError: base64ParseError instanceof Error ? base64ParseError.message : String(base64ParseError),
+                        directParseError: directParseError instanceof Error ? directParseError.message : String(directParseError),
+                        contextPreview: contextString.substring(0, 100)
+                    });
                     throw new Error(`Failed to parse context: tried Base64 decoding and direct JSON parsing, both failed. Context starts with: ${contextString.substring(0, 20)}...`);
                 }
             }

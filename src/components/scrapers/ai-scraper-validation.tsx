@@ -70,8 +70,8 @@ export default function AiScraperValidation({
   };
 
   // Format price with currency code
-  const formatPrice = (price: number | null, currencyCode: string = 'SEK') => {
-    if (price === null) return 'N/A';
+  const formatPrice = (price: number | null | undefined, currencyCode: string = 'SEK') => {
+    if (price === null || price === undefined) return 'N/A';
 
     try {
       return new Intl.NumberFormat('sv-SE', {

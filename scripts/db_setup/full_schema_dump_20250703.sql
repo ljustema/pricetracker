@@ -10304,7 +10304,7 @@ CREATE TABLE public.scraper_runs (
 CREATE TABLE public.scrapers (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     user_id uuid NOT NULL,
-    competitor_id uuid NOT NULL,
+    competitor_id uuid,
     name text NOT NULL,
     url text NOT NULL,
     schedule jsonb NOT NULL,

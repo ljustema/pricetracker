@@ -275,7 +275,8 @@ export default function NewScraperPage() {
         }
         return (
           <ScriptScraperForm
-            competitorId={targetType === 'competitor' ? selectedTargetId || '' : ''}
+            competitorId={targetType === 'competitor' ? selectedTargetId || '' : undefined}
+            supplierId={targetType === 'supplier' ? selectedTargetId || '' : undefined}
             scraperType={selectedScriptType}
             onSuccess={() => router.push(`/app-routes/scrapers`)}
             onCancel={handleCancel}

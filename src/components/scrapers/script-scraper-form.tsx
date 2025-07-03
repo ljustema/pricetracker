@@ -4,11 +4,12 @@ import { useState, useEffect } from "react";
 import { ScraperClientService } from "@/lib/services/scraper-client-service";
 import { UploadIcon, CheckCircleIcon, XCircleIcon } from "lucide-react";
 // Removed unused import: import TestResultsModal from "./test-results-modal";
-import { ScrapedProduct } from "@/lib/services/scraper-service";
+import { ValidationProduct } from "@/lib/services/scraper-types";
 import Image from "next/image";
 
 interface ScriptScraperFormProps { // Renamed interface
-  competitorId: string;
+  competitorId?: string; // Made optional for supplier scrapers
+  supplierId?: string; // Added for supplier scrapers
   scraperType: 'python' | 'typescript'; // Added scraperType prop
   onSuccess: (scraperId: string) => void;
   onCancel: () => void;
@@ -19,6 +20,7 @@ interface ScriptScraperFormProps { // Renamed interface
 
 export default function ScriptScraperForm({ // Renamed component
   competitorId,
+  supplierId,
   scraperType, // Added scraperType prop
   onSuccess,
   onCancel,
@@ -26,7 +28,7 @@ export default function ScriptScraperForm({ // Renamed component
   isUpdate = false,
   scraperId,
 }: ScriptScraperFormProps) { // Use renamed interface
-  const [competitorName, setCompetitorName] = useState("");
+  const [targetName, setTargetName] = useState(""); // Renamed from competitorName to targetName
   const [scriptContent, setScriptContent] = useState(initialScript || ""); // Renamed state variable and setter
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   // Add state for template type selection with Crawlee as default
@@ -36,7 +38,7 @@ export default function ScriptScraperForm({ // Renamed component
   const [validationResult, setValidationResult] = useState<{
     success: boolean;
     logs?: { ts: string; lvl: string; phase: string; msg: string; data?: Record<string, unknown> }[]; // Use actual log object type
-    sampleProducts?: ScrapedProduct[]; // Array of sample products
+    sampleProducts?: ValidationProduct[]; // Array of sample products
     error?: string; // General error message for API failure or validation issues
     metadata?: { target_url?: string }; // Add metadata to validationResult
   } | null>(null);
@@ -56,38 +58,48 @@ export default function ScriptScraperForm({ // Renamed component
 
   // Fetch competitor name when component mounts
   useEffect(() => {
-    const fetchCompetitorName = async () => {
+    const fetchTargetName = async () => {
       try {
-        if (!competitorId) {
-          console.warn("No competitor ID provided");
+        let targetType: string;
+        let apiEndpoint: string;
+
+        if (competitorId) {
+          targetType = "competitor";
+          apiEndpoint = `/api/competitors/${competitorId}`;
+        } else if (supplierId) {
+          targetType = "supplier";
+          apiEndpoint = `/api/suppliers/${supplierId}`;
+        } else {
+          console.warn("No competitor ID or supplier ID provided");
           return;
         }
 
-        const response = await fetch(`/api/competitors/${competitorId}`);
+        const response = await fetch(apiEndpoint);
         if (response.ok) {
-          const competitor = await response.json();
-          if (competitor && competitor.name) {
-            setCompetitorName(competitor.name);
+          const target = await response.json();
+          if (target && target.name) {
+            setTargetName(target.name);
           } else {
-            console.error("Competitor data missing name property", competitor);
+            console.error(`${targetType} data missing name property`, target);
             // Set a fallback name to prevent UI issues
-            setCompetitorName("Unknown Competitor");
+            setTargetName(`Unknown ${targetType.charAt(0).toUpperCase() + targetType.slice(1)}`);
           }
         } else {
           const errorText = await response.text().catch(() => "No response body");
-          console.error(`Failed to fetch competitor name: HTTP ${response.status}`, errorText);
+          console.error(`Failed to fetch ${targetType} name: HTTP ${response.status}`, errorText);
           // Set a fallback name to prevent UI issues
-          setCompetitorName("Unknown Competitor");
+          setTargetName(`Unknown ${targetType.charAt(0).toUpperCase() + targetType.slice(1)}`);
         }
       } catch (error) {
-        console.error("Error fetching competitor name:", error);
+        const targetType = competitorId ? "competitor" : "supplier";
+        console.error(`Error fetching ${targetType} name:`, error);
         // Set a fallback name to prevent UI issues
-        setCompetitorName("Unknown Competitor");
+        setTargetName(`Unknown ${targetType.charAt(0).toUpperCase() + targetType.slice(1)}`);
       }
     };
 
-    fetchCompetitorName();
-  }, [competitorId]);
+    fetchTargetName();
+  }, [competitorId, supplierId]);
 
   // When editing, pre-fill url from initialData (if available)
   useEffect(() => {
@@ -146,6 +158,9 @@ export default function ScriptScraperForm({ // Renamed component
         body: JSON.stringify({
           scraper_type: scraperType,  // Ändrat från 'type'
           scriptContent: scriptContent, // Use renamed state variable
+          // Pass supplier/competitor ID for context
+          ...(competitorId && { competitorId }),
+          ...(supplierId && { supplierId }),
         }),
       });
 
@@ -256,6 +271,7 @@ export default function ScriptScraperForm({ // Renamed component
         // Create new scraper using the updated service method
         const scraper = await ScraperClientService.createScriptScraper({
           competitor_id: competitorId,
+          supplier_id: supplierId,
           url: urlToSave,
           scraper_type: scraperType,
           scriptContent: scriptContent,
@@ -302,12 +318,12 @@ export default function ScriptScraperForm({ // Renamed component
             <input
               id="name"
               type="text"
-              value={competitorName ? `${competitorName} ${scraperType === 'python' ? 'Python' : 'TypeScript'} Scraper X` : "Loading..."}
+              value={targetName ? `${targetName} ${scraperType === 'python' ? 'Python' : 'TypeScript'} Scraper X` : "Loading..."}
               disabled
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm bg-gray-100 text-gray-500 sm:text-sm"
             />
             <p className="mt-1 text-xs text-gray-500">
-              Name is auto-generated following the pattern: [Competitor Name] {scraperType === 'python' ? 'Python' : 'TypeScript'} Scraper X {/* Dynamic Name Pattern */}
+              Name is auto-generated following the pattern: [{supplierId ? 'Supplier' : 'Competitor'} Name] {scraperType === 'python' ? 'Python' : 'TypeScript'} Scraper X {/* Dynamic Name Pattern */}
               <br />
               The X will be replaced with the next available number (1, 2, 3, etc.)
             </p>
@@ -575,8 +591,15 @@ export default function ScriptScraperForm({ // Renamed component
                           </div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs">
-                          <div className={`${product.competitor_price !== undefined ? 'text-green-600 font-medium' : 'text-red-500'}`}>
-                            {product.competitor_price !== undefined ? product.competitor_price : 'Missing'}
+                          <div className={`${
+                            supplierId
+                              ? (product.supplier_price !== undefined ? 'text-green-600 font-medium' : 'text-red-500')
+                              : (product.competitor_price !== undefined ? 'text-green-600 font-medium' : 'text-red-500')
+                          }`}>
+                            {supplierId
+                              ? (product.supplier_price !== undefined ? product.supplier_price : 'Missing')
+                              : (product.competitor_price !== undefined ? product.competitor_price : 'Missing')
+                            }
                           </div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs">
@@ -600,12 +623,24 @@ export default function ScriptScraperForm({ // Renamed component
                           </div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs">
-                          <div className={`${(product as unknown as Record<string, unknown>).competitor_url as string ? 'text-blue-600 underline' : 'text-yellow-600 italic'}`}>
-                            {(product as unknown as Record<string, unknown>).competitor_url as string ? (
-                              <a href={(product as unknown as Record<string, unknown>).competitor_url as string} target="_blank" rel="noopener noreferrer" className="truncate block max-w-[100px]">
-                                {(product as unknown as Record<string, unknown>).competitor_url as string}
-                              </a>
-                            ) : 'Not set'}
+                          <div className={`${
+                            supplierId
+                              ? ((product as unknown as Record<string, unknown>).supplier_url as string ? 'text-blue-600 underline' : 'text-yellow-600 italic')
+                              : ((product as unknown as Record<string, unknown>).competitor_url as string ? 'text-blue-600 underline' : 'text-yellow-600 italic')
+                          }`}>
+                            {supplierId ? (
+                              (product as unknown as Record<string, unknown>).supplier_url as string ? (
+                                <a href={(product as unknown as Record<string, unknown>).supplier_url as string} target="_blank" rel="noopener noreferrer" className="truncate block max-w-[100px]">
+                                  {(product as unknown as Record<string, unknown>).supplier_url as string}
+                                </a>
+                              ) : 'Not set'
+                            ) : (
+                              (product as unknown as Record<string, unknown>).competitor_url as string ? (
+                                <a href={(product as unknown as Record<string, unknown>).competitor_url as string} target="_blank" rel="noopener noreferrer" className="truncate block max-w-[100px]">
+                                  {(product as unknown as Record<string, unknown>).competitor_url as string}
+                                </a>
+                              ) : 'Not set'
+                            )}
                           </div>
                         </td>
                       </tr>

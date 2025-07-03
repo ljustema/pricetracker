@@ -425,12 +425,13 @@ export class ScraperExecutionService {
    *
    * @param scraperType The type of the scraper ('python' or 'typescript').
    * @param scriptContent The raw script code to validate.
+   * @param context Optional context containing supplier/competitor information.
    * @returns A promise resolving to a ValidationResponse object.
    */
   static async validateScriptSynchronously(
     scraperType: 'python' | 'typescript',
-    scriptContent: string
-    // TODO: Add context flags (userId, filter flags) if needed for validation context
+    scriptContent: string,
+    context?: { supplierInfo?: Record<string, unknown>; competitorInfo?: Record<string, unknown> }
   ): Promise<ValidationResponse> {
     const logs: ValidationLog[] = [];
     const products: ValidationProduct[] = [];
@@ -739,23 +740,52 @@ export class ScraperExecutionService {
           isTestRun: true,
           filterByActiveBrands: false,
           scrapeOnlyOwnProducts: false,
+          // Include supplier/competitor information if available
+          ...(context?.supplierInfo && { supplierInfo: context.supplierInfo }),
+          ...(context?.competitorInfo && { competitorInfo: context.competitorInfo }),
           log: (level: string, message: string, data?: unknown) => {
             addLog(level.toUpperCase() as ValidationLog['lvl'], 'SCRIPT_LOG', message, data as Record<string, unknown>);
           }
         };
 
-        // Properly escape the JSON string for command line
+        // Use Base64 encoding to compress context and avoid command line buffer overflow
         const contextJson = JSON.stringify(validationContext);
+        const contextBase64 = Buffer.from(contextJson, 'utf-8').toString('base64');
 
-        // On Windows, use double quotes outside and escaped double quotes for the JSON
-        // On other platforms, use single quotes outside and double quotes for the JSON
-        const escapedJson = process.platform === 'win32'
-          ? `"${contextJson.replace(/"/g, '\\"')}"`
-          : `'${contextJson}'`;
+        let scrapeCommand: string;
 
-        const scrapeCommand = `node "${tempJsFilePath}" scrape --context=${escapedJson}`;
+        // Check if Base64 context is still too large for command line
+        if (contextBase64.length > 8000) { // Conservative limit for Windows
+          addLog('WARN', 'TYPESCRIPT_VALIDATION', `Context is very large (${contextBase64.length} chars), truncating supplier info for validation`);
 
-        addLog('INFO', 'TYPESCRIPT_VALIDATION', `Executing scrape command with validation context: ${scrapeCommand}`);
+          // Create a minimal context for validation
+          const minimalContext = {
+            isValidation: validationContext.isValidation,
+            isTestRun: validationContext.isTestRun,
+            filterByActiveBrands: validationContext.filterByActiveBrands,
+            scrapeOnlyOwnProducts: validationContext.scrapeOnlyOwnProducts,
+            // Include only essential supplier info
+            supplierInfo: context?.supplierInfo ? {
+              id: context.supplierInfo.id,
+              name: context.supplierInfo.name,
+              login_url: context.supplierInfo.login_url,
+              login_username: context.supplierInfo.login_username,
+              login_password: context.supplierInfo.login_password,
+              website: context.supplierInfo.website
+            } : undefined
+          };
+
+          const minimalContextJson = JSON.stringify(minimalContext);
+          const minimalContextBase64 = Buffer.from(minimalContextJson, 'utf-8').toString('base64');
+
+          addLog('INFO', 'TYPESCRIPT_VALIDATION', `Using minimal context (${minimalContextBase64.length} chars)`);
+
+          scrapeCommand = `node "${tempJsFilePath}" scrape --context="${minimalContextBase64}"`;
+          addLog('INFO', 'TYPESCRIPT_VALIDATION', `Executing scrape command with minimal validation context`);
+        } else {
+          scrapeCommand = `node "${tempJsFilePath}" scrape --context="${contextBase64}"`;
+          addLog('INFO', 'TYPESCRIPT_VALIDATION', `Executing scrape command with full validation context`);
+        }
 
         let scriptOutput: string;
         try {
@@ -927,17 +957,26 @@ export class ScraperExecutionService {
 
         // Validate that products have required fields
         // (We already checked that parsedProducts.length > 0)
-        // Check for new field names only: competitor_price and currency_code
+        // Check for required fields: name and either competitor_price OR supplier_price
         const invalidProducts = parsedProducts.filter(p => {
           const hasName = !!p.name;
-          const hasCompetitorPrice = p.competitor_price !== undefined && p.competitor_price !== null;
-          return !hasName || !hasCompetitorPrice;
+          const hasCompetitorPrice = p.competitor_price !== undefined && p.competitor_price !== null && p.competitor_price > 0;
+          const hasSupplierPrice = p.supplier_price !== undefined && p.supplier_price !== null && p.supplier_price > 0;
+          const hasValidPrice = hasCompetitorPrice || hasSupplierPrice;
+          return !hasName || !hasValidPrice;
         });
+
         if (invalidProducts.length > 0) {
-          addLog('ERROR', 'TYPESCRIPT_VALIDATION', `${invalidProducts.length} products are missing required fields (name, competitor_price).`);
+          // Log details about the first few invalid products for debugging
+          const sampleInvalid = invalidProducts.slice(0, 3);
+          for (const product of sampleInvalid) {
+            addLog('DEBUG', 'TYPESCRIPT_VALIDATION', `Invalid product sample: name="${product.name}", competitor_price=${product.competitor_price}, supplier_price=${product.supplier_price}`);
+          }
+
+          addLog('ERROR', 'TYPESCRIPT_VALIDATION', `${invalidProducts.length} products are missing required fields (name, and either competitor_price or supplier_price > 0).`);
           return {
             valid: false,
-            error: 'Validation failed: Some products are missing required fields (name, competitor_price).',
+            error: 'Validation failed: Some products are missing required fields (name, and either competitor_price or supplier_price > 0).',
             logs,
             products: parsedProducts,
             metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined

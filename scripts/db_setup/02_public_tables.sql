@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-07-02 11:29:33
+-- Generated: 2025-07-03 11:48:45
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -980,7 +980,7 @@ CREATE TABLE public.scraper_runs (
 CREATE TABLE public.scrapers (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     user_id uuid NOT NULL,
-    competitor_id uuid NOT NULL,
+    competitor_id uuid,
     name text NOT NULL,
     url text NOT NULL,
     schedule jsonb NOT NULL,

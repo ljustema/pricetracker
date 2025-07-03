@@ -16,12 +16,17 @@ export async function GET(_request: NextRequest) { // Prefix unused variable
     // Fetch scrapers using the service
     const scrapers = await ScraperService.getScrapersByUser(userId);
 
-    // Fetch associated competitors
+    // Fetch associated competitors and suppliers
     const competitorIds = [...new Set(scrapers.map(scraper => scraper.competitor_id).filter(id => !!id))];
-    let competitorsMap: Record<string, { id: string; name: string; website: string }> = {};
+    const supplierIds = [...new Set(scrapers.map(scraper => scraper.supplier_id).filter(id => !!id))];
 
+    let competitorsMap: Record<string, { id: string; name: string; website: string }> = {};
+    let suppliersMap: Record<string, { id: string; name: string; website: string }> = {};
+
+    const supabaseAdmin = createSupabaseAdminClient(); // Use admin client here
+
+    // Fetch competitors
     if (competitorIds.length > 0) {
-      const supabaseAdmin = createSupabaseAdminClient(); // Use admin client here
       const { data: competitorsData, error: competitorsError } = await supabaseAdmin
         .from("competitors")
         .select("id, name, website")
@@ -30,11 +35,27 @@ export async function GET(_request: NextRequest) { // Prefix unused variable
 
       if (competitorsError) {
         console.error("Error fetching competitors in API route:", competitorsError);
-        // Decide if this should be a hard error or just return scrapers without competitors
-        // For now, continue but log the error
       } else if (competitorsData) {
         competitorsMap = competitorsData.reduce((acc, competitor) => {
           acc[competitor.id] = competitor;
+          return acc;
+        }, {} as Record<string, { id: string; name: string; website: string }>);
+      }
+    }
+
+    // Fetch suppliers
+    if (supplierIds.length > 0) {
+      const { data: suppliersData, error: suppliersError } = await supabaseAdmin
+        .from("suppliers")
+        .select("id, name, website")
+        .in("id", supplierIds)
+        .eq("user_id", userId); // Ensure user owns suppliers too
+
+      if (suppliersError) {
+        console.error("Error fetching suppliers in API route:", suppliersError);
+      } else if (suppliersData) {
+        suppliersMap = suppliersData.reduce((acc, supplier) => {
+          acc[supplier.id] = supplier;
           return acc;
         }, {} as Record<string, { id: string; name: string; website: string }>);
       }
@@ -44,6 +65,8 @@ export async function GET(_request: NextRequest) { // Prefix unused variable
     const responseData = scrapers.map(scraper => ({
       ...scraper,
       competitor: scraper.competitor_id ? competitorsMap[scraper.competitor_id] : null,
+      supplier: scraper.supplier_id ? suppliersMap[scraper.supplier_id] : null,
+      scraper_target_type: scraper.competitor_id ? 'competitor' : 'supplier',
     }));
 
     return NextResponse.json(responseData);

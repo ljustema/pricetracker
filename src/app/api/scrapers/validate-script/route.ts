@@ -8,6 +8,9 @@ import { ValidationResponse } from "@/lib/services/scraper-types"; // Import sha
 type ValidateScriptRequestBody = {
   scraper_type: 'python' | 'typescript'; // Enforce specific types
   scriptContent: string;
+  // Optional context for supplier/competitor scrapers
+  competitorId?: string;
+  supplierId?: string;
   // Add other potential context flags if needed for validation later
   // filter_by_active_brands?: boolean;
   // scrape_only_own_products?: boolean;
@@ -33,7 +36,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid request body: Malformed JSON." }, { status: 400 });
     }
 
-    const { scraper_type, scriptContent } = body;
+    const { scraper_type, scriptContent, competitorId, supplierId } = body;
 
     if (!scraper_type || (scraper_type !== 'python' && scraper_type !== 'typescript')) {
       return NextResponse.json({ error: "Missing or invalid 'scraper_type' (must be 'python' or 'typescript')" }, { status: 400 });
@@ -42,12 +45,64 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing or empty 'scriptContent'" }, { status: 400 });
     }
 
-    // 3. Call the synchronous validation service
+    // 3. Fetch supplier/competitor information if provided
+    let supplierInfo = null;
+    let competitorInfo = null;
+
+    if (supplierId) {
+      try {
+        // Import Supabase client
+        const { createClient } = await import('@supabase/supabase-js');
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+        const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+        if (supabaseUrl && supabaseServiceRoleKey) {
+          const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+          const { data } = await supabase
+            .from('suppliers')
+            .select('*')
+            .eq('id', supplierId)
+            .single();
+
+          if (data) {
+            supplierInfo = data;
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to fetch supplier info for validation:', error);
+      }
+    }
+
+    if (competitorId) {
+      try {
+        // Import Supabase client
+        const { createClient } = await import('@supabase/supabase-js');
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+        const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+        if (supabaseUrl && supabaseServiceRoleKey) {
+          const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+          const { data } = await supabase
+            .from('competitors')
+            .select('*')
+            .eq('id', competitorId)
+            .single();
+
+          if (data) {
+            competitorInfo = data;
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to fetch competitor info for validation:', error);
+      }
+    }
+
+    // 4. Call the synchronous validation service with context
     console.log(`Calling validation service for ${scraper_type} script...`);
     const validationResult: ValidationResponse = await ScraperExecutionService.validateScriptSynchronously(
       scraper_type,
-      scriptContent
-      // Pass context flags here if implemented in the service method
+      scriptContent,
+      { supplierInfo, competitorInfo } // Pass context
     );
     console.log(`Validation service returned: valid=${validationResult.valid}, error=${validationResult.error}`);
 

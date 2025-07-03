@@ -86,13 +86,21 @@ export interface ScrapedProductData {
 // Define expected product structure for validation results
 export interface ValidationProduct {
   name: string;
-  competitor_price: number | null; // Updated field name to match new pricing structure
-  currency_code?: string; // Updated field name to match new pricing structure
+  competitor_price?: number | null; // For competitor scrapers
+  supplier_price?: number | null; // For supplier scrapers
+  supplier_recommended_price?: number | null; // For supplier scrapers
+  currency_code?: string;
   url?: string;
+  supplier_url?: string; // For supplier scrapers
+  competitor_url?: string; // For competitor scrapers
   image_url?: string;
   sku?: string;
   brand?: string;
   ean?: string;
+  stock_quantity?: number | null; // For supplier scrapers
+  stock_status?: string; // For supplier scrapers
+  minimum_order_quantity?: number | null; // For supplier scrapers
+  lead_time_days?: number | null; // For supplier scrapers
   [key: string]: unknown; // Allow other potential fields
 }
 
