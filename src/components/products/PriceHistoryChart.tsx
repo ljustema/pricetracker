@@ -83,6 +83,9 @@ const PriceHistoryChart = ({
       const startDate = new Date(Math.min(...allChanges.map(c => new Date(c.changed_at).getTime())));
       const endDate = new Date();
 
+      // Set endDate to end of today to ensure today is included
+      endDate.setHours(23, 59, 59, 999);
+
       // Create a map of all dates in the range
       const allDates: string[] = [];
       const currentDate = new Date(startDate);
@@ -197,6 +200,9 @@ const PriceHistoryChart = ({
 
       const startDate = new Date(Math.min(...supplierPrices.map(c => new Date(c.changed_at).getTime())));
       const endDate = new Date();
+
+      // Set endDate to end of today to ensure today is included
+      endDate.setHours(23, 59, 59, 999);
 
       // Create a map of all dates in the range
       const allDates: string[] = [];

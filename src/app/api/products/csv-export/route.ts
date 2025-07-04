@@ -154,7 +154,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get custom fields for this user
-    const { data: customFields, error: customFieldsError } = await supabase
+    const { error: customFieldsError } = await supabase
       .from('product_custom_fields')
       .select('id, field_name')
       .eq('user_id', userId)
@@ -268,7 +268,7 @@ export async function POST(request: NextRequest) {
 
     // Collect all custom field names that have values in the current products
     customFieldMap.forEach(productFields => {
-      productFields.forEach((value, fieldName) => {
+      productFields.forEach((value: string, fieldName: string) => {
         if (value && value.trim() !== '') {
           usedCustomFields.add(fieldName);
         }

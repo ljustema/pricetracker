@@ -245,7 +245,8 @@ export default function ProductsContent({
       priceHigherThanCompetitors, // Add new price comparison filter
       inStockOnly, // Add new stock filter
       itemsPerPage, // Add itemsPerPage to trigger refetch when pagination size changes
-      cookieHeader // Keep cookieHeader dependency
+      cookieHeader, // Keep cookieHeader dependency
+      complexFilters // Add complexFilters dependency
     ]);
 
   // --- Start: Rendering Logic (Moved from ProductsPage) ---
