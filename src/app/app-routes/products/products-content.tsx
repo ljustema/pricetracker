@@ -20,6 +20,7 @@ interface ProductsContentProps {
   cookieHeader: string | null;
   initialCompetitors: Competitor[]; // Use the imported Competitor type
   initialBrands: { id: string; name: string }[];
+  initialSuppliers: { id: string; name: string }[];
   // Callback to update complex filters in the parent wrapper
   onComplexFilterChange: (newFilters: Partial<ComplexFiltersState>) => void;
 }
@@ -30,6 +31,7 @@ export default function ProductsContent({
   cookieHeader,
   initialCompetitors,
   initialBrands,
+  initialSuppliers,
   onComplexFilterChange, // Receive callback
 }: ProductsContentProps) {
 
@@ -43,6 +45,7 @@ export default function ProductsContent({
   // Use initial props for static data passed from server
   const competitors = initialCompetitors;
   const brands = initialBrands;
+  const suppliers = initialSuppliers;
   // Get itemsPerPage from complexFilters state instead of hardcoded value
   const itemsPerPage = complexFilters.itemsPerPage || 16;
   // --- End: Define constants and derived variables ---
@@ -64,7 +67,9 @@ export default function ProductsContent({
   const searchQuery = complexFilters.search || undefined;
   const showInactive = complexFilters.inactive;
   const sourceFilter = complexFilters.competitor && complexFilters.competitor.length > 0 ? complexFilters.competitor : undefined; // Using competitor filter for both competitors and integrations
+  const supplierFilter = complexFilters.supplier && complexFilters.supplier.length > 0 ? complexFilters.supplier : undefined; // New supplier filter
   const hasPriceFilter = complexFilters.has_price;
+  const notOurProductsFilter = complexFilters.not_our_products;
   const priceLowerThanCompetitors = complexFilters.price_lower_than_competitors;
   const priceHigherThanCompetitors = complexFilters.price_higher_than_competitors;
   const inStockOnly = complexFilters.in_stock_only;
@@ -85,7 +90,18 @@ export default function ProductsContent({
         const search = searchQuery;
         const isActive = !showInactive; // API expects isActive, derive from showInactive
         const sourceId = sourceFilter; // Use sourceId instead of competitor
+        const supplierId = supplierFilter; // Use supplierId for supplier filter
         const has_price = hasPriceFilter;
+        const not_our_products = notOurProductsFilter;
+
+        // Debug logging for filter issues
+        console.log('Filter Debug:', {
+          has_price,
+          not_our_products,
+          sourceId,
+          supplierId,
+          complexFilters: complexFilters
+        });
 
         // Fetch Paginated Products from API Route using POST
         const apiUrl = '/api/products'; // Base URL for the POST request
@@ -101,7 +117,9 @@ export default function ProductsContent({
           search: search,
           isActive: isActive, // Send boolean based on filter state
           sourceId: sourceId, // Use sourceId parameter
+          supplierId: supplierId, // Add new supplier filter parameter
           has_price: has_price, // Send boolean based on filter state
+          not_our_products: not_our_products, // Add new filter for products without our price
           price_lower_than_competitors: priceLowerThanCompetitors, // Add new price comparison filter
           price_higher_than_competitors: priceHigherThanCompetitors, // Add new price comparison filter
           in_stock_only: inStockOnly, // Add new stock filter
@@ -220,7 +238,9 @@ export default function ProductsContent({
       searchQuery,
       showInactive,
       sourceFilter,
+      supplierFilter, // Add missing supplier filter dependency
       hasPriceFilter,
+      notOurProductsFilter, // Add missing not_our_products filter dependency
       priceLowerThanCompetitors, // Add new price comparison filter
       priceHigherThanCompetitors, // Add new price comparison filter
       inStockOnly, // Add new stock filter
@@ -280,6 +300,7 @@ export default function ProductsContent({
           <ProductsFilter
             brands={brands}
             competitors={competitors as Competitor[]} // Assert type here if needed, already typed in props
+            suppliers={suppliers}
             currentFilters={complexFilters} // Pass complexFilters state down
             onComplexFilterChange={onComplexFilterChange} // Pass callback down
           />

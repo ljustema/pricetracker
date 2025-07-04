@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
       p_brand: body.brand || null,
       p_category: body.category || null,
       p_search: body.search || null,
-      p_is_active: body.isActive === 'true' ? true : (body.isActive === false ? false : null),
+      p_is_active: body.isActive === true ? true : (body.isActive === false ? false : null),
       p_competitor_ids: (() => {
         // Handle multiple competitor IDs - now using array parameter
         const competitorIds = body.sourceId;
@@ -61,9 +61,36 @@ export async function POST(request: NextRequest) {
         }
         return competitorIds ? [competitorIds] : null;
       })(),
-      p_has_price: body.hasPrice !== undefined ? body.hasPrice : null,
+      p_has_price: (() => {
+        // Handle price filter logic to match database function expectations
+        if (body.notOurProducts === true) {
+          return null; // When filtering for "not our products", p_has_price should be null
+        }
+        if (body.hasPrice === true) {
+          return true; // When filtering for "our products", p_has_price should be true
+        }
+        return null; // Default case - no price filter
+      })(),
+      p_not_our_products: (() => {
+        // Handle not our products filter logic
+        if (body.hasPrice === true) {
+          return null; // When filtering for "our products", p_not_our_products should be null
+        }
+        if (body.notOurProducts === true) {
+          return true; // When filtering for "not our products", p_not_our_products should be true
+        }
+        return null; // Default case - no filter
+      })(),
       p_price_lower_than_competitors: body.price_lower_than_competitors || null,
       p_price_higher_than_competitors: body.price_higher_than_competitors || null,
+      p_in_stock_only: body.in_stock_only === true ? true : null, // Add missing parameter
+      p_supplier_ids: (() => {
+        const supplierIds = body.supplierId;
+        if (Array.isArray(supplierIds)) {
+          return supplierIds.length > 0 ? supplierIds : null;
+        }
+        return supplierIds ? [supplierIds] : null;
+      })(),
     };
 
     // Fetch all products using pagination
@@ -147,7 +174,7 @@ export async function POST(request: NextRequest) {
     for (let i = 0; i < productIds.length; i += batchSize) {
       const batchIds = productIds.slice(i, i + batchSize);
 
-      const { data: batchCustomFieldValues, error: customFieldError } = await supabase
+      let query = supabase
         .from('product_custom_field_values')
         .select(`
           product_id,
@@ -157,7 +184,16 @@ export async function POST(request: NextRequest) {
             field_name
           )
         `)
-        .in('product_id', batchIds);
+        .in('product_id', batchIds)
+        .not('value', 'is', null) // Only get records with actual values
+        .neq('value', ''); // Exclude empty strings
+
+      // Add source type filter if requested
+      if (body.supplierFieldsOnly === true) {
+        query = query.eq('source_type', 'supplier');
+      }
+
+      const { data: batchCustomFieldValues, error: customFieldError } = await query;
 
       if (customFieldError) {
         console.error('Error fetching custom field values for batch:', customFieldError);
@@ -172,7 +208,7 @@ export async function POST(request: NextRequest) {
           }
           // Handle the nested structure from the join
           const fieldName = (cfv.product_custom_fields as unknown as { field_name: string } | null)?.field_name;
-          if (fieldName) {
+          if (fieldName && cfv.value && cfv.value.trim() !== '') {
             customFieldMap.get(cfv.product_id).set(fieldName, cfv.value);
           }
         });
@@ -226,8 +262,21 @@ export async function POST(request: NextRequest) {
 
 
 
-    // Add custom field headers
-    const customFieldHeaders = customFields ? customFields.map(cf => cf.field_name) : [];
+    // Add custom field headers - only include fields that have values in the current result set
+    const customFieldHeaders: string[] = [];
+    const usedCustomFields = new Set<string>();
+
+    // Collect all custom field names that have values in the current products
+    customFieldMap.forEach(productFields => {
+      productFields.forEach((value, fieldName) => {
+        if (value && value.trim() !== '') {
+          usedCustomFields.add(fieldName);
+        }
+      });
+    });
+
+    // Convert to sorted array for consistent column order
+    customFieldHeaders.push(...Array.from(usedCustomFields).sort());
 
     // Combine all headers
     const allHeaders = [...headers, ...Array.from(competitorPriceHeaders), ...customFieldHeaders];

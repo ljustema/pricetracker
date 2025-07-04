@@ -13,6 +13,7 @@ interface ProductsPageContentProps {
   // Assume these are fetched by a server parent and passed down
   initialCompetitors: Competitor[]; // Use the imported Competitor type
   initialBrands: { id: string; name: string }[];
+  initialSuppliers: { id: string; name: string }[];
   cookieHeader: string | null; // Still needed for the API call in ProductsContent
 }
 
@@ -31,6 +32,7 @@ export default function ProductsPageContent({
   onComplexFilterChange, // Receive the callback
   initialCompetitors,
   initialBrands,
+  initialSuppliers,
   cookieHeader,
 }: ProductsPageContentProps) {
 
@@ -51,6 +53,7 @@ export default function ProductsPageContent({
           onComplexFilterChange={onComplexFilterChange} // Pass callback down
           initialCompetitors={initialCompetitors}
           initialBrands={initialBrands}
+          initialSuppliers={initialSuppliers}
           cookieHeader={cookieHeader}
           // # Reason: No longer passing currentUrlSearchParams or initialSearchParams down.
           // ProductsContent will get URL params via the hook if needed for rendering.

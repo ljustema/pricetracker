@@ -520,7 +520,9 @@ export interface ProductFilters {
   search?: string;
   isActive?: boolean;
   sourceId?: string; // Can be either competitor_id or integration_id
+  supplierId?: string[]; // New filter for supplier IDs
   hasPrice?: boolean;
+  notOurProducts?: boolean; // New filter for products without our price
 }
 
 /**
@@ -545,6 +547,8 @@ export async function getFilteredProducts(
     p_is_active: filters.isActive !== undefined ? filters.isActive : null,
     p_competitor_ids: filters.sourceId ? [filters.sourceId] : null,
     p_has_price: filters.hasPrice !== undefined ? filters.hasPrice : null,
+    p_not_our_products: filters.notOurProducts !== undefined ? filters.notOurProducts : null,
+    p_supplier_ids: filters.supplierId && filters.supplierId.length > 0 ? filters.supplierId : null,
   });
 
   if (error) {

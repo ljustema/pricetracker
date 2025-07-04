@@ -83,11 +83,22 @@ export default function ProductsHeader() {
       }
       return undefined;
     })(),
+    supplierId: (() => {
+      // Handle multiple supplier IDs - pass all selected supplier IDs for CSV export
+      const supplierParam = searchParams.get('supplier');
+      if (supplierParam) {
+        const supplierIds = supplierParam.split(',').filter(Boolean);
+        return supplierIds.length > 0 ? supplierIds : undefined;
+      }
+      return undefined;
+    })(),
     hasPrice: searchParams.get('has_price') === 'true',
+    notOurProducts: searchParams.get('not_our_products') === 'true',
     sortBy: searchParams.get('sort') || 'created_at',
     sortOrder: searchParams.get('sortOrder') || 'desc',
     price_lower_than_competitors: searchParams.get('price_lower_than_competitors') === 'true',
     price_higher_than_competitors: searchParams.get('price_higher_than_competitors') === 'true',
+    in_stock_only: searchParams.get('in_stock_only') === 'true',
   };
 
   return (

@@ -59,11 +59,24 @@ export default async function ProductsPage(props: ProductsPageProps) {
   }
   const brands = (brandData || []).map(item => ({ name: item.name, id: item.id }));
 
-  // 3. Get Cookie Header
+  // 3. Fetch Suppliers
+  const { data: suppliersData, error: supplierError } = await supabase
+    .from('suppliers')
+    .select('id, name')
+    .eq('user_id', session.user.id)
+    .eq('is_active', true)
+    .order('name');
+
+  if (supplierError) {
+    console.error("Error fetching suppliers:", supplierError.message);
+  }
+  const suppliers = (suppliersData || []).map(item => ({ name: item.name, id: item.id }));
+
+  // 4. Get Cookie Header
   const requestHeaders = await headers(); // Added await back - it IS needed in Server Components
   const cookieHeader = requestHeaders.get('cookie');
 
-  // 4. No need to prepare URLSearchParams object here anymore.
+  // 5. No need to prepare URLSearchParams object here anymore.
   // We will pass the raw searchParams object directly.
   // --- End Server-Side Data Fetching ---
 
@@ -72,6 +85,7 @@ export default async function ProductsPage(props: ProductsPageProps) {
     <ProductsClientWrapper
       initialCompetitors={competitorsData || []}
       initialBrands={brands}
+      initialSuppliers={suppliers}
       cookieHeader={cookieHeader}
       searchParams={searchParams} // Pass the original plain object
     />

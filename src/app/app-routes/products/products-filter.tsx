@@ -32,6 +32,7 @@ function debounce<T extends (...args: any[]) => void>(func: T, delay: number) {
 interface ProductsFilterProps {
   brands: { id: string; name: string }[];
   competitors: { id: string; name: string }[];
+  suppliers: { id: string; name: string }[];
   // Receive current complex filter state from parent
   currentFilters: ComplexFiltersState;
   // Callback to notify parent of complex filter changes
@@ -41,6 +42,7 @@ interface ProductsFilterProps {
 export default function ProductsFilter({
   brands,
   competitors,
+  suppliers,
   currentFilters, // Use prop for current state
   onComplexFilterChange, // Use callback for changes
 }: ProductsFilterProps) {
@@ -102,9 +104,11 @@ export default function ProductsFilter({
     onComplexFilterChange({
       brand: "",
       competitor: [],
+      supplier: [], // Add missing supplier field
       search: "",
       inactive: false,
       has_price: false,
+      not_our_products: false, // Add missing not_our_products field
       price_lower_than_competitors: false,
       price_higher_than_competitors: false,
       in_stock_only: false,
@@ -178,7 +182,7 @@ export default function ProductsFilter({
         )}
       </form>
 
-      <div className="grid gap-4 md:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-6">
         <div>
           <label htmlFor="brand" className="block text-sm font-medium text-gray-700">
             Brand
@@ -217,6 +221,22 @@ export default function ProductsFilter({
             placeholder="All Competitors"
             label="Competitors"
             id="competitor"
+          />
+        </div>
+
+        <div>
+          <MultiSelectDropdown
+            options={suppliers}
+            selectedValues={currentFilters.supplier}
+            onChange={(selectedValues) => {
+              // # Reason: Update the complex filter state in the parent.
+              onComplexFilterChange({ supplier: selectedValues });
+              // # Reason: The URL update will be handled by the useEffect in ProductsClientWrapper,
+              // which reacts to changes in complexFilters.
+            }}
+            placeholder="All Suppliers"
+            label="Suppliers"
+            id="supplier"
           />
         </div>
 
@@ -265,6 +285,7 @@ export default function ProductsFilter({
             value={
               currentFilters.inactive ? "inactive" :
               currentFilters.has_price ? "our_products" :
+              currentFilters.not_our_products ? "not_our_products" :
               currentFilters.price_lower_than_competitors ? "price_lower" :
               currentFilters.price_higher_than_competitors ? "price_higher" :
               currentFilters.in_stock_only ? "in_stock" :
@@ -276,6 +297,7 @@ export default function ProductsFilter({
               const resetFilters = {
                 inactive: false,
                 has_price: false,
+                not_our_products: false,
                 price_lower_than_competitors: false,
                 price_higher_than_competitors: false,
                 in_stock_only: false
@@ -288,6 +310,9 @@ export default function ProductsFilter({
                   break;
                 case "our_products":
                   onComplexFilterChange({ ...resetFilters, has_price: true });
+                  break;
+                case "not_our_products":
+                  onComplexFilterChange({ ...resetFilters, not_our_products: true });
                   break;
                 case "price_lower":
                   onComplexFilterChange({ ...resetFilters, price_lower_than_competitors: true });
@@ -307,6 +332,7 @@ export default function ProductsFilter({
             <option value="all">All Products</option>
             <option value="inactive">Inactive Products</option>
             <option value="our_products">Our Products</option>
+            <option value="not_our_products">Not Our Products</option>
             <option value="price_lower">Price lower than competitor</option>
             <option value="price_higher">Price higher than competitor</option>
             <option value="in_stock">In Stock Only</option>

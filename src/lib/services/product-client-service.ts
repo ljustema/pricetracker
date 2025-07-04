@@ -369,11 +369,15 @@ export async function exportProductsCSV(filters: {
   search?: string;
   isActive?: boolean;
   sourceId?: string | string[];
+  supplierId?: string | string[];
   hasPrice?: boolean;
+  notOurProducts?: boolean;
   sortBy?: string;
   sortOrder?: string;
   price_lower_than_competitors?: boolean;
   price_higher_than_competitors?: boolean;
+  in_stock_only?: boolean;
+  supplierFieldsOnly?: boolean;
 } = {}): Promise<void> {
   try {
     const response = await fetch('/api/products/csv-export', {

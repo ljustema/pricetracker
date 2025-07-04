@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-07-03 16:46:41
+-- Generated: 2025-07-04 18:09:17
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -2294,42 +2294,34 @@ _result json;
 
 _safe_sort_by text;
 
-_products_data json;
-
 _order_clause text;
+
+_products_data json;
 
 _brand_uuid uuid;
 
 BEGIN
-    -- First ensure the user exists
-    PERFORM ensure_user_exists_simple(p_user_id);
-
--- Calculate offset and limit
+    -- Calculate offset and limit
     _offset := (p_page - 1) * p_page_size;
 
 _limit := p_page_size;
 
--- Validate and sanitize sort direction
-    _sort_direction := CASE WHEN UPPER(p_sort_order) = 'ASC' THEN 'ASC' ELSE 'DESC' END;
+-- Validate and set sort direction
+    _sort_direction := CASE 
+        WHEN LOWER(p_sort_order) = 'asc' THEN 'ASC'
+        ELSE 'DESC'
+    END;
 
--- Validate and sanitize sort field - ADD competitor_count support
+-- Validate sort column and set safe sort by
     _safe_sort_by := CASE 
-        WHEN p_sort_by IN ('name', 'created_at', 'updated_at', 'our_retail_price', 'stock_quantity', 'competitor_count') THEN p_sort_by
+        WHEN p_sort_by IN ('name', 'sku', 'ean', 'created_at', 'updated_at', 'our_retail_price') THEN p_sort_by
         ELSE 'created_at'
     END;
 
--- Build ORDER BY clause - Use correct aliases for the products_with_stock CTE
-    _order_clause := CASE 
-        WHEN _safe_sort_by = 'stock_quantity' THEN 'ps.max_stock_quantity ' || _sort_direction
-        WHEN _safe_sort_by = 'competitor_count' THEN 'pcc.competitor_count ' || _sort_direction
-        WHEN _safe_sort_by = 'name' THEN 'p.name ' || _sort_direction
-        WHEN _safe_sort_by = 'created_at' THEN 'p.created_at ' || _sort_direction
-        WHEN _safe_sort_by = 'updated_at' THEN 'p.updated_at ' || _sort_direction
-        WHEN _safe_sort_by = 'our_retail_price' THEN 'p.our_retail_price ' || _sort_direction
-        ELSE 'p.created_at DESC'
-    END;
+-- Build order clause
+    _order_clause := format('ORDER BY p.%I %s', _safe_sort_by, _sort_direction);
 
--- Try to parse p_brand as UUID, if it fails, treat it as a brand name
+-- Try to convert brand to UUID if it looks like one, otherwise keep as text for name search
     BEGIN
         _brand_uuid := p_brand::uuid;
 
@@ -2338,7 +2330,7 @@ EXCEPTION WHEN invalid_text_representation THEN
 
 END;
 
--- First, calculate stock quantities for all products
+-- Get total count using a CTE approach
     WITH product_stock AS (
         SELECT 
             p.id as product_id,
@@ -2359,7 +2351,6 @@ END;
         WHERE p.user_id = p_user_id
         GROUP BY p.id
     ),
-    -- Get total count using a CTE approach
     filtered_products AS (
         SELECT p.id
         FROM products p 
@@ -2371,7 +2362,7 @@ END;
             (_brand_uuid IS NOT NULL AND p.brand_id = _brand_uuid) OR
             (_brand_uuid IS NULL AND b.name ILIKE '%' || p_brand || '%')
         )
-        AND (p_category IS NULL OR p_category ILIKE '%' || p_category || '%')
+        AND (p_category IS NULL OR p.category ILIKE '%' || p_category || '%')
         AND (p_search IS NULL OR p.name ILIKE '%' || p_search || '%' OR p.sku ILIKE '%' || p_search || '%' OR p.ean ILIKE '%' || p_search || '%')
         AND (p_is_active IS NULL OR p.is_active = p_is_active)
         AND (p_competitor_ids IS NULL OR p.id IN (
@@ -2380,7 +2371,20 @@ END;
             WHERE pcc.user_id = p_user_id
             AND (pcc.competitor_id = ANY(p_competitor_ids) OR pcc.integration_id = ANY(p_competitor_ids))
         ))
-        AND (p_has_price IS NULL OR p_has_price = false OR p.our_retail_price IS NOT NULL)
+        -- Add supplier filter
+        AND (p_supplier_ids IS NULL OR p.id IN (
+            SELECT DISTINCT pcs.product_id
+            FROM price_changes_suppliers pcs
+            WHERE pcs.user_id = p_user_id
+            AND (pcs.supplier_id = ANY(p_supplier_ids) OR pcs.integration_id = ANY(p_supplier_ids))
+        ))
+        -- Updated price filter logic to handle both has_price and not_our_products
+        AND (
+            (p_has_price IS NULL AND p_not_our_products IS NULL) OR  -- No price filter
+            (p_has_price = true AND p_not_our_products IS NULL AND p.our_retail_price IS NOT NULL) OR  -- Our products only
+            (p_has_price IS NULL AND p_not_our_products = true AND p.our_retail_price IS NULL) OR  -- Not our products only
+            (p_has_price = false AND p_not_our_products = false)  -- All products (both false)
+        )
         -- Add stock filtering
         AND (p_in_stock_only IS NULL OR p_in_stock_only = false OR ps.has_stock = true)
         -- Add price comparison filters - only apply if the filter is true
@@ -2413,7 +2417,7 @@ END;
     )
     SELECT COUNT(*) INTO _total_count FROM filtered_products;
 
--- Get the actual data with competitor prices and stock using dynamic SQL
+-- Get the actual products data with all the complex joins and aggregations
     EXECUTE format('
         WITH product_stock AS (
             SELECT 
@@ -2435,36 +2439,55 @@ END;
             WHERE p.user_id = $1
             GROUP BY p.id
         ),
-        product_competitor_count AS (
+        products_with_prices AS (
             SELECT 
-                p.id as product_id,
-                COUNT(DISTINCT COALESCE(pcc.competitor_id, pcc.integration_id)) as competitor_count
-            FROM products p
-            LEFT JOIN price_changes_competitors pcc ON pcc.product_id = p.id 
-                AND pcc.user_id = $1
-                AND pcc.new_competitor_price IS NOT NULL
-                AND pcc.changed_at = (
-                    SELECT MAX(pcc2.changed_at) 
-                    FROM price_changes_competitors pcc2 
-                    WHERE pcc2.product_id = p.id 
-                    AND pcc2.user_id = $1
-                    AND COALESCE(pcc2.competitor_id, pcc2.integration_id) = COALESCE(pcc.competitor_id, pcc.integration_id)
-                )
-            WHERE p.user_id = $1
-            GROUP BY p.id
-        ),
-        products_with_stock AS (
-            SELECT 
-                p.id, p.name, p.sku, p.ean, p.brand_id, p.our_retail_price, p.our_wholesale_price, 
-                p.image_url, p.is_active, p.created_at, p.updated_at, p.user_id, p.category, p.our_url,
+                p.id,
+                p.name,
+                p.sku,
+                p.ean,
+                p.brand_id,
+                p.category,
+                p.our_retail_price,
+                p.image_url,
+                p.our_url,
+                p.is_active,
+                p.created_at,
+                p.updated_at,
                 b.name as brand_name,
-                ps.max_stock_quantity as stock_quantity,
                 ps.has_stock,
-                COALESCE(pcc.competitor_count, 0) as competitor_count
-            FROM products p 
+                ps.max_stock_quantity as stock_quantity,
+                COALESCE(
+                    json_agg(
+                        DISTINCT jsonb_build_object(
+                            ''competitor_id'', pcc.competitor_id,
+                            ''integration_id'', pcc.integration_id,
+                            ''competitor_name'', COALESCE(c.name, i.name),
+                            ''competitor_price'', pcc.new_competitor_price,
+                            ''competitor_url'', pcc.competitor_url,
+                            ''changed_at'', pcc.changed_at
+                        )
+                    ) FILTER (WHERE pcc.id IS NOT NULL), 
+                    ''[]''::json
+                ) as competitor_prices
+            FROM products p
             LEFT JOIN brands b ON p.brand_id = b.id
             LEFT JOIN product_stock ps ON p.id = ps.product_id
-            LEFT JOIN product_competitor_count pcc ON p.id = pcc.product_id
+            LEFT JOIN LATERAL (
+                SELECT DISTINCT ON (COALESCE(pcc_inner.competitor_id, pcc_inner.integration_id)) 
+                    pcc_inner.id,
+                    pcc_inner.competitor_id,
+                    pcc_inner.integration_id,
+                    pcc_inner.new_competitor_price,
+                    pcc_inner.competitor_url,
+                    pcc_inner.changed_at
+                FROM price_changes_competitors pcc_inner
+                WHERE pcc_inner.product_id = p.id 
+                AND pcc_inner.user_id = $1
+                AND pcc_inner.new_competitor_price IS NOT NULL
+                ORDER BY COALESCE(pcc_inner.competitor_id, pcc_inner.integration_id), pcc_inner.changed_at DESC
+            ) pcc ON true
+            LEFT JOIN competitors c ON pcc.competitor_id = c.id
+            LEFT JOIN integrations i ON pcc.integration_id = i.id
             WHERE p.user_id = $1
             AND (
                 $2 IS NULL OR 
@@ -2480,72 +2503,26 @@ END;
                 WHERE pcc.user_id = $1
                 AND (pcc.competitor_id = ANY($6) OR pcc.integration_id = ANY($6))
             ))
-            AND ($7 IS NULL OR $7 = false OR p.our_retail_price IS NOT NULL)
+            -- Add supplier filter
+            AND ($13 IS NULL OR p.id IN (
+                SELECT DISTINCT pcs.product_id
+                FROM price_changes_suppliers pcs
+                WHERE pcs.user_id = $1
+                AND (pcs.supplier_id = ANY($13) OR pcs.integration_id = ANY($13))
+            ))
+            -- Updated price filter logic to handle both has_price and not_our_products
+            AND (
+                ($7 IS NULL AND $12 IS NULL) OR  -- No price filter
+                ($7 = true AND $12 IS NULL AND p.our_retail_price IS NOT NULL) OR  -- Our products only
+                ($7 IS NULL AND $12 = true AND p.our_retail_price IS NULL) OR  -- Not our products only
+                ($7 = false AND $12 = false)  -- All products (both false)
+            )
             AND ($8 IS NULL OR $8 = false OR ps.has_stock = true)
-            ORDER BY %s
+            GROUP BY p.id, p.name, p.sku, p.ean, p.brand_id, p.category, p.our_retail_price, p.image_url, p.our_url, p.is_active, p.created_at, p.updated_at, b.name, ps.has_stock, ps.max_stock_quantity
+            %s
             LIMIT $10 OFFSET $11
-        ),
-        products_with_prices AS (
-            SELECT 
-                pws.id, pws.name, pws.sku, pws.ean, pws.brand_id, pws.brand_name, pws.our_retail_price, 
-                pws.our_wholesale_price, pws.image_url, pws.is_active, pws.created_at, pws.updated_at, 
-                pws.user_id, pws.category, pws.our_url, pws.stock_quantity, pws.competitor_count,
-                COALESCE(
-                    json_agg(
-                        DISTINCT jsonb_build_object(
-                            ''competitor_id'', pcc.competitor_id,
-                            ''integration_id'', pcc.integration_id,
-                            ''competitor_name'', COALESCE(c.name, i.name),
-                            ''competitor_price'', pcc.new_competitor_price,
-                            ''changed_at'', pcc.changed_at,
-                            ''competitor_url'', pcc.competitor_url,
-                            ''our_url'', pcc.our_url
-                        )
-                    ) FILTER (WHERE pcc.product_id IS NOT NULL AND pcc.new_competitor_price IS NOT NULL), 
-                    ''[]''::json
-                ) AS competitor_prices,
-                COALESCE(
-                    json_agg(
-                        DISTINCT jsonb_build_object(
-                            ''supplier_id'', pcs.supplier_id,
-                            ''integration_id'', pcs.integration_id,
-                            ''supplier_name'', COALESCE(s.name, si.name),
-                            ''supplier_price'', pcs.new_supplier_price,
-                            ''changed_at'', pcs.changed_at,
-                            ''supplier_url'', pcs.supplier_url,
-                            ''our_url'', pcs.our_url
-                        )
-                    ) FILTER (WHERE pcs.product_id IS NOT NULL AND pcs.new_supplier_price IS NOT NULL), 
-                    ''[]''::json
-                ) AS source_prices
-            FROM products_with_stock pws
-            LEFT JOIN price_changes_competitors pcc ON pws.id = pcc.product_id 
-                AND pcc.user_id = $1
-                AND pcc.changed_at = (
-                    SELECT MAX(pcc2.changed_at) 
-                    FROM price_changes_competitors pcc2 
-                    WHERE pcc2.product_id = pws.id 
-                    AND pcc2.user_id = $1
-                    AND COALESCE(pcc2.competitor_id, pcc2.integration_id) = COALESCE(pcc.competitor_id, pcc.integration_id)
-                )
-            LEFT JOIN competitors c ON pcc.competitor_id = c.id
-            LEFT JOIN integrations i ON pcc.integration_id = i.id
-            LEFT JOIN price_changes_suppliers pcs ON pws.id = pcs.product_id 
-                AND pcs.user_id = $1
-                AND pcs.changed_at = (
-                    SELECT MAX(pcs2.changed_at) 
-                    FROM price_changes_suppliers pcs2 
-                    WHERE pcs2.product_id = pws.id 
-                    AND pcs2.user_id = $1
-                    AND COALESCE(pcs2.supplier_id, pcs2.integration_id) = COALESCE(pcs.supplier_id, pcs.integration_id)
-                )
-            LEFT JOIN suppliers s ON pcs.supplier_id = s.id
-            LEFT JOIN integrations si ON pcs.integration_id = si.id
-            GROUP BY pws.id, pws.name, pws.sku, pws.ean, pws.brand_id, pws.brand_name, pws.our_retail_price, 
-                     pws.our_wholesale_price, pws.image_url, pws.is_active, pws.created_at, pws.updated_at, 
-                     pws.user_id, pws.category, pws.our_url, pws.stock_quantity, pws.competitor_count
         )
-        SELECT json_agg(
+        SELECT COALESCE(json_agg(
             json_build_object(
                 ''id'', pwp.id,
                 ''name'', pwp.name,
@@ -2553,24 +2530,21 @@ END;
                 ''ean'', pwp.ean,
                 ''brand_id'', pwp.brand_id,
                 ''brand_name'', pwp.brand_name,
+                ''category'', pwp.category,
                 ''our_retail_price'', pwp.our_retail_price,
-                ''our_wholesale_price'', pwp.our_wholesale_price,
                 ''image_url'', pwp.image_url,
+                ''our_url'', pwp.our_url,
                 ''is_active'', pwp.is_active,
                 ''created_at'', pwp.created_at,
                 ''updated_at'', pwp.updated_at,
-                ''user_id'', pwp.user_id,
-                ''category'', pwp.category,
-                ''our_url'', pwp.our_url,
                 ''competitor_prices'', pwp.competitor_prices,
-                ''source_prices'', pwp.source_prices,
-                ''stock_quantity'', pwp.stock_quantity,
-                ''competitor_count'', pwp.competitor_count
+                ''has_stock'', pwp.has_stock,
+                ''stock_quantity'', pwp.stock_quantity
             )
-        ) FROM products_with_prices pwp
+        ), ''[]''::json) FROM products_with_prices pwp
     ', _order_clause)
     INTO _products_data
-    USING p_user_id, p_brand, p_category, p_search, p_is_active, p_competitor_ids, p_has_price, p_in_stock_only, _brand_uuid, _limit, _offset;
+    USING p_user_id, p_brand, p_category, p_search, p_is_active, p_competitor_ids, p_has_price, p_in_stock_only, _brand_uuid, _limit, _offset, p_not_our_products, p_supplier_ids;
 
 -- Build the final result
     _result := json_build_object(

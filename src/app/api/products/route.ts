@@ -87,6 +87,19 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       // Convert has_price: Frontend sends true or undefined
       // Function expects true or null
       p_has_price: body.has_price === true ? true : null,
+      // Convert not_our_products: Frontend sends true or undefined
+      // Function expects true or null
+      p_not_our_products: body.not_our_products === true ? true : null,
+      // Convert supplier filter: Frontend sends array or undefined
+      // Function expects array or null
+      p_supplier_ids: (() => {
+        // Handle multiple supplier IDs - now using array parameter
+        const supplierIds = body.supplierId;
+        if (Array.isArray(supplierIds)) {
+          return supplierIds.length > 0 ? supplierIds : null;
+        }
+        return supplierIds ? [supplierIds] : null;
+      })(),
       // Add new price comparison filters
       p_price_lower_than_competitors: body.price_lower_than_competitors === true ? true : null,
       p_price_higher_than_competitors: body.price_higher_than_competitors === true ? true : null,

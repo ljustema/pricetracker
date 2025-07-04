@@ -9,9 +9,11 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { exportProductsCSV } from "@/lib/services/product-client-service";
 import { useToast } from "@/components/ui/use-toast";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 interface CSVExportDialogProps {
   open: boolean;
@@ -42,6 +44,9 @@ export default function CSVExportDialog({
   const { toast } = useToast();
   const router = useRouter();
 
+  // State for custom field source filter
+  const [supplierFieldsOnly, setSupplierFieldsOnly] = useState(false);
+
   // Check if any filters are active
   const hasActiveFilters = Object.entries(exportFilters).some(([key, value]) => {
     // Skip sort parameters as they're not really filters
@@ -52,7 +57,10 @@ export default function CSVExportDialog({
   const handleExportCSV = async () => {
     try {
       setIsExporting(true);
-      await exportProductsCSV(exportFilters);
+      await exportProductsCSV({
+        ...exportFilters,
+        supplierFieldsOnly
+      });
 
       toast({
         title: "Export Successful",
@@ -110,6 +118,27 @@ export default function CSVExportDialog({
             {hasActiveFilters
               ? "The CSV will include only the products that match your current filters."
               : "Without filters, the CSV will include all your products, which might be a large file."}
+          </p>
+        </div>
+
+        {/* Custom Fields Filter Option */}
+        <div className="py-4 border-t">
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="supplier-fields-only"
+              checked={supplierFieldsOnly}
+              onCheckedChange={(checked) => setSupplierFieldsOnly(checked as boolean)}
+            />
+            <label
+              htmlFor="supplier-fields-only"
+              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+            >
+              Include only supplier custom fields
+            </label>
+          </div>
+          <p className="text-xs text-gray-500 mt-1 ml-6">
+            When checked, only custom fields from suppliers will be included in the CSV.
+            Competitor and manual custom fields will be excluded.
           </p>
         </div>
 

@@ -156,8 +156,11 @@ export type Database = {
           p_is_active?: boolean
           p_competitor_ids?: string[]
           p_has_price?: boolean
+          p_not_our_products?: boolean
           p_price_lower_than_competitors?: boolean
           p_price_higher_than_competitors?: boolean
+          p_in_stock_only?: boolean
+          p_supplier_ids?: string[]
         }
         Returns: Json
       }

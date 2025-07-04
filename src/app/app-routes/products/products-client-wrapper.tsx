@@ -9,9 +9,11 @@ import ProductsPageContent from "./products-page-content";
 export interface ComplexFiltersState {
   brand: string;
   competitor: string[];  // Changed to array to support multiple competitors
+  supplier: string[];   // New filter for suppliers
   search: string;
   inactive: boolean;
   has_price: boolean;
+  not_our_products: boolean; // New filter for products without our price
   // # Reason: Add sort properties to ComplexFiltersState to manage sort state centrally.
   sortBy: string;
   sortOrder: 'asc' | 'desc';
@@ -29,6 +31,7 @@ interface ProductsClientWrapperProps {
   // Data fetched from the server parent
   initialCompetitors: Competitor[];
   initialBrands: { id: string; name: string }[];
+  initialSuppliers: { id: string; name: string }[];
   cookieHeader: string | null;
   // Accept the plain searchParams object from the server parent
   searchParams: { [key: string]: string | string[] | undefined };
@@ -46,6 +49,7 @@ function LoadingFallback() {
 export default function ProductsClientWrapper({
   initialCompetitors,
   initialBrands,
+  initialSuppliers,
   cookieHeader,
   searchParams: initialSearchParams // Receive plain object from server parent
 }: ProductsClientWrapperProps) {
@@ -63,9 +67,19 @@ export default function ProductsClientWrapper({
       }
       return [];
     })(),
+    supplier: (() => {
+      // Parse supplier parameter - can be comma-separated string or array
+      if (typeof initialSearchParams.supplier === 'string') {
+        return initialSearchParams.supplier ? initialSearchParams.supplier.split(',').filter(Boolean) : [];
+      } else if (Array.isArray(initialSearchParams.supplier)) {
+        return initialSearchParams.supplier.filter(Boolean);
+      }
+      return [];
+    })(),
     search: typeof initialSearchParams.search === 'string' ? initialSearchParams.search : "",
     inactive: initialSearchParams.inactive === "true",
     has_price: initialSearchParams.has_price === "true",
+    not_our_products: initialSearchParams.not_our_products === "true",
     // # Reason: Initialize sort properties from initialSearchParams.
     sortBy: typeof initialSearchParams.sort === 'string' ? initialSearchParams.sort : 'created_at',
     sortOrder: typeof initialSearchParams.sortOrder === 'string' && (initialSearchParams.sortOrder === 'asc' || initialSearchParams.sortOrder === 'desc') ? initialSearchParams.sortOrder : 'desc',
@@ -111,8 +125,10 @@ export default function ProductsClientWrapper({
       prevFiltersRef.current.search !== complexFilters.search ||
       prevFiltersRef.current.brand !== complexFilters.brand ||
       JSON.stringify(prevFiltersRef.current.competitor) !== JSON.stringify(complexFilters.competitor) ||
+      JSON.stringify(prevFiltersRef.current.supplier) !== JSON.stringify(complexFilters.supplier) ||
       prevFiltersRef.current.inactive !== complexFilters.inactive ||
       prevFiltersRef.current.has_price !== complexFilters.has_price ||
+      prevFiltersRef.current.not_our_products !== complexFilters.not_our_products ||
       prevFiltersRef.current.price_lower_than_competitors !== complexFilters.price_lower_than_competitors ||
       prevFiltersRef.current.price_higher_than_competitors !== complexFilters.price_higher_than_competitors ||
       prevFiltersRef.current.in_stock_only !== complexFilters.in_stock_only ||
@@ -135,6 +151,11 @@ export default function ProductsClientWrapper({
     } else {
       params.delete("competitor");
     }
+    if (complexFilters.supplier && complexFilters.supplier.length > 0) {
+      params.set("supplier", complexFilters.supplier.join(','));
+    } else {
+      params.delete("supplier");
+    }
     if (complexFilters.search) {
       params.set("search", complexFilters.search);
     } else {
@@ -149,6 +170,11 @@ export default function ProductsClientWrapper({
       params.set("has_price", "true");
     } else {
       params.delete("has_price");
+    }
+    if (complexFilters.not_our_products) {
+      params.set("not_our_products", "true");
+    } else {
+      params.delete("not_our_products");
     }
     // Add price comparison filters to URL
     if (complexFilters.price_lower_than_competitors) {
@@ -215,6 +241,7 @@ export default function ProductsClientWrapper({
         onComplexFilterChange={handleComplexFilterChange} // Pass callback down
         initialCompetitors={initialCompetitors}
         initialBrands={initialBrands}
+        initialSuppliers={initialSuppliers}
         cookieHeader={cookieHeader}
         // # Reason: No longer passing initialSearchParams or searchParams hook result down.
         // URL state management is centralized in ProductsClientWrapper.
