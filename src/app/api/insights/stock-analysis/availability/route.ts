@@ -19,7 +19,7 @@ interface AvailabilitySummary {
   totalProducts: number;
   totalInStock: number;
   totalOutOfStock: number;
-  overallAvailabilityPercentage: number;
+  overallInStockPercentage: number;
   bestPerformingBrand: string | null;
   bestPerformingBrandPercentage: number;
 }
@@ -67,14 +67,15 @@ export async function GET(request: NextRequest) {
 
     // Calculate summary statistics
     const typedData = (availabilityData || []) as BrandAvailabilityItem[];
+    const totalProducts = typedData.reduce((sum: number, item: BrandAvailabilityItem) => sum + (item.total_products || 0), 0);
+    const totalInStock = typedData.reduce((sum: number, item: BrandAvailabilityItem) => sum + (item.in_stock_products || 0), 0);
+
     const summary: AvailabilitySummary = {
       totalBrands: typedData.length,
-      totalProducts: typedData.reduce((sum: number, item: BrandAvailabilityItem) => sum + (item.total_products || 0), 0),
-      totalInStock: typedData.reduce((sum: number, item: BrandAvailabilityItem) => sum + (item.in_stock_products || 0), 0),
+      totalProducts,
+      totalInStock,
       totalOutOfStock: typedData.reduce((sum: number, item: BrandAvailabilityItem) => sum + (item.out_of_stock_products || 0), 0),
-      overallAvailabilityPercentage: typedData.length > 0
-        ? typedData.reduce((sum: number, item: BrandAvailabilityItem) => sum + (item.in_stock_percentage || 0), 0) / typedData.length
-        : 0,
+      overallInStockPercentage: totalProducts > 0 ? (totalInStock / totalProducts) * 100 : 0,
       bestPerformingBrand: typedData[0]?.brand || null,
       bestPerformingBrandPercentage: typedData[0]?.in_stock_percentage || 0
     };

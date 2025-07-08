@@ -6,15 +6,18 @@ import { ensureUUID } from '@/lib/utils/uuid';
 
 // Type definitions for turnover analysis data
 interface TurnoverAnalysisItem {
+  product_id: string;
   product_name: string;
   brand: string;
   sku: string;
+  total_sales: number;
+  avg_stock_level: number;
   current_stock: number;
   stock_turnover_ratio: number;
-  velocity_category: string;
   stock_status: string;
-  days_without_sales: number;
-  avg_daily_sales: number;
+  days_since_last_sale: number;
+  velocity_category: string;
+  last_sale_date: string | null;
 }
 
 interface TurnoverAnalysisSummary {
@@ -89,10 +92,13 @@ export async function GET(request: NextRequest) {
     const mediumMovers = typedData.filter((item: TurnoverAnalysisItem) => item.velocity_category === 'Medium Mover').length;
     const slowMovers = typedData.filter((item: TurnoverAnalysisItem) => item.velocity_category === 'Slow Mover').length;
 
+    // Calculate dead stock percentage based on products with current stock > 0
+    const productsWithStock = typedData.filter((item: TurnoverAnalysisItem) => item.current_stock > 0).length;
+
     const summary: TurnoverAnalysisSummary = {
       totalProducts: typedData.length,
       deadStockCount,
-      deadStockPercentage: typedData.length > 0 ? (deadStockCount / typedData.length) * 100 : 0,
+      deadStockPercentage: productsWithStock > 0 ? (deadStockCount / productsWithStock) * 100 : 0,
       fastMovers,
       mediumMovers,
       slowMovers,
@@ -190,7 +196,7 @@ export async function POST(request: NextRequest) {
           item.current_stock || 0,
           item.stock_turnover_ratio || 0,
           `"${item.stock_status || ''}"`,
-          item.days_without_sales || 0,
+          item.days_since_last_sale || 0,
           `"${item.velocity_category || ''}"`,
           '' // last_sale_date - not in our interface, using empty string
         ].join(','))

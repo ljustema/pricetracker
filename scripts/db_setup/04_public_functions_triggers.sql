@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-07-04 18:09:17
+-- Generated: 2025-07-08 10:11:16
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -580,11 +580,13 @@ CREATE FUNCTION public.ensure_one_active_scraper_per_competitor() RETURNS trigge
     SET search_path TO 'public'
     AS $$
 BEGIN
-  -- Ensure only one active scraper per competitor
+  -- Ensure only one active scraper per competitor or supplier
   IF NEW.is_active THEN
-    UPDATE scrapers
-    SET is_active = FALSE
-    WHERE competitor_id = NEW.competitor_id AND id <> NEW.id;
+    IF NEW.competitor_id IS NOT NULL THEN
+      -- Deactivate other scrapers for the same competitor
+      UPDATE scrapers
+      SET is_active = FALSE
+      WHERE competitor_id = NEW.competitor_id AND id <> NEW.id;
 
 --
 -- Name: ensure_user_exists_simple(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -828,6 +830,65 @@ DECLARE
     date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
 
 --
+-- Name: get_brand_products_with_stock(uuid, text, uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_products_with_stock(p_user_id uuid, p_brand text, p_competitor_id uuid DEFAULT NULL::uuid, p_stock_status text DEFAULT 'all'::text) RETURNS TABLE(product_id uuid, product_name text, brand text, sku text, current_stock integer, current_price numeric, competitor_name text, in_stock_flag boolean, last_updated timestamp with time zone)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_stock AS (
+        SELECT DISTINCT ON (sc.product_id, sc.competitor_id)
+            sc.product_id,
+            sc.competitor_id,
+            sc.new_stock_quantity,
+            sc.new_stock_status,
+            sc.changed_at
+        FROM stock_changes_competitors sc
+        WHERE sc.user_id = p_user_id
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+        ORDER BY sc.product_id, sc.competitor_id, sc.changed_at DESC
+    ),
+    latest_prices AS (
+        SELECT DISTINCT ON (pc.product_id, pc.competitor_id)
+            pc.product_id,
+            pc.competitor_id,
+            pc.new_competitor_price,
+            pc.changed_at
+        FROM price_changes_competitors pc
+        WHERE pc.user_id = p_user_id
+          AND (p_competitor_id IS NULL OR pc.competitor_id = p_competitor_id)
+        ORDER BY pc.product_id, pc.competitor_id, pc.changed_at DESC
+    )
+    SELECT 
+        p.id,
+        p.name,
+        p.brand,
+        p.sku,
+        COALESCE(ls.new_stock_quantity, 0)::integer,
+        lp.new_competitor_price,
+        c.name,
+        CASE 
+            WHEN ls.new_stock_quantity > 0 THEN true 
+            ELSE false 
+        END,
+        GREATEST(ls.changed_at, lp.changed_at)
+    FROM products p
+    LEFT JOIN latest_stock ls ON p.id = ls.product_id
+    LEFT JOIN latest_prices lp ON p.id = lp.product_id AND ls.competitor_id = lp.competitor_id
+    LEFT JOIN competitors c ON ls.competitor_id = c.id
+    WHERE p.user_id = p_user_id
+      AND p.brand = p_brand
+      AND (
+          p_stock_status = 'all' OR
+          (p_stock_status = 'in_stock' AND ls.new_stock_quantity > 0) OR
+          (p_stock_status = 'out_of_stock' AND (ls.new_stock_quantity = 0 OR ls.new_stock_quantity IS NULL))
+      )
+    ORDER BY ls.new_stock_quantity DESC NULLS LAST, p.name ASC;
+
+--
 -- Name: get_brand_stock_availability(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -872,7 +933,11 @@ BEGIN
             ELSE 0 
         END as out_of_stock_percentage
     FROM brand_availability ba
-    ORDER BY ba.in_stock_percentage DESC;
+    ORDER BY 
+        CASE 
+            WHEN ba.total_products > 0 THEN (ba.in_stock_products::NUMERIC / ba.total_products * 100)
+            ELSE 0 
+        END DESC;
 
 --
 -- Name: FUNCTION get_brand_stock_availability(p_user_id uuid, p_competitor_id uuid); Type: COMMENT; Schema: public; Owner: -
@@ -1080,20 +1145,20 @@ CREATE FUNCTION public.get_current_stock_analysis(p_user_id uuid, p_competitor_i
 BEGIN
     RETURN QUERY
     WITH current_stock AS (
-        SELECT DISTINCT ON (product_id, competitor_id)
-            product_id, 
-            competitor_id, 
-            new_stock_quantity, 
-            new_stock_status
-        FROM stock_changes_competitors
-        WHERE user_id = p_user_id 
-          AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
-        ORDER BY product_id, competitor_id, changed_at DESC
+        SELECT DISTINCT ON (scc.product_id, scc.competitor_id)
+            scc.product_id, 
+            scc.competitor_id, 
+            scc.new_stock_quantity, 
+            scc.new_stock_status
+        FROM stock_changes_competitors scc
+        WHERE scc.user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR scc.competitor_id = p_competitor_id)
+        ORDER BY scc.product_id, scc.competitor_id, scc.changed_at DESC
     ),
     stock_analysis AS (
         SELECT 
-            p.id,
-            p.name,
+            p.id as product_id,
+            p.name as product_name,
             p.brand,
             p.sku,
             cs.new_stock_quantity as current_stock,
@@ -1103,12 +1168,12 @@ BEGIN
         FROM current_stock cs
         JOIN products p ON cs.product_id = p.id
         LEFT JOIN LATERAL (
-            SELECT new_competitor_price
-            FROM price_changes_competitors pc2
-            WHERE pc2.product_id = p.id 
-              AND pc2.user_id = p_user_id
-              AND (p_competitor_id IS NULL OR pc2.competitor_id = p_competitor_id)
-            ORDER BY pc2.changed_at DESC
+            SELECT pcc.new_competitor_price
+            FROM price_changes_competitors pcc
+            WHERE pcc.product_id = cs.product_id 
+              AND pcc.user_id = p_user_id
+              AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+            ORDER BY pcc.changed_at DESC
             LIMIT 1
         ) pc ON true
         WHERE (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
@@ -1116,13 +1181,13 @@ BEGIN
     totals AS (
         SELECT 
             COUNT(*) as total_products,
-            SUM(in_stock_flag) as products_in_stock,
-            SUM(inventory_value) as total_inventory_value
-        FROM stock_analysis
+            SUM(sa.in_stock_flag) as products_in_stock,
+            SUM(sa.inventory_value) as total_inventory_value
+        FROM stock_analysis sa
     )
     SELECT 
-        sa.id,
-        sa.name,
+        sa.product_id,
+        sa.product_name,
         sa.brand,
         sa.sku,
         sa.current_stock,
@@ -1144,7 +1209,7 @@ BEGIN
 -- Name: FUNCTION get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid, p_brand_filter text); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid, p_brand_filter text) IS 'Returns current stock levels, inventory values, and stock distribution analysis';
+COMMENT ON FUNCTION public.get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid, p_brand_filter text) IS 'Returns current stock levels, inventory values, and stock distribution analysis - Fixed ambiguous column reference';
 
 --
 -- Name: get_dismissed_product_duplicates(uuid); Type: FUNCTION; Schema: public; Owner: -

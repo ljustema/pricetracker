@@ -7,20 +7,22 @@ import { ensureUUID } from '@/lib/utils/uuid';
 // Type definitions for price range data
 interface PriceRangeItem {
   price_range: string;
+  unique_products: number;
   total_units_sold: number;
   total_revenue: number;
-  avg_price: number;
-  product_count: number;
+  avg_price_in_range: number;
+  revenue_percentage: number;
+  range_order: number;
 }
 
 interface PriceRangeSummary {
-  totalPriceRanges: number;
+  totalRanges: number;
   totalRevenue: number;
   totalUnits: number;
-  avgPriceAcrossAllSales: number;
-  mostPopularPriceRange: string | null;
+  avgPriceOverall: number;
+  mostPopularRange: string | null;
   mostPopularRangeUnits: number;
-  highestRevenuePriceRange: string | null;
+  highestRevenueRange: string | null;
   highestRevenueRangeAmount: number;
 }
 
@@ -81,13 +83,13 @@ export async function GET(request: NextRequest) {
       (current.total_revenue > prev.total_revenue) ? current : prev, typedData[0]) : null;
 
     const summary: PriceRangeSummary = {
-      totalPriceRanges: typedData.length,
+      totalRanges: typedData.length,
       totalRevenue,
       totalUnits,
-      avgPriceAcrossAllSales: totalUnits > 0 ? totalRevenue / totalUnits : 0,
-      mostPopularPriceRange: mostPopularRange?.price_range || null,
+      avgPriceOverall: totalUnits > 0 ? totalRevenue / totalUnits : 0,
+      mostPopularRange: mostPopularRange?.price_range || null,
       mostPopularRangeUnits: mostPopularRange?.total_units_sold || 0,
-      highestRevenuePriceRange: highestRevenueRange?.price_range || null,
+      highestRevenueRange: highestRevenueRange?.price_range || null,
       highestRevenueRangeAmount: highestRevenueRange?.total_revenue || 0
     };
 
@@ -162,12 +164,11 @@ export async function POST(request: NextRequest) {
         headers.join(','),
         ...typedExportData.map((item: PriceRangeItem) => [
           `"${item.price_range || ''}"`,
-          item.product_count || 0,
+          item.unique_products || 0,
           item.total_units_sold || 0,
           item.total_revenue || 0,
-          item.avg_price || 0,
-          // Calculate revenue percentage for export
-          ((item.total_revenue || 0) / typedExportData.reduce((sum, i) => sum + (i.total_revenue || 0), 0) * 100) || 0
+          item.avg_price_in_range || 0,
+          item.revenue_percentage || 0
         ].join(','))
       ];
 

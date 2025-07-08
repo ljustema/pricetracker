@@ -34,6 +34,8 @@ interface DonutChartProps {
   formatValue?: (value: number | string) => string;
   showLegend?: boolean;
   centerText?: string;
+  outerRadius?: number;
+  innerRadius?: number;
 }
 
 const COLORS = ['#10B981', '#EF4444', '#F59E0B', '#3B82F6'];
@@ -47,7 +49,9 @@ const DonutChart: React.FC<DonutChartProps> = ({
   colors = COLORS,
   formatValue,
   showLegend = true,
-  centerText
+  centerText,
+  outerRadius = 80,
+  innerRadius = 40
 }) => {
   const CustomTooltip = ({ active, payload }: DonutTooltipProps) => {
     if (active && payload && payload.length) {
@@ -106,8 +110,8 @@ const DonutChart: React.FC<DonutChartProps> = ({
             cx="50%"
             cy="50%"
             labelLine={false}
-            outerRadius={80}
-            innerRadius={40}
+            outerRadius={outerRadius}
+            innerRadius={innerRadius}
             fill="#8884d8"
             dataKey={dataKey}
             label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}

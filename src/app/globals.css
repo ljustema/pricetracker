@@ -119,3 +119,24 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Custom wide modal styles */
+.brand-stock-modal-wide {
+  width: 60vw !important;
+  max-width: none !important;
+  margin: 1vh auto !important;
+}
+
+/* Override dialog content width for brand stock modal */
+[data-radix-dialog-content].brand-stock-modal-wide {
+  width: 60vw !important;
+  max-width: none !important;
+}
+
+/* Ensure the dialog doesn't get constrained by parent containers */
+[data-radix-dialog-overlay] + [data-radix-dialog-content].brand-stock-modal-wide {
+  width: 60vw !important;
+  max-width: none !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+}

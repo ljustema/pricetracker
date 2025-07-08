@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-07-04 18:09:17
+-- Generated: 2025-07-08 10:11:16
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -1209,6 +1209,14 @@ END;
 
 $$;
 
+ELSIF NEW.supplier_id IS NOT NULL THEN
+      -- Deactivate other scrapers for the same supplier
+      UPDATE scrapers
+      SET is_active = FALSE
+      WHERE supplier_id = NEW.supplier_id AND id <> NEW.id;
+
+END IF;
+
 END IF;
 
 RETURN NEW;
@@ -1954,6 +1962,10 @@ END;
 
 $$;
 
+END;
+
+$$;
+
 date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
 
 date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
@@ -2241,17 +2253,17 @@ BEGIN
     ),
     range_analysis AS (
         SELECT 
-            price_range,
-            range_order,
-            COUNT(DISTINCT name) as unique_products,
-            SUM(units_sold) as total_units_sold,
-            SUM(revenue) as total_revenue,
-            AVG(new_competitor_price) as avg_price_in_range
-        FROM price_ranges
-        GROUP BY price_range, range_order
+            pr.price_range,
+            pr.range_order,
+            COUNT(DISTINCT pr.name) as unique_products,
+            SUM(pr.units_sold) as total_units_sold,
+            SUM(pr.revenue) as total_revenue,
+            AVG(pr.new_competitor_price) as avg_price_in_range
+        FROM price_ranges pr
+        GROUP BY pr.price_range, pr.range_order
     ),
     totals AS (
-        SELECT SUM(total_revenue) as grand_total_revenue FROM range_analysis
+        SELECT SUM(ra.total_revenue) as grand_total_revenue FROM range_analysis ra
     )
     SELECT 
         ra.price_range,
@@ -2724,19 +2736,19 @@ date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
 BEGIN
     RETURN QUERY
     WITH current_stock AS (
-        SELECT DISTINCT ON (product_id, competitor_id)
-            product_id, 
-            competitor_id, 
-            new_stock_quantity, 
-            changed_at
-        FROM stock_changes_competitors
-        WHERE user_id = p_user_id 
-          AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
-        ORDER BY product_id, competitor_id, changed_at DESC
+        SELECT DISTINCT ON (scc.product_id, scc.competitor_id)
+            scc.product_id, 
+            scc.competitor_id, 
+            scc.new_stock_quantity, 
+            scc.changed_at
+        FROM stock_changes_competitors scc
+        WHERE scc.user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR scc.competitor_id = p_competitor_id)
+        ORDER BY scc.product_id, scc.competitor_id, scc.changed_at DESC
     ),
     sales_data AS (
         SELECT 
-            product_id,
+            sc.product_id,
             SUM(ABS(sc.stock_change_quantity)) as total_sales,
             COUNT(DISTINCT DATE(sc.changed_at)) as active_sales_days,
             MIN(sc.changed_at) as first_sale,
@@ -2747,18 +2759,18 @@ BEGIN
           AND sc.changed_at >= date_filter_start
           AND sc.changed_at <= date_filter_end
           AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
-        GROUP BY product_id
+        GROUP BY sc.product_id
     ),
     stock_history AS (
         SELECT 
-            product_id,
-            AVG(new_stock_quantity) as avg_stock_level
-        FROM stock_changes_competitors
-        WHERE user_id = p_user_id 
-          AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
-          AND changed_at >= date_filter_start
-          AND changed_at <= date_filter_end
-        GROUP BY product_id
+            sch.product_id,
+            AVG(sch.new_stock_quantity) as avg_stock_level
+        FROM stock_changes_competitors sch
+        WHERE sch.user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR sch.competitor_id = p_competitor_id)
+          AND sch.changed_at >= date_filter_start
+          AND sch.changed_at <= date_filter_end
+        GROUP BY sch.product_id
     ),
     turnover_analysis AS (
         SELECT 
@@ -2774,26 +2786,29 @@ BEGIN
                 WHEN sh.avg_stock_level > 0 THEN sd.total_sales / sh.avg_stock_level 
                 ELSE 0 
             END as stock_turnover_ratio,
-            -- Dead Stock Indicator
+            -- Dead Stock Indicator: Only for products with current stock > 0
             CASE 
-                WHEN sd.last_sale < NOW() - INTERVAL '1 day' * p_dead_stock_days OR sd.last_sale IS NULL 
-                THEN 'Dead Stock' 
-                ELSE 'Active' 
+                WHEN cs.new_stock_quantity > 0 AND (sd.last_sale < NOW() - INTERVAL '1 day' * p_dead_stock_days OR sd.last_sale IS NULL)
+                THEN 'Dead Stock'
+                WHEN cs.new_stock_quantity > 0
+                THEN 'Active'
+                ELSE 'Out of Stock'
             END as stock_status,
             COALESCE(EXTRACT(DAYS FROM (NOW() - sd.last_sale))::INTEGER, 999) as days_since_last_sale,
-            -- Velocity categories
+            -- Velocity categories: Only for products with sales data
             CASE 
+                WHEN sd.total_sales IS NULL OR sd.active_sales_days IS NULL THEN 'No Sales Data'
                 WHEN COALESCE(sd.total_sales, 0) / NULLIF(sd.active_sales_days, 0) > 10 THEN 'Fast Mover'
                 WHEN COALESCE(sd.total_sales, 0) / NULLIF(sd.active_sales_days, 0) > 3 THEN 'Medium Mover'
                 ELSE 'Slow Mover'
             END as velocity_category,
-            sd.last_sale
+            sd.last_sale::timestamp without time zone
         FROM products p
         LEFT JOIN sales_data sd ON p.id = sd.product_id
         LEFT JOIN stock_history sh ON p.id = sh.product_id
         LEFT JOIN current_stock cs ON p.id = cs.product_id
         WHERE p.user_id = p_user_id
-          AND (cs.product_id IS NOT NULL OR sd.product_id IS NOT NULL)
+          AND cs.product_id IS NOT NULL  -- Only include products we have stock data for
     )
     SELECT 
         ta.id,

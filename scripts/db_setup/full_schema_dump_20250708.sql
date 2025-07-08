@@ -2101,11 +2101,19 @@ CREATE FUNCTION public.ensure_one_active_scraper_per_competitor() RETURNS trigge
     SET search_path TO 'public'
     AS $$
 BEGIN
-  -- Ensure only one active scraper per competitor
+  -- Ensure only one active scraper per competitor or supplier
   IF NEW.is_active THEN
-    UPDATE scrapers
-    SET is_active = FALSE
-    WHERE competitor_id = NEW.competitor_id AND id <> NEW.id;
+    IF NEW.competitor_id IS NOT NULL THEN
+      -- Deactivate other scrapers for the same competitor
+      UPDATE scrapers
+      SET is_active = FALSE
+      WHERE competitor_id = NEW.competitor_id AND id <> NEW.id;
+    ELSIF NEW.supplier_id IS NOT NULL THEN
+      -- Deactivate other scrapers for the same supplier
+      UPDATE scrapers
+      SET is_active = FALSE
+      WHERE supplier_id = NEW.supplier_id AND id <> NEW.id;
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -3006,6 +3014,68 @@ $$;
 
 
 --
+-- Name: get_brand_products_with_stock(uuid, text, uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_products_with_stock(p_user_id uuid, p_brand text, p_competitor_id uuid DEFAULT NULL::uuid, p_stock_status text DEFAULT 'all'::text) RETURNS TABLE(product_id uuid, product_name text, brand text, sku text, current_stock integer, current_price numeric, competitor_name text, in_stock_flag boolean, last_updated timestamp with time zone)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_stock AS (
+        SELECT DISTINCT ON (sc.product_id, sc.competitor_id)
+            sc.product_id,
+            sc.competitor_id,
+            sc.new_stock_quantity,
+            sc.new_stock_status,
+            sc.changed_at
+        FROM stock_changes_competitors sc
+        WHERE sc.user_id = p_user_id
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+        ORDER BY sc.product_id, sc.competitor_id, sc.changed_at DESC
+    ),
+    latest_prices AS (
+        SELECT DISTINCT ON (pc.product_id, pc.competitor_id)
+            pc.product_id,
+            pc.competitor_id,
+            pc.new_competitor_price,
+            pc.changed_at
+        FROM price_changes_competitors pc
+        WHERE pc.user_id = p_user_id
+          AND (p_competitor_id IS NULL OR pc.competitor_id = p_competitor_id)
+        ORDER BY pc.product_id, pc.competitor_id, pc.changed_at DESC
+    )
+    SELECT 
+        p.id,
+        p.name,
+        p.brand,
+        p.sku,
+        COALESCE(ls.new_stock_quantity, 0)::integer,
+        lp.new_competitor_price,
+        c.name,
+        CASE 
+            WHEN ls.new_stock_quantity > 0 THEN true 
+            ELSE false 
+        END,
+        GREATEST(ls.changed_at, lp.changed_at)
+    FROM products p
+    LEFT JOIN latest_stock ls ON p.id = ls.product_id
+    LEFT JOIN latest_prices lp ON p.id = lp.product_id AND ls.competitor_id = lp.competitor_id
+    LEFT JOIN competitors c ON ls.competitor_id = c.id
+    WHERE p.user_id = p_user_id
+      AND p.brand = p_brand
+      AND (
+          p_stock_status = 'all' OR
+          (p_stock_status = 'in_stock' AND ls.new_stock_quantity > 0) OR
+          (p_stock_status = 'out_of_stock' AND (ls.new_stock_quantity = 0 OR ls.new_stock_quantity IS NULL))
+      )
+    ORDER BY ls.new_stock_quantity DESC NULLS LAST, p.name ASC;
+END;
+$$;
+
+
+--
 -- Name: get_brand_stock_availability(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -3050,7 +3120,11 @@ BEGIN
             ELSE 0 
         END as out_of_stock_percentage
     FROM brand_availability ba
-    ORDER BY ba.in_stock_percentage DESC;
+    ORDER BY 
+        CASE 
+            WHEN ba.total_products > 0 THEN (ba.in_stock_products::NUMERIC / ba.total_products * 100)
+            ELSE 0 
+        END DESC;
 END;
 $$;
 
@@ -3384,20 +3458,20 @@ CREATE FUNCTION public.get_current_stock_analysis(p_user_id uuid, p_competitor_i
 BEGIN
     RETURN QUERY
     WITH current_stock AS (
-        SELECT DISTINCT ON (product_id, competitor_id)
-            product_id, 
-            competitor_id, 
-            new_stock_quantity, 
-            new_stock_status
-        FROM stock_changes_competitors
-        WHERE user_id = p_user_id 
-          AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
-        ORDER BY product_id, competitor_id, changed_at DESC
+        SELECT DISTINCT ON (scc.product_id, scc.competitor_id)
+            scc.product_id, 
+            scc.competitor_id, 
+            scc.new_stock_quantity, 
+            scc.new_stock_status
+        FROM stock_changes_competitors scc
+        WHERE scc.user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR scc.competitor_id = p_competitor_id)
+        ORDER BY scc.product_id, scc.competitor_id, scc.changed_at DESC
     ),
     stock_analysis AS (
         SELECT 
-            p.id,
-            p.name,
+            p.id as product_id,
+            p.name as product_name,
             p.brand,
             p.sku,
             cs.new_stock_quantity as current_stock,
@@ -3407,12 +3481,12 @@ BEGIN
         FROM current_stock cs
         JOIN products p ON cs.product_id = p.id
         LEFT JOIN LATERAL (
-            SELECT new_competitor_price
-            FROM price_changes_competitors pc2
-            WHERE pc2.product_id = p.id 
-              AND pc2.user_id = p_user_id
-              AND (p_competitor_id IS NULL OR pc2.competitor_id = p_competitor_id)
-            ORDER BY pc2.changed_at DESC
+            SELECT pcc.new_competitor_price
+            FROM price_changes_competitors pcc
+            WHERE pcc.product_id = cs.product_id 
+              AND pcc.user_id = p_user_id
+              AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+            ORDER BY pcc.changed_at DESC
             LIMIT 1
         ) pc ON true
         WHERE (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
@@ -3420,13 +3494,13 @@ BEGIN
     totals AS (
         SELECT 
             COUNT(*) as total_products,
-            SUM(in_stock_flag) as products_in_stock,
-            SUM(inventory_value) as total_inventory_value
-        FROM stock_analysis
+            SUM(sa.in_stock_flag) as products_in_stock,
+            SUM(sa.inventory_value) as total_inventory_value
+        FROM stock_analysis sa
     )
     SELECT 
-        sa.id,
-        sa.name,
+        sa.product_id,
+        sa.product_name,
         sa.brand,
         sa.sku,
         sa.current_stock,
@@ -3451,7 +3525,7 @@ $$;
 -- Name: FUNCTION get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid, p_brand_filter text); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid, p_brand_filter text) IS 'Returns current stock levels, inventory values, and stock distribution analysis';
+COMMENT ON FUNCTION public.get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid, p_brand_filter text) IS 'Returns current stock levels, inventory values, and stock distribution analysis - Fixed ambiguous column reference';
 
 
 --
@@ -3948,17 +4022,17 @@ BEGIN
     ),
     range_analysis AS (
         SELECT 
-            price_range,
-            range_order,
-            COUNT(DISTINCT name) as unique_products,
-            SUM(units_sold) as total_units_sold,
-            SUM(revenue) as total_revenue,
-            AVG(new_competitor_price) as avg_price_in_range
-        FROM price_ranges
-        GROUP BY price_range, range_order
+            pr.price_range,
+            pr.range_order,
+            COUNT(DISTINCT pr.name) as unique_products,
+            SUM(pr.units_sold) as total_units_sold,
+            SUM(pr.revenue) as total_revenue,
+            AVG(pr.new_competitor_price) as avg_price_in_range
+        FROM price_ranges pr
+        GROUP BY pr.price_range, pr.range_order
     ),
     totals AS (
-        SELECT SUM(total_revenue) as grand_total_revenue FROM range_analysis
+        SELECT SUM(ra.total_revenue) as grand_total_revenue FROM range_analysis ra
     )
     SELECT 
         ra.price_range,
@@ -4662,19 +4736,19 @@ DECLARE
 BEGIN
     RETURN QUERY
     WITH current_stock AS (
-        SELECT DISTINCT ON (product_id, competitor_id)
-            product_id, 
-            competitor_id, 
-            new_stock_quantity, 
-            changed_at
-        FROM stock_changes_competitors
-        WHERE user_id = p_user_id 
-          AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
-        ORDER BY product_id, competitor_id, changed_at DESC
+        SELECT DISTINCT ON (scc.product_id, scc.competitor_id)
+            scc.product_id, 
+            scc.competitor_id, 
+            scc.new_stock_quantity, 
+            scc.changed_at
+        FROM stock_changes_competitors scc
+        WHERE scc.user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR scc.competitor_id = p_competitor_id)
+        ORDER BY scc.product_id, scc.competitor_id, scc.changed_at DESC
     ),
     sales_data AS (
         SELECT 
-            product_id,
+            sc.product_id,
             SUM(ABS(sc.stock_change_quantity)) as total_sales,
             COUNT(DISTINCT DATE(sc.changed_at)) as active_sales_days,
             MIN(sc.changed_at) as first_sale,
@@ -4685,18 +4759,18 @@ BEGIN
           AND sc.changed_at >= date_filter_start
           AND sc.changed_at <= date_filter_end
           AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
-        GROUP BY product_id
+        GROUP BY sc.product_id
     ),
     stock_history AS (
         SELECT 
-            product_id,
-            AVG(new_stock_quantity) as avg_stock_level
-        FROM stock_changes_competitors
-        WHERE user_id = p_user_id 
-          AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
-          AND changed_at >= date_filter_start
-          AND changed_at <= date_filter_end
-        GROUP BY product_id
+            sch.product_id,
+            AVG(sch.new_stock_quantity) as avg_stock_level
+        FROM stock_changes_competitors sch
+        WHERE sch.user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR sch.competitor_id = p_competitor_id)
+          AND sch.changed_at >= date_filter_start
+          AND sch.changed_at <= date_filter_end
+        GROUP BY sch.product_id
     ),
     turnover_analysis AS (
         SELECT 
@@ -4712,26 +4786,29 @@ BEGIN
                 WHEN sh.avg_stock_level > 0 THEN sd.total_sales / sh.avg_stock_level 
                 ELSE 0 
             END as stock_turnover_ratio,
-            -- Dead Stock Indicator
+            -- Dead Stock Indicator: Only for products with current stock > 0
             CASE 
-                WHEN sd.last_sale < NOW() - INTERVAL '1 day' * p_dead_stock_days OR sd.last_sale IS NULL 
-                THEN 'Dead Stock' 
-                ELSE 'Active' 
+                WHEN cs.new_stock_quantity > 0 AND (sd.last_sale < NOW() - INTERVAL '1 day' * p_dead_stock_days OR sd.last_sale IS NULL)
+                THEN 'Dead Stock'
+                WHEN cs.new_stock_quantity > 0
+                THEN 'Active'
+                ELSE 'Out of Stock'
             END as stock_status,
             COALESCE(EXTRACT(DAYS FROM (NOW() - sd.last_sale))::INTEGER, 999) as days_since_last_sale,
-            -- Velocity categories
+            -- Velocity categories: Only for products with sales data
             CASE 
+                WHEN sd.total_sales IS NULL OR sd.active_sales_days IS NULL THEN 'No Sales Data'
                 WHEN COALESCE(sd.total_sales, 0) / NULLIF(sd.active_sales_days, 0) > 10 THEN 'Fast Mover'
                 WHEN COALESCE(sd.total_sales, 0) / NULLIF(sd.active_sales_days, 0) > 3 THEN 'Medium Mover'
                 ELSE 'Slow Mover'
             END as velocity_category,
-            sd.last_sale
+            sd.last_sale::timestamp without time zone
         FROM products p
         LEFT JOIN sales_data sd ON p.id = sd.product_id
         LEFT JOIN stock_history sh ON p.id = sh.product_id
         LEFT JOIN current_stock cs ON p.id = cs.product_id
         WHERE p.user_id = p_user_id
-          AND (cs.product_id IS NOT NULL OR sd.product_id IS NOT NULL)
+          AND cs.product_id IS NOT NULL  -- Only include products we have stock data for
     )
     SELECT 
         ta.id,

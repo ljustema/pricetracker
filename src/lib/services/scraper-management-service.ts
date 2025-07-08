@@ -6,7 +6,7 @@ export class ScraperManagementService {
   // The approval process now happens in the UI before saving to database
 
   /**
-   * Activate a scraper (deactivating others for the same competitor)
+   * Activate a scraper (deactivating others for the same competitor or supplier)
    */
   static async activateScraper(scraperId: string, userId: string) {
     // Use the Supabase ADMIN client to bypass RLS for server-side trusted mutation
@@ -29,15 +29,31 @@ export class ScraperManagementService {
       throw new Error('Scraper not found');
     }
 
-    // Deactivate other scrapers for the same competitor for this user
-    const { error: deactivateError } = await supabase
-      .from('scrapers')
-      .update({ is_active: false, updated_at: new Date().toISOString() })
-      .eq('competitor_id', scraper.competitor_id)
-      .eq('user_id', userId)
-      .neq('id', scraperId);
+    // Deactivate other scrapers for the same competitor or supplier for this user
+    let deactivateError = null;
+
+    if (scraper.competitor_id) {
+      // This is a competitor scraper - deactivate other scrapers for the same competitor
+      const { error } = await supabase
+        .from('scrapers')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('competitor_id', scraper.competitor_id)
+        .eq('user_id', userId)
+        .neq('id', scraperId);
+      deactivateError = error;
+    } else if (scraper.supplier_id) {
+      // This is a supplier scraper - deactivate other scrapers for the same supplier
+      const { error } = await supabase
+        .from('scrapers')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('supplier_id', scraper.supplier_id)
+        .eq('user_id', userId)
+        .neq('id', scraperId);
+      deactivateError = error;
+    }
 
     if (deactivateError) {
+      console.error('Error deactivating other scrapers:', deactivateError);
       throw new Error('Failed to deactivate other scrapers');
     }
 

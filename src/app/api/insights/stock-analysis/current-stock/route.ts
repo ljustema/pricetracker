@@ -61,13 +61,21 @@ export async function GET(request: NextRequest) {
 
     // Extract summary from the first row (all rows have the same totals)
     const firstRow = stockData?.[0];
+    const totalProducts = firstRow?.total_products || 0;
+    const productsInStock = firstRow?.products_in_stock || 0;
+    const productsOutOfStock = totalProducts - productsInStock;
+    const inStockPercentage = firstRow?.in_stock_percentage || 0;
+    const outOfStockPercentage = totalProducts > 0 ? ((productsOutOfStock / totalProducts) * 100) : 0;
+
     const summary = {
-      totalProducts: firstRow?.total_products || 0,
-      productsInStock: firstRow?.products_in_stock || 0,
-      inStockPercentage: firstRow?.in_stock_percentage || 0,
+      totalProducts,
+      productsInStock,
+      productsOutOfStock,
+      inStockPercentage,
+      outOfStockPercentage,
       totalInventoryValue: firstRow?.total_inventory_value || 0,
-      avgInventoryValuePerProduct: stockData?.length > 0 
-        ? (firstRow?.total_inventory_value || 0) / stockData.length 
+      avgStockLevel: stockData?.length > 0
+        ? stockData.reduce((sum: number, item: { current_stock?: number }) => sum + (item.current_stock || 0), 0) / stockData.length
         : 0
     };
 
