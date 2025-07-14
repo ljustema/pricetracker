@@ -248,6 +248,8 @@ export default function ProductsContent({
       priceLowerThanCompetitors, // Add new price comparison filter
       priceHigherThanCompetitors, // Add new price comparison filter
       inStockOnly, // Add new stock filter
+      ourProductsWithCompetitorPrices, // Add missing dependency
+      ourProductsWithSupplierPrices, // Add missing dependency
       itemsPerPage, // Add itemsPerPage to trigger refetch when pagination size changes
       cookieHeader, // Keep cookieHeader dependency
       complexFilters // Add complexFilters dependency

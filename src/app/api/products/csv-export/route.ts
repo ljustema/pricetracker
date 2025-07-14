@@ -206,24 +206,64 @@ export async function POST(request: NextRequest) {
 
       // Process this batch's results
       if (batchCustomFieldValues) {
-        batchCustomFieldValues.forEach(cfv => {
+        batchCustomFieldValues.forEach((cfv: {
+          product_id: string;
+          custom_field_id: string;
+          value: string;
+          product_custom_fields: { field_name: string }[];
+        }) => {
           if (!customFieldMap.has(cfv.product_id)) {
             customFieldMap.set(cfv.product_id, new Map());
           }
           // Handle the nested structure from the join
           const fieldName = (cfv.product_custom_fields as unknown as { field_name: string } | null)?.field_name;
           if (fieldName && cfv.value && cfv.value.trim() !== '') {
-            customFieldMap.get(cfv.product_id).set(fieldName, cfv.value);
+            customFieldMap.get(cfv.product_id)!.set(fieldName, cfv.value);
           }
         });
       }
     }
 
     // Fetch competitor and supplier prices and stock if needed
-    let competitorPricesMap = new Map<string, any[]>();
-    let supplierPricesMap = new Map<string, any[]>();
-    let competitorStockMap = new Map<string, any[]>();
-    let supplierStockMap = new Map<string, any[]>();
+    const competitorPricesMap = new Map<string, Array<{
+      competitor_id?: string;
+      integration_id?: string;
+      product_id: string;
+      source_name: string;
+      new_price: number;
+      new_competitor_price?: number;
+      new_our_retail_price?: number;
+      created_at: string;
+    }>>();
+    const supplierPricesMap = new Map<string, Array<{
+      supplier_id?: string;
+      integration_id?: string;
+      product_id: string;
+      source_name: string;
+      new_price: number;
+      new_supplier_price?: number;
+      new_supplier_recommended_price?: number;
+      created_at: string;
+    }>>();
+    const competitorStockMap = new Map<string, Array<{
+      competitor_id?: string;
+      integration_id?: string;
+      product_id: string;
+      source_name: string;
+      new_stock_quantity: number;
+      current_stock_quantity?: number;
+      created_at: string;
+    }>>();
+    const supplierStockMap = new Map<string, Array<{
+      supplier_id?: string;
+      integration_id?: string;
+      product_id: string;
+      source_name: string;
+      supplier_name?: string;
+      integration_name?: string;
+      new_stock_quantity: number;
+      created_at: string;
+    }>>();
 
     if (body.includeCompetitorPrices || body.includeSupplierPrices || body.includeCompetitorStock || body.includeSupplierStock) {
       // Get competitor prices using batch function in smaller chunks to avoid 1000 record limit
@@ -249,18 +289,32 @@ export async function POST(request: NextRequest) {
 
             if (allCompetitorPrices) {
               // Filter out our own integration prices - only include actual competitor prices
-              const competitorPrices = allCompetitorPrices.filter(price =>
+              const competitorPrices = allCompetitorPrices.filter((price: {
+                competitor_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_price: number;
+                created_at: string;
+              }) =>
                 price.competitor_id && !price.integration_id
               );
 
               console.log(`Fetched ${allCompetitorPrices.length} total price records, filtered to ${competitorPrices.length} competitor prices`);
 
               // Group by product_id
-              competitorPrices.forEach(price => {
+              competitorPrices.forEach((price: {
+                competitor_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_price: number;
+                created_at: string;
+              }) => {
                 if (!competitorPricesMap.has(price.product_id)) {
                   competitorPricesMap.set(price.product_id, []);
                 }
-                competitorPricesMap.get(price.product_id).push(price);
+                competitorPricesMap.get(price.product_id)!.push(price);
               });
             }
           }
@@ -290,18 +344,32 @@ export async function POST(request: NextRequest) {
 
             if (allSupplierPrices) {
               // Filter out our own integration prices - only include actual supplier prices
-              const supplierPrices = allSupplierPrices.filter(price =>
+              const supplierPrices = allSupplierPrices.filter((price: {
+                supplier_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_price: number;
+                created_at: string;
+              }) =>
                 price.supplier_id && !price.integration_id
               );
 
               console.log(`Fetched ${allSupplierPrices.length} total supplier price records, filtered to ${supplierPrices.length} supplier prices`);
 
               // Group by product_id
-              supplierPrices.forEach(price => {
+              supplierPrices.forEach((price: {
+                supplier_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_price: number;
+                created_at: string;
+              }) => {
                 if (!supplierPricesMap.has(price.product_id)) {
                   supplierPricesMap.set(price.product_id, []);
                 }
-                supplierPricesMap.get(price.product_id).push(price);
+                supplierPricesMap.get(price.product_id)!.push(price);
               });
             }
           }
@@ -331,18 +399,34 @@ export async function POST(request: NextRequest) {
 
             if (allCompetitorStock) {
               // Filter out our own integration stock - only include actual competitor stock
-              const competitorStock = allCompetitorStock.filter(stock =>
+              const competitorStock = allCompetitorStock.filter((stock: {
+                competitor_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_stock_quantity: number;
+                current_stock_quantity?: number;
+                created_at: string;
+              }) =>
                 stock.competitor_id && !stock.integration_id
               );
 
               console.log(`Fetched ${allCompetitorStock.length} total competitor stock records, filtered to ${competitorStock.length} competitor stock`);
 
               // Group by product_id
-              competitorStock.forEach(stock => {
+              competitorStock.forEach((stock: {
+                competitor_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_stock_quantity: number;
+                current_stock_quantity?: number;
+                created_at: string;
+              }) => {
                 if (!competitorStockMap.has(stock.product_id)) {
                   competitorStockMap.set(stock.product_id, []);
                 }
-                competitorStockMap.get(stock.product_id).push(stock);
+                competitorStockMap.get(stock.product_id)!.push(stock);
               });
             }
           }
@@ -372,18 +456,36 @@ export async function POST(request: NextRequest) {
 
             if (allSupplierStock) {
               // Filter out our own integration stock - only include actual supplier stock
-              const supplierStock = allSupplierStock.filter(stock =>
+              const supplierStock = allSupplierStock.filter((stock: {
+                supplier_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                supplier_name?: string;
+                integration_name?: string;
+                new_stock_quantity: number;
+                created_at: string;
+              }) =>
                 stock.supplier_id && !stock.integration_id
               );
 
               console.log(`Fetched ${allSupplierStock.length} total supplier stock records, filtered to ${supplierStock.length} supplier stock`);
 
               // Group by product_id
-              supplierStock.forEach(stock => {
+              supplierStock.forEach((stock: {
+                supplier_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                supplier_name?: string;
+                integration_name?: string;
+                new_stock_quantity: number;
+                created_at: string;
+              }) => {
                 if (!supplierStockMap.has(stock.product_id)) {
                   supplierStockMap.set(stock.product_id, []);
                 }
-                supplierStockMap.get(stock.product_id).push(stock);
+                supplierStockMap.get(stock.product_id)!.push(stock);
               });
             }
           }
@@ -508,7 +610,7 @@ export async function POST(request: NextRequest) {
 
       // Add competitor prices
       competitorPriceHeaders.forEach(header => {
-        const competitorName = header.replace('competitor_price_', '').replace(/_/g, ' ');
+        const _competitorName = header.replace('competitor_price_', '').replace(/_/g, ' ');
         let price = '';
 
         // Use competitorPricesMap instead of product.source_prices
@@ -559,7 +661,7 @@ export async function POST(request: NextRequest) {
 
       // Add competitor stock
       competitorStockHeaders.forEach(header => {
-        const competitorName = header.replace('competitor_stock_', '').replace(/_/g, ' ');
+        const _competitorName = header.replace('competitor_stock_', '').replace(/_/g, ' ');
         let stock = '';
 
         // Use competitorStockMap
