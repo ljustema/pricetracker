@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-07-08 10:11:16
+-- Generated: 2025-07-14 15:35:17
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -1409,6 +1409,95 @@ BEGIN
     ORDER BY COALESCE(ap.new_competitor_price, ap.new_our_retail_price) ASC;
 
 --
+-- Name: get_latest_competitor_prices_batch_filtered(uuid, uuid[], uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_competitor_prices_batch_filtered(p_user_id uuid, p_product_ids uuid[], p_competitor_ids uuid[] DEFAULT NULL::uuid[]) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_competitor_price numeric, new_competitor_price numeric, old_our_retail_price numeric, new_our_retail_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH AllPrices AS (
+        SELECT 
+            pc.id,
+            pc.product_id,
+            pc.competitor_id,
+            pc.integration_id,
+            pc.old_competitor_price,
+            pc.new_competitor_price,
+            pc.old_our_retail_price,
+            pc.new_our_retail_price,
+            pc.price_change_percentage,
+            pc.currency_code,
+            pc.changed_at,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN 'competitor'::TEXT 
+                ELSE 'integration'::TEXT 
+            END AS source_type,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN c.name 
+                ELSE i.name 
+            END AS source_name,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN c.website 
+                ELSE NULL::TEXT 
+            END AS source_website,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN NULL::TEXT 
+                ELSE i.platform 
+            END AS source_platform,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN pc.competitor_id 
+                ELSE pc.integration_id 
+            END AS source_id,
+            COALESCE(pc.competitor_url, pc.our_url, p.our_url) AS url,
+            ROW_NUMBER() OVER(
+                PARTITION BY pc.product_id, 
+                COALESCE(pc.competitor_id, pc.integration_id), 
+                CASE WHEN pc.competitor_id IS NOT NULL THEN 'competitor' ELSE 'integration' END 
+                ORDER BY pc.changed_at DESC
+            ) as rn
+        FROM price_changes_competitors pc
+        LEFT JOIN competitors c ON pc.competitor_id = c.id
+        LEFT JOIN integrations i ON pc.integration_id = i.id
+        LEFT JOIN products p ON pc.product_id = p.id
+        WHERE pc.user_id = p_user_id
+          AND pc.product_id = ANY(p_product_ids)
+          AND (
+            p_competitor_ids IS NULL OR 
+            pc.competitor_id = ANY(p_competitor_ids) OR 
+            pc.integration_id = ANY(p_competitor_ids)
+          )
+    )
+    SELECT 
+        ap.id,
+        ap.product_id,
+        ap.competitor_id,
+        ap.integration_id,
+        ap.old_competitor_price,
+        ap.new_competitor_price,
+        ap.old_our_retail_price,
+        ap.new_our_retail_price,
+        ap.price_change_percentage,
+        ap.currency_code,
+        ap.changed_at,
+        ap.source_type,
+        ap.source_name,
+        ap.source_website,
+        ap.source_platform,
+        ap.source_id,
+        ap.url
+    FROM AllPrices ap
+    WHERE ap.rn = 1
+    ORDER BY COALESCE(ap.new_competitor_price, ap.new_our_retail_price) ASC;
+
+--
+-- Name: FUNCTION get_latest_competitor_prices_batch_filtered(p_user_id uuid, p_product_ids uuid[], p_competitor_ids uuid[]); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_latest_competitor_prices_batch_filtered(p_user_id uuid, p_product_ids uuid[], p_competitor_ids uuid[]) IS 'Gets the latest competitor prices for multiple products with optional competitor filtering';
+
+--
 -- Name: get_latest_competitor_stock(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1523,6 +1612,135 @@ BEGIN
 --
 
 COMMENT ON FUNCTION public.get_latest_competitor_stock_batch(p_user_id uuid, p_product_ids uuid[]) IS 'Gets the latest stock levels for multiple products from all competitors and integrations in a single query';
+
+--
+-- Name: get_latest_supplier_prices_batch(uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_supplier_prices_batch(p_user_id uuid, p_product_ids uuid[]) RETURNS TABLE(id uuid, product_id uuid, supplier_id uuid, integration_id uuid, old_supplier_price numeric, new_supplier_price numeric, old_our_wholesale_price numeric, new_our_wholesale_price numeric, old_supplier_recommended_price numeric, new_supplier_recommended_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH AllPrices AS (
+        SELECT 
+            ps.id,
+            ps.product_id,
+            ps.supplier_id,
+            ps.integration_id,
+            ps.old_supplier_price,
+            ps.new_supplier_price,
+            ps.old_our_wholesale_price,
+            ps.new_our_wholesale_price,
+            ps.old_supplier_recommended_price,
+            ps.new_supplier_recommended_price,
+            ps.price_change_percentage,
+            ps.currency_code,
+            ps.changed_at,
+            CASE 
+                WHEN ps.supplier_id IS NOT NULL THEN 'supplier'::TEXT 
+                ELSE 'integration'::TEXT 
+            END AS source_type,
+            CASE 
+                WHEN ps.supplier_id IS NOT NULL THEN s.name 
+                ELSE i.name 
+            END AS source_name,
+            CASE 
+                WHEN ps.supplier_id IS NOT NULL THEN s.website 
+                ELSE NULL::TEXT 
+            END AS source_website,
+            CASE 
+                WHEN ps.supplier_id IS NOT NULL THEN NULL::TEXT 
+                ELSE i.platform 
+            END AS source_platform,
+            CASE 
+                WHEN ps.supplier_id IS NOT NULL THEN ps.supplier_id 
+                ELSE ps.integration_id 
+            END AS source_id,
+            COALESCE(ps.supplier_url, ps.our_url, p.our_url) AS url,
+            ROW_NUMBER() OVER(
+                PARTITION BY ps.product_id, 
+                COALESCE(ps.supplier_id, ps.integration_id), 
+                CASE WHEN ps.supplier_id IS NOT NULL THEN 'supplier' ELSE 'integration' END 
+                ORDER BY ps.changed_at DESC
+            ) as rn
+        FROM price_changes_suppliers ps
+        LEFT JOIN suppliers s ON ps.supplier_id = s.id
+        LEFT JOIN integrations i ON ps.integration_id = i.id
+        LEFT JOIN products p ON ps.product_id = p.id
+        WHERE ps.user_id = p_user_id
+          AND ps.product_id = ANY(p_product_ids)
+    )
+    SELECT 
+        ap.id,
+        ap.product_id,
+        ap.supplier_id,
+        ap.integration_id,
+        ap.old_supplier_price,
+        ap.new_supplier_price,
+        ap.old_our_wholesale_price,
+        ap.new_our_wholesale_price,
+        ap.old_supplier_recommended_price,
+        ap.new_supplier_recommended_price,
+        ap.price_change_percentage,
+        ap.currency_code,
+        ap.changed_at,
+        ap.source_type,
+        ap.source_name,
+        ap.source_website,
+        ap.source_platform,
+        ap.source_id,
+        ap.url
+    FROM AllPrices ap
+    WHERE ap.rn = 1
+    ORDER BY COALESCE(ap.new_supplier_price, ap.new_our_wholesale_price) ASC;
+
+--
+-- Name: FUNCTION get_latest_supplier_prices_batch(p_user_id uuid, p_product_ids uuid[]); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_latest_supplier_prices_batch(p_user_id uuid, p_product_ids uuid[]) IS 'Gets the latest supplier prices for multiple products from all suppliers and integrations in a single query';
+
+--
+-- Name: get_latest_supplier_stock_batch(uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_supplier_stock_batch(p_user_id uuid, p_product_ids uuid[]) RETURNS TABLE(product_id uuid, supplier_id uuid, integration_id uuid, new_stock_quantity integer, new_stock_status text, new_availability_date date, changed_at timestamp with time zone, supplier_name text, integration_name text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_stock AS (
+        SELECT DISTINCT ON (scs.product_id, COALESCE(scs.supplier_id, scs.integration_id))
+            scs.product_id,
+            scs.supplier_id,
+            scs.integration_id,
+            scs.new_stock_quantity,
+            scs.new_stock_status,
+            scs.new_availability_date,
+            scs.changed_at,
+            s.name as supplier_name,
+            i.name as integration_name
+        FROM stock_changes_suppliers scs
+        LEFT JOIN suppliers s ON scs.supplier_id = s.id
+        LEFT JOIN integrations i ON scs.integration_id = i.id
+        WHERE scs.user_id = p_user_id
+        AND scs.product_id = ANY(p_product_ids)
+        AND scs.new_stock_quantity IS NOT NULL
+        ORDER BY scs.product_id, COALESCE(scs.supplier_id, scs.integration_id), scs.changed_at DESC
+    )
+    SELECT 
+        ls.product_id,
+        ls.supplier_id,
+        ls.integration_id,
+        ls.new_stock_quantity,
+        ls.new_stock_status,
+        ls.new_availability_date,
+        ls.changed_at,
+        ls.supplier_name,
+        ls.integration_name
+    FROM latest_stock ls
+    ORDER BY ls.product_id, ls.changed_at DESC;
 
 --
 -- Name: get_or_create_unknown_brand(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -1696,6 +1914,22 @@ CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFA
     AS $_$
 DECLARE
     _offset integer;
+
+--
+-- Name: get_products_filtered(uuid, integer, integer, text, text, text, text, text, boolean, uuid[], boolean, boolean, boolean, boolean, boolean, uuid[], boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 16, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_not_our_products boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean, p_in_stock_only boolean DEFAULT NULL::boolean, p_supplier_ids uuid[] DEFAULT NULL::uuid[], p_our_products_with_competitor_prices boolean DEFAULT NULL::boolean, p_our_products_with_supplier_prices boolean DEFAULT NULL::boolean) RETURNS json
+    LANGUAGE plpgsql
+    AS $_$
+DECLARE
+    _offset integer;
+
+--
+-- Name: FUNCTION get_products_filtered(p_user_id uuid, p_page integer, p_page_size integer, p_sort_by text, p_sort_order text, p_brand text, p_category text, p_search text, p_is_active boolean, p_competitor_ids uuid[], p_has_price boolean, p_not_our_products boolean, p_price_lower_than_competitors boolean, p_price_higher_than_competitors boolean, p_in_stock_only boolean, p_supplier_ids uuid[], p_our_products_with_competitor_prices boolean, p_our_products_with_supplier_prices boolean); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer, p_page_size integer, p_sort_by text, p_sort_order text, p_brand text, p_category text, p_search text, p_is_active boolean, p_competitor_ids uuid[], p_has_price boolean, p_not_our_products boolean, p_price_lower_than_competitors boolean, p_price_higher_than_competitors boolean, p_in_stock_only boolean, p_supplier_ids uuid[], p_our_products_with_competitor_prices boolean, p_our_products_with_supplier_prices boolean) IS 'Gets filtered products with pagination, including new combined filters for price matching analysis';
 
 --
 -- Name: get_sales_analysis_data(uuid, uuid, timestamp without time zone, timestamp without time zone, text); Type: FUNCTION; Schema: public; Owner: -

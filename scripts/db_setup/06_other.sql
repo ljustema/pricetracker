@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-07-08 10:11:16
+-- Generated: 2025-07-14 15:35:17
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -2150,6 +2150,18 @@ END;
 
 $$;
 
+END;
+
+$$;
+
+END;
+
+$$;
+
+END;
+
+$$;
+
 BEGIN
     -- Try to find existing 'Unknown' brand
     SELECT id INTO brand_id_result
@@ -2326,7 +2338,7 @@ _limit := p_page_size;
 
 -- Validate sort column and set safe sort by
     _safe_sort_by := CASE 
-        WHEN p_sort_by IN ('name', 'sku', 'ean', 'created_at', 'updated_at', 'our_retail_price') THEN p_sort_by
+        WHEN p_sort_by IN ('name', 'sku', 'ean', 'created_at', 'updated_at', 'our_retail_price', 'our_wholesale_price') THEN p_sort_by
         ELSE 'created_at'
     END;
 
@@ -2460,6 +2472,7 @@ END;
                 p.brand_id,
                 p.category,
                 p.our_retail_price,
+                p.our_wholesale_price,
                 p.image_url,
                 p.our_url,
                 p.is_active,
@@ -2530,7 +2543,7 @@ END;
                 ($7 = false AND $12 = false)  -- All products (both false)
             )
             AND ($8 IS NULL OR $8 = false OR ps.has_stock = true)
-            GROUP BY p.id, p.name, p.sku, p.ean, p.brand_id, p.category, p.our_retail_price, p.image_url, p.our_url, p.is_active, p.created_at, p.updated_at, b.name, ps.has_stock, ps.max_stock_quantity
+            GROUP BY p.id, p.name, p.sku, p.ean, p.brand_id, p.category, p.our_retail_price, p.our_wholesale_price, p.image_url, p.our_url, p.is_active, p.created_at, p.updated_at, b.name, ps.has_stock, ps.max_stock_quantity
             %s
             LIMIT $10 OFFSET $11
         )
@@ -2544,6 +2557,7 @@ END;
                 ''brand_name'', pwp.brand_name,
                 ''category'', pwp.category,
                 ''our_retail_price'', pwp.our_retail_price,
+                ''our_wholesale_price'', pwp.our_wholesale_price,
                 ''image_url'', pwp.image_url,
                 ''our_url'', pwp.our_url,
                 ''is_active'', pwp.is_active,
@@ -2557,6 +2571,350 @@ END;
     ', _order_clause)
     INTO _products_data
     USING p_user_id, p_brand, p_category, p_search, p_is_active, p_competitor_ids, p_has_price, p_in_stock_only, _brand_uuid, _limit, _offset, p_not_our_products, p_supplier_ids;
+
+-- Build the final result
+    _result := json_build_object(
+        'data', COALESCE(_products_data, '[]'::json),
+        'totalCount', _total_count
+    );
+
+RETURN _result;
+
+END;
+
+$_$;
+
+_limit integer;
+
+_sort_direction text;
+
+_total_count integer;
+
+_result json;
+
+_safe_sort_by text;
+
+_order_clause text;
+
+_products_data json;
+
+_brand_uuid uuid;
+
+BEGIN
+    -- Calculate offset and limit
+    _offset := (p_page - 1) * p_page_size;
+
+_limit := p_page_size;
+
+-- Validate and set sort direction
+    _sort_direction := CASE 
+        WHEN LOWER(p_sort_order) = 'asc' THEN 'ASC'
+        ELSE 'DESC'
+    END;
+
+-- Validate sort column and set safe sort by - UPDATED to include stock_quantity and competitor_count
+    _safe_sort_by := CASE 
+        WHEN p_sort_by IN ('name', 'sku', 'ean', 'created_at', 'updated_at', 'our_retail_price', 'our_wholesale_price', 'stock_quantity', 'competitor_count') THEN p_sort_by
+        ELSE 'created_at'
+    END;
+
+-- Build order clause - UPDATED to handle special sorting columns
+    _order_clause := CASE 
+        WHEN _safe_sort_by = 'stock_quantity' THEN format('ORDER BY ps.max_stock_quantity %s NULLS LAST', _sort_direction)
+        WHEN _safe_sort_by = 'competitor_count' THEN format('ORDER BY (SELECT COUNT(DISTINCT COALESCE(pcc_count.competitor_id, pcc_count.integration_id)) FROM price_changes_competitors pcc_count WHERE pcc_count.product_id = p.id AND pcc_count.user_id = p.user_id AND pcc_count.new_competitor_price IS NOT NULL) %s', _sort_direction)
+        ELSE format('ORDER BY p.%I %s', _safe_sort_by, _sort_direction)
+    END;
+
+-- Try to convert brand to UUID if it looks like one, otherwise keep as text for name search
+    BEGIN
+        _brand_uuid := p_brand::uuid;
+
+EXCEPTION WHEN invalid_text_representation THEN
+        _brand_uuid := NULL;
+
+END;
+
+-- Get total count using a CTE approach
+    WITH product_stock AS (
+        SELECT 
+            p.id as product_id,
+            COALESCE(MAX(sc.new_stock_quantity), 0) as max_stock_quantity,
+            BOOL_OR(sc.new_stock_status = 'in_stock' OR sc.new_stock_quantity > 0) as has_stock
+        FROM products p
+        LEFT JOIN stock_changes_competitors sc ON sc.product_id = p.id 
+            AND sc.user_id = p_user_id
+            AND sc.new_stock_quantity IS NOT NULL
+            AND sc.changed_at = (
+                SELECT MAX(sc2.changed_at) 
+                FROM stock_changes_competitors sc2 
+                WHERE sc2.product_id = p.id 
+                AND sc2.user_id = p_user_id
+                AND sc2.new_stock_quantity IS NOT NULL
+                AND COALESCE(sc2.competitor_id, sc2.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
+            )
+        WHERE p.user_id = p_user_id
+        GROUP BY p.id
+    ),
+    filtered_products AS (
+        SELECT p.id
+        FROM products p 
+        LEFT JOIN brands b ON p.brand_id = b.id
+        LEFT JOIN product_stock ps ON p.id = ps.product_id
+        WHERE p.user_id = p_user_id
+        AND (
+            p_brand IS NULL OR 
+            (_brand_uuid IS NOT NULL AND p.brand_id = _brand_uuid) OR
+            (_brand_uuid IS NULL AND b.name ILIKE '%' || p_brand || '%')
+        )
+        AND (p_category IS NULL OR p.category ILIKE '%' || p_category || '%')
+        AND (p_search IS NULL OR p.name ILIKE '%' || p_search || '%' OR p.sku ILIKE '%' || p_search || '%' OR p.ean ILIKE '%' || p_search || '%')
+        AND (p_is_active IS NULL OR p.is_active = p_is_active)
+        AND (p_competitor_ids IS NULL OR p.id IN (
+            SELECT DISTINCT pcc.product_id
+            FROM price_changes_competitors pcc
+            WHERE pcc.user_id = p_user_id
+            AND (pcc.competitor_id = ANY(p_competitor_ids) OR pcc.integration_id = ANY(p_competitor_ids))
+        ))
+        -- Add supplier filter
+        AND (p_supplier_ids IS NULL OR p.id IN (
+            SELECT DISTINCT pcs.product_id
+            FROM price_changes_suppliers pcs
+            WHERE pcs.user_id = p_user_id
+            AND (pcs.supplier_id = ANY(p_supplier_ids) OR pcs.integration_id = ANY(p_supplier_ids))
+        ))
+        -- Updated price filter logic to handle all price filters
+        AND (
+            -- No price filters active
+            (p_has_price IS NULL AND p_not_our_products IS NULL AND p_our_products_with_competitor_prices IS NULL AND p_our_products_with_supplier_prices IS NULL) OR
+            -- Our products only
+            (p_has_price = true AND p_not_our_products IS NULL AND p_our_products_with_competitor_prices IS NULL AND p_our_products_with_supplier_prices IS NULL AND p.our_retail_price IS NOT NULL) OR
+            -- Not our products only
+            (p_has_price IS NULL AND p_not_our_products = true AND p_our_products_with_competitor_prices IS NULL AND p_our_products_with_supplier_prices IS NULL AND p.our_retail_price IS NULL) OR
+            -- Our products with competitor prices
+            (p_our_products_with_competitor_prices = true AND p.our_retail_price IS NOT NULL AND p.id IN (
+                SELECT DISTINCT pcc.product_id
+                FROM price_changes_competitors pcc
+                WHERE pcc.user_id = p_user_id
+                AND pcc.product_id = p.id
+                AND pcc.new_competitor_price IS NOT NULL
+                AND pcc.competitor_id IS NOT NULL
+            )) OR
+            -- Our products with supplier prices
+            (p_our_products_with_supplier_prices = true AND p.our_retail_price IS NOT NULL AND p.id IN (
+                SELECT DISTINCT pcs.product_id
+                FROM price_changes_suppliers pcs
+                WHERE pcs.user_id = p_user_id
+                AND pcs.product_id = p.id
+                AND pcs.new_supplier_price IS NOT NULL
+                AND pcs.supplier_id IS NOT NULL
+            ))
+        )
+        -- Add stock filtering
+        AND (p_in_stock_only IS NULL OR p_in_stock_only = false OR ps.has_stock = true)
+        -- PRACTICAL: Price comparison filters
+        AND (
+            -- No price comparison filters active
+            (p_price_lower_than_competitors IS NULL OR p_price_lower_than_competitors = false) AND
+            (p_price_higher_than_competitors IS NULL OR p_price_higher_than_competitors = false)
+            OR
+            -- Price lower than or equal to lowest competitor (competitive pricing)
+            (p_price_lower_than_competitors = true AND p.our_retail_price IS NOT NULL AND p.our_retail_price <= (
+                SELECT MIN(pcc.new_competitor_price)
+                FROM price_changes_competitors pcc
+                WHERE pcc.user_id = p_user_id
+                AND pcc.product_id = p.id
+                AND pcc.new_competitor_price IS NOT NULL
+                AND pcc.competitor_id IS NOT NULL
+            ))
+            OR
+            -- Price higher than lowest competitor (need to reduce price)
+            (p_price_higher_than_competitors = true AND p.our_retail_price IS NOT NULL AND p.our_retail_price > (
+                SELECT MIN(pcc.new_competitor_price)
+                FROM price_changes_competitors pcc
+                WHERE pcc.user_id = p_user_id
+                AND pcc.product_id = p.id
+                AND pcc.new_competitor_price IS NOT NULL
+                AND pcc.competitor_id IS NOT NULL
+            ))
+        )
+    )
+    SELECT COUNT(*) INTO _total_count FROM filtered_products;
+
+-- Get the actual products data with all the complex joins and aggregations
+    EXECUTE format('
+        WITH product_stock AS (
+            SELECT 
+                p.id as product_id,
+                COALESCE(MAX(sc.new_stock_quantity), 0) as max_stock_quantity,
+                BOOL_OR(sc.new_stock_status = ''in_stock'' OR sc.new_stock_quantity > 0) as has_stock
+            FROM products p
+            LEFT JOIN stock_changes_competitors sc ON sc.product_id = p.id 
+                AND sc.user_id = $1
+                AND sc.new_stock_quantity IS NOT NULL
+                AND sc.changed_at = (
+                    SELECT MAX(sc2.changed_at) 
+                    FROM stock_changes_competitors sc2 
+                    WHERE sc2.product_id = p.id 
+                    AND sc2.user_id = $1
+                    AND sc2.new_stock_quantity IS NOT NULL
+                    AND COALESCE(sc2.competitor_id, sc2.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
+                )
+            WHERE p.user_id = $1
+            GROUP BY p.id
+        ),
+        products_with_prices AS (
+            SELECT 
+                p.id,
+                p.name,
+                p.sku,
+                p.ean,
+                p.brand_id,
+                p.category,
+                p.our_retail_price,
+                p.our_wholesale_price,
+                p.image_url,
+                p.our_url,
+                p.is_active,
+                p.created_at,
+                p.updated_at,
+                b.name as brand_name,
+                ps.has_stock,
+                ps.max_stock_quantity as stock_quantity,
+                COALESCE(
+                    json_agg(
+                        DISTINCT jsonb_build_object(
+                            ''competitor_id'', pcc.competitor_id,
+                            ''integration_id'', pcc.integration_id,
+                            ''competitor_name'', COALESCE(c.name, i.name),
+                            ''competitor_price'', pcc.new_competitor_price,
+                            ''competitor_url'', pcc.competitor_url,
+                            ''changed_at'', pcc.changed_at
+                        )
+                    ) FILTER (WHERE pcc.id IS NOT NULL), 
+                    ''[]''::json
+                ) as competitor_prices
+            FROM products p
+            LEFT JOIN brands b ON p.brand_id = b.id
+            LEFT JOIN product_stock ps ON p.id = ps.product_id
+            LEFT JOIN LATERAL (
+                SELECT DISTINCT ON (COALESCE(pcc_inner.competitor_id, pcc_inner.integration_id)) 
+                    pcc_inner.id,
+                    pcc_inner.competitor_id,
+                    pcc_inner.integration_id,
+                    pcc_inner.new_competitor_price,
+                    pcc_inner.competitor_url,
+                    pcc_inner.changed_at
+                FROM price_changes_competitors pcc_inner
+                WHERE pcc_inner.product_id = p.id 
+                AND pcc_inner.user_id = $1
+                AND pcc_inner.new_competitor_price IS NOT NULL
+                ORDER BY COALESCE(pcc_inner.competitor_id, pcc_inner.integration_id), pcc_inner.changed_at DESC
+            ) pcc ON true
+            LEFT JOIN competitors c ON pcc.competitor_id = c.id
+            LEFT JOIN integrations i ON pcc.integration_id = i.id
+            WHERE p.user_id = $1
+            AND (
+                $2 IS NULL OR 
+                ($9 IS NOT NULL AND p.brand_id = $9) OR
+                ($9 IS NULL AND b.name ILIKE ''%%'' || $2 || ''%%'')
+            )
+            AND ($3 IS NULL OR p.category ILIKE ''%%'' || $3 || ''%%'')
+            AND ($4 IS NULL OR p.name ILIKE ''%%'' || $4 || ''%%'' OR p.sku ILIKE ''%%'' || $4 || ''%%'' OR p.ean ILIKE ''%%'' || $4 || ''%%'')
+            AND ($5 IS NULL OR p.is_active = $5)
+            AND ($6 IS NULL OR p.id IN (
+                SELECT DISTINCT pcc.product_id
+                FROM price_changes_competitors pcc
+                WHERE pcc.user_id = $1
+                AND (pcc.competitor_id = ANY($6) OR pcc.integration_id = ANY($6))
+            ))
+            -- Add supplier filter
+            AND ($13 IS NULL OR p.id IN (
+                SELECT DISTINCT pcs.product_id
+                FROM price_changes_suppliers pcs
+                WHERE pcs.user_id = $1
+                AND (pcs.supplier_id = ANY($13) OR pcs.integration_id = ANY($13))
+            ))
+            -- Updated price filter logic to handle all price filters
+            AND (
+                -- No price filters active
+                ($7 IS NULL AND $12 IS NULL AND $14 IS NULL AND $15 IS NULL) OR
+                -- Our products only
+                ($7 = true AND $12 IS NULL AND $14 IS NULL AND $15 IS NULL AND p.our_retail_price IS NOT NULL) OR
+                -- Not our products only
+                ($7 IS NULL AND $12 = true AND $14 IS NULL AND $15 IS NULL AND p.our_retail_price IS NULL) OR
+                -- Our products with competitor prices
+                ($14 = true AND p.our_retail_price IS NOT NULL AND p.id IN (
+                    SELECT DISTINCT pcc.product_id
+                    FROM price_changes_competitors pcc
+                    WHERE pcc.user_id = $1
+                    AND pcc.product_id = p.id
+                    AND pcc.new_competitor_price IS NOT NULL
+                    AND pcc.competitor_id IS NOT NULL
+                )) OR
+                -- Our products with supplier prices
+                ($15 = true AND p.our_retail_price IS NOT NULL AND p.id IN (
+                    SELECT DISTINCT pcs.product_id
+                    FROM price_changes_suppliers pcs
+                    WHERE pcs.user_id = $1
+                    AND pcs.product_id = p.id
+                    AND pcs.new_supplier_price IS NOT NULL
+                    AND pcs.supplier_id IS NOT NULL
+                ))
+            )
+            AND ($8 IS NULL OR $8 = false OR ps.has_stock = true)
+            -- PRACTICAL: Price comparison filters in main query
+            AND (
+                -- No price comparison filters active
+                (($16 IS NULL OR $16 = false) AND ($17 IS NULL OR $17 = false))
+                OR
+                -- Price lower than or equal to lowest competitor (competitive pricing)
+                ($16 = true AND p.our_retail_price IS NOT NULL AND p.our_retail_price <= (
+                    SELECT MIN(pcc.new_competitor_price)
+                    FROM price_changes_competitors pcc
+                    WHERE pcc.user_id = $1
+                    AND pcc.product_id = p.id
+                    AND pcc.new_competitor_price IS NOT NULL
+                    AND pcc.competitor_id IS NOT NULL
+                ))
+                OR
+                -- Price higher than lowest competitor (need to reduce price)
+                ($17 = true AND p.our_retail_price IS NOT NULL AND p.our_retail_price > (
+                    SELECT MIN(pcc.new_competitor_price)
+                    FROM price_changes_competitors pcc
+                    WHERE pcc.user_id = $1
+                    AND pcc.product_id = p.id
+                    AND pcc.new_competitor_price IS NOT NULL
+                    AND pcc.competitor_id IS NOT NULL
+                ))
+            )
+            GROUP BY p.id, p.name, p.sku, p.ean, p.brand_id, p.category, p.our_retail_price, p.our_wholesale_price, p.image_url, p.our_url, p.is_active, p.created_at, p.updated_at, b.name, ps.has_stock, ps.max_stock_quantity
+            %s
+            LIMIT $10 OFFSET $11
+        )
+        SELECT COALESCE(json_agg(
+            json_build_object(
+                ''id'', pwp.id,
+                ''name'', pwp.name,
+                ''sku'', pwp.sku,
+                ''ean'', pwp.ean,
+                ''brand_id'', pwp.brand_id,
+                ''brand_name'', pwp.brand_name,
+                ''category'', pwp.category,
+                ''our_retail_price'', pwp.our_retail_price,
+                ''our_wholesale_price'', pwp.our_wholesale_price,
+                ''image_url'', pwp.image_url,
+                ''our_url'', pwp.our_url,
+                ''is_active'', pwp.is_active,
+                ''created_at'', pwp.created_at,
+                ''updated_at'', pwp.updated_at,
+                ''competitor_prices'', pwp.competitor_prices,
+                ''has_stock'', pwp.has_stock,
+                ''stock_quantity'', pwp.stock_quantity
+            )
+        ), ''[]''::json) FROM products_with_prices pwp
+    ', _order_clause)
+    INTO _products_data
+    USING p_user_id, p_brand, p_category, p_search, p_is_active, p_competitor_ids, p_has_price, p_in_stock_only, _brand_uuid, _limit, _offset, p_not_our_products, p_supplier_ids, p_our_products_with_competitor_prices, p_our_products_with_supplier_prices, p_price_lower_than_competitors, p_price_higher_than_competitors;
 
 -- Build the final result
     _result := json_build_object(
@@ -4030,17 +4388,13 @@ RETURN NEW;
 
 END IF;
 
--- Log that we are processing this record
-    RAISE NOTICE 'Processing record % with status: %', NEW.id, NEW.status;
-
 -- Validate that the record has minimum required data
-    -- Products must have either an EAN or both SKU and brand to be imported
     IF (NEW.ean IS NULL OR NEW.ean = '') AND 
        (NEW.sku IS NULL OR NEW.sku = '' OR NEW.brand IS NULL OR NEW.brand = '') THEN
         -- Delete unprocessable records immediately
         DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
 
-RETURN NEW;
+RETURN NULL;
 
 END IF;
 
@@ -4070,6 +4424,10 @@ IF NEW.brand IS NOT NULL AND NEW.brand != '' AND
        (NOT selective_import_enabled OR field_config->>'brand' != 'false') THEN
         -- Use the find_or_create_brand function that properly checks aliases
         SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
+
+ELSE
+        -- If no brand provided or brand field is disabled, use Unknown brand
+        SELECT get_or_create_unknown_brand(NEW.user_id) INTO v_brand_id;
 
 END IF;
 
@@ -4122,16 +4480,16 @@ IF existing_product_id IS NULL THEN
             CASE WHEN NOT selective_import_enabled OR field_config->>'sku' != 'false' THEN NEW.sku ELSE NULL END,
             CASE WHEN NOT selective_import_enabled OR field_config->>'ean' != 'false' THEN NEW.ean ELSE NULL END,
             CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN NEW.brand ELSE NULL END,
-            CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN v_brand_id ELSE NULL END,
+            v_brand_id,  -- Always use v_brand_id (never NULL now)
             CASE WHEN NOT selective_import_enabled OR field_config->>'our_retail_price' != 'false' THEN rounded_retail_price ELSE NULL END,
             CASE WHEN NOT selective_import_enabled OR field_config->>'our_wholesale_price' != 'false' THEN rounded_wholesale_price ELSE NULL END,
             CASE WHEN NOT selective_import_enabled OR field_config->>'image_url' != 'false' THEN NEW.image_url ELSE NULL END,
-            NEW.our_url, -- ALWAYS populate our_url
-            CASE WHEN NOT selective_import_enabled OR field_config->>'currency_code' != 'false' THEN NEW.currency_code ELSE NULL END
+            NEW.our_url,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'currency_code' != 'false' THEN COALESCE(NEW.currency_code, get_user_primary_currency(NEW.user_id)) ELSE NULL END
         ) RETURNING id INTO existing_product_id;
 
 ELSE
-        -- ALWAYS UPDATE ALL FIELDS for existing products (integration runs should update everything)
+        -- Update existing product
         UPDATE products SET
             name = CASE WHEN NOT selective_import_enabled OR field_config->>'name' != 'false' THEN COALESCE(NEW.name, name) ELSE name END,
             sku = CASE WHEN NOT selective_import_enabled OR field_config->>'sku' != 'false' THEN COALESCE(NEW.sku, sku) ELSE sku END,
@@ -4141,125 +4499,57 @@ ELSE
             our_retail_price = CASE WHEN NOT selective_import_enabled OR field_config->>'our_retail_price' != 'false' THEN rounded_retail_price ELSE our_retail_price END,
             our_wholesale_price = CASE WHEN NOT selective_import_enabled OR field_config->>'our_wholesale_price' != 'false' THEN rounded_wholesale_price ELSE our_wholesale_price END,
             image_url = CASE WHEN NOT selective_import_enabled OR field_config->>'image_url' != 'false' THEN COALESCE(NEW.image_url, image_url) ELSE image_url END,
-            our_url = COALESCE(NEW.our_url, our_url), -- ALWAYS update our_url
+            our_url = COALESCE(NEW.our_url, our_url),
             currency_code = CASE WHEN NOT selective_import_enabled OR field_config->>'currency_code' != 'false' THEN COALESCE(NEW.currency_code, currency_code) ELSE currency_code END,
             updated_at = NOW()
         WHERE id = existing_product_id;
 
 END IF;
 
--- Skip custom fields processing for now to avoid any potential issues
-    -- IF (NOT selective_import_enabled OR field_config->>'raw_data' != 'false') AND NEW.raw_data IS NOT NULL THEN
-    --     SELECT process_custom_fields(NEW.user_id, existing_product_id, NEW.raw_data) INTO custom_fields_result;
-
--- END IF;
-
--- ONLY RECORD RETAIL PRICE CHANGES WHEN PRICE ACTUALLY CHANGES
-    -- FIXED: Use NULL for old price on first price records (consistent with competitor function)
-    IF (NOT selective_import_enabled OR field_config->>'our_retail_price' != 'false') AND
-       rounded_retail_price IS NOT NULL AND
-       (current_retail_price IS NULL OR current_retail_price != rounded_retail_price) THEN
-        
+-- Record retail price changes in price_changes_competitors table (for our retail prices)
+    IF rounded_retail_price IS NOT NULL AND (current_retail_price IS NULL OR current_retail_price != rounded_retail_price) THEN
         INSERT INTO price_changes_competitors (
-            user_id,
-            product_id,
-            integration_id,
-            competitor_id,
-            old_competitor_price,
-            new_competitor_price,
-            old_our_retail_price,
-            new_our_retail_price,
-            price_change_percentage,
-            changed_at,
-            currency_code,
-            our_url
+            user_id, product_id, old_our_retail_price, new_our_retail_price,
+            changed_at, integration_id, currency_code, our_url
         ) VALUES (
-            NEW.user_id,
-            existing_product_id,
-            NEW.integration_id,
-            NULL,
-            NULL,
-            NULL,
-            current_retail_price, -- FIXED: Use NULL for first prices instead of COALESCE
-            rounded_retail_price,
-            CASE 
-                WHEN current_retail_price IS NULL THEN 0
-                WHEN current_retail_price = 0 THEN 0
-                ELSE ROUND(((rounded_retail_price - current_retail_price) / current_retail_price * 100)::numeric, 2)
-            END,
-            NOW(),
-            NEW.currency_code,
-            NEW.our_url
+            NEW.user_id, existing_product_id, current_retail_price, rounded_retail_price,
+            NOW(), NEW.integration_id, COALESCE(NEW.currency_code, get_user_primary_currency(NEW.user_id)), NEW.our_url
         );
 
 END IF;
 
--- ONLY RECORD WHOLESALE PRICE CHANGES WHEN PRICE ACTUALLY CHANGES
-    -- FIXED: Use NULL for old price on first price records (consistent with competitor function)
-    IF (NOT selective_import_enabled OR field_config->>'our_wholesale_price' != 'false') AND
-       rounded_wholesale_price IS NOT NULL AND
-       (current_wholesale_price IS NULL OR current_wholesale_price != rounded_wholesale_price) THEN
-        
+-- Record wholesale price changes in price_changes_suppliers table (for our wholesale prices)
+    IF rounded_wholesale_price IS NOT NULL AND (current_wholesale_price IS NULL OR current_wholesale_price != rounded_wholesale_price) THEN
         INSERT INTO price_changes_suppliers (
-            user_id,
-            product_id,
-            integration_id,
-            supplier_id,
-            old_supplier_price,
-            new_supplier_price,
-            old_supplier_recommended_price,
-            new_supplier_recommended_price,
-            old_our_wholesale_price,
-            new_our_wholesale_price,
-            price_change_percentage,
-            changed_at,
-            currency_code,
-            our_url
+            user_id, product_id, old_our_wholesale_price, new_our_wholesale_price,
+            changed_at, integration_id, currency_code, our_url, change_source
         ) VALUES (
-            NEW.user_id,
-            existing_product_id,
-            NEW.integration_id,
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            current_wholesale_price, -- FIXED: Use NULL for first prices instead of COALESCE
-            rounded_wholesale_price,
-            CASE 
-                WHEN current_wholesale_price IS NULL THEN 0
-                WHEN current_wholesale_price = 0 THEN 0
-                ELSE ROUND(((rounded_wholesale_price - current_wholesale_price) / current_wholesale_price * 100)::numeric, 2)
-            END,
-            NOW(),
-            NEW.currency_code,
-            NEW.our_url
+            NEW.user_id, existing_product_id, current_wholesale_price, rounded_wholesale_price,
+            NOW(), NEW.integration_id, COALESCE(NEW.currency_code, get_user_primary_currency(NEW.user_id)), NEW.our_url, 'integration'
         );
 
 END IF;
 
--- Mark as processed and set processed_at
+-- Process custom fields if they exist in raw_data
+    IF NEW.raw_data IS NOT NULL THEN
+        SELECT process_custom_fields_from_raw_data(
+            NEW.user_id,
+            existing_product_id,
+            NEW.raw_data,
+            'integration',
+            NEW.integration_id
+        ) INTO custom_fields_result;
+
+END IF;
+
+-- Mark as processed and delete
     UPDATE temp_integrations_scraped_data 
-    SET status = 'processed', 
-        processed_at = NOW() 
+    SET status = 'processed', processed_at = NOW() 
     WHERE id = NEW.id;
 
--- Delete from temp table (cleanup after processing)
-    DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
+DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
 
--- Return NEW for INSERT trigger
-    RETURN NEW;
-
-EXCEPTION WHEN OTHERS THEN
-    -- For any other errors, mark as error and store error message
-    UPDATE temp_integrations_scraped_data 
-    SET status = 'error', 
-        error_message = SQLERRM, 
-        processed_at = NOW() 
-    WHERE id = NEW.id;
-
--- Re-raise the exception
-    RAISE;
+RETURN NULL;
 
 END;
 
@@ -4326,6 +4616,10 @@ IF record_data.brand IS NOT NULL AND record_data.brand != '' AND
         -- Use the find_or_create_brand function that properly checks aliases
         SELECT find_or_create_brand(record_data.user_id, record_data.brand) INTO v_brand_id;
 
+ELSE
+        -- If no brand provided or brand field is disabled, use Unknown brand
+        SELECT get_or_create_unknown_brand(record_data.user_id) INTO v_brand_id;
+
 END IF;
 
 -- STEP 2: Try to find existing product using RESOLVED brand_id for matching
@@ -4388,51 +4682,45 @@ ELSE
             our_wholesale_price = CASE WHEN NOT selective_import_enabled OR field_config->>'our_wholesale_price' != 'false' THEN rounded_wholesale_price ELSE our_wholesale_price END,
             image_url = CASE WHEN NOT selective_import_enabled OR field_config->>'image_url' != 'false' THEN COALESCE(record_data.image_url, image_url) ELSE image_url END,
             our_url = COALESCE(record_data.our_url, our_url),
-            currency_code = CASE WHEN NOT selective_import_enabled OR field_config->>'currency_code' != 'false' THEN COALESCE(record_data.currency_code, user_currency, currency_code) ELSE currency_code END,
+            currency_code = CASE WHEN NOT selective_import_enabled OR field_config->>'currency_code' != 'false' THEN COALESCE(record_data.currency_code, currency_code) ELSE currency_code END,
             updated_at = NOW()
         WHERE id = existing_product_id;
 
 END IF;
 
--- Record price changes only when prices actually change
-    IF (NOT selective_import_enabled OR field_config->>'our_retail_price' != 'false') AND
-       rounded_retail_price IS NOT NULL AND
-       (current_retail_price IS NULL OR current_retail_price != rounded_retail_price) THEN
-        
+-- Record retail price changes in price_changes_competitors table (for our retail prices)
+    IF rounded_retail_price IS NOT NULL AND (current_retail_price IS NULL OR current_retail_price != rounded_retail_price) THEN
         INSERT INTO price_changes_competitors (
-            user_id, product_id, integration_id, competitor_id, old_competitor_price, new_competitor_price,
-            old_our_retail_price, new_our_retail_price, price_change_percentage, changed_at, currency_code, our_url
+            user_id, product_id, old_our_retail_price, new_our_retail_price, 
+            changed_at, integration_id, currency_code, our_url
         ) VALUES (
-            record_data.user_id, existing_product_id, record_data.integration_id, NULL, NULL, NULL,
-            current_retail_price, rounded_retail_price,
-            CASE 
-                WHEN current_retail_price IS NULL THEN 0
-                WHEN current_retail_price = 0 THEN 0
-                ELSE ROUND(((rounded_retail_price - current_retail_price) / current_retail_price * 100)::numeric, 2)
-            END,
-            NOW(), COALESCE(record_data.currency_code, user_currency), record_data.our_url
+            record_data.user_id, existing_product_id, current_retail_price, rounded_retail_price,
+            NOW(), record_data.integration_id, COALESCE(record_data.currency_code, user_currency), record_data.our_url
         );
 
 END IF;
 
-IF (NOT selective_import_enabled OR field_config->>'our_wholesale_price' != 'false') AND
-       rounded_wholesale_price IS NOT NULL AND
-       (current_wholesale_price IS NULL OR current_wholesale_price != rounded_wholesale_price) THEN
-        
+-- Record wholesale price changes in price_changes_suppliers table (for our wholesale prices)
+    IF rounded_wholesale_price IS NOT NULL AND (current_wholesale_price IS NULL OR current_wholesale_price != rounded_wholesale_price) THEN
         INSERT INTO price_changes_suppliers (
-            user_id, product_id, integration_id, supplier_id, old_supplier_price, new_supplier_price,
-            old_supplier_recommended_price, new_supplier_recommended_price, old_our_wholesale_price, 
-            new_our_wholesale_price, price_change_percentage, changed_at, currency_code, our_url
+            user_id, product_id, old_our_wholesale_price, new_our_wholesale_price,
+            changed_at, integration_id, currency_code, our_url, change_source
         ) VALUES (
-            record_data.user_id, existing_product_id, record_data.integration_id, NULL, NULL, NULL, NULL, NULL,
-            current_wholesale_price, rounded_wholesale_price,
-            CASE 
-                WHEN current_wholesale_price IS NULL THEN 0
-                WHEN current_wholesale_price = 0 THEN 0
-                ELSE ROUND(((rounded_wholesale_price - current_wholesale_price) / current_wholesale_price * 100)::numeric, 2)
-            END,
-            NOW(), COALESCE(record_data.currency_code, user_currency), record_data.our_url
+            record_data.user_id, existing_product_id, current_wholesale_price, rounded_wholesale_price,
+            NOW(), record_data.integration_id, COALESCE(record_data.currency_code, user_currency), record_data.our_url, 'integration'
         );
+
+END IF;
+
+-- Process custom fields if they exist in raw_data
+    IF record_data.raw_data IS NOT NULL THEN
+        SELECT process_custom_fields_from_raw_data(
+            record_data.user_id,
+            existing_product_id,
+            record_data.raw_data,
+            'integration',
+            record_data.integration_id
+        ) INTO custom_fields_result;
 
 END IF;
 

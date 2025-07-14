@@ -104,7 +104,10 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       p_price_lower_than_competitors: body.price_lower_than_competitors === true ? true : null,
       p_price_higher_than_competitors: body.price_higher_than_competitors === true ? true : null,
       // Add new stock filter
-      p_in_stock_only: body.in_stock_only === true ? true : null
+      p_in_stock_only: body.in_stock_only === true ? true : null,
+      // Add new combined filters
+      p_our_products_with_competitor_prices: body.our_products_with_competitor_prices === true ? true : null,
+      p_our_products_with_supplier_prices: body.our_products_with_supplier_prices === true ? true : null
     };
 
     // Execute the RPC call

@@ -22,6 +22,9 @@ export interface ComplexFiltersState {
   price_higher_than_competitors: boolean;
   // New stock filters
   in_stock_only: boolean;
+  // New combined filters for price matching
+  our_products_with_competitor_prices: boolean;
+  our_products_with_supplier_prices: boolean;
   // Add itemsPerPage to manage pagination size
   itemsPerPage: number;
 }
@@ -88,6 +91,9 @@ export default function ProductsClientWrapper({
     price_higher_than_competitors: initialSearchParams.price_higher_than_competitors === "true",
     // Initialize stock filters
     in_stock_only: initialSearchParams.in_stock_only === "true",
+    // Initialize new combined filters
+    our_products_with_competitor_prices: initialSearchParams.our_products_with_competitor_prices === "true",
+    our_products_with_supplier_prices: initialSearchParams.our_products_with_supplier_prices === "true",
     // Initialize itemsPerPage from URL params, default to 16, validate allowed values
     itemsPerPage: (() => {
       if (typeof initialSearchParams.itemsPerPage === 'string') {
@@ -192,6 +198,17 @@ export default function ProductsClientWrapper({
       params.set("in_stock_only", "true");
     } else {
       params.delete("in_stock_only");
+    }
+    // Add new combined filters to URL
+    if (complexFilters.our_products_with_competitor_prices) {
+      params.set("our_products_with_competitor_prices", "true");
+    } else {
+      params.delete("our_products_with_competitor_prices");
+    }
+    if (complexFilters.our_products_with_supplier_prices) {
+      params.set("our_products_with_supplier_prices", "true");
+    } else {
+      params.delete("our_products_with_supplier_prices");
     }
     // # Reason: Add sort parameters to the URL based on the state.
     if (complexFilters.sortBy) {

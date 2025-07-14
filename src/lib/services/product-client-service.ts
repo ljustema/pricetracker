@@ -377,7 +377,14 @@ export async function exportProductsCSV(filters: {
   price_lower_than_competitors?: boolean;
   price_higher_than_competitors?: boolean;
   in_stock_only?: boolean;
-  supplierFieldsOnly?: boolean;
+  our_products_with_competitor_prices?: boolean;
+  our_products_with_supplier_prices?: boolean;
+  includeCompetitorFields?: boolean;
+  includeSupplierFields?: boolean;
+  includeCompetitorPrices?: boolean;
+  includeSupplierPrices?: boolean;
+  includeCompetitorStock?: boolean;
+  includeSupplierStock?: boolean;
 } = {}): Promise<void> {
   try {
     const response = await fetch('/api/products/csv-export', {

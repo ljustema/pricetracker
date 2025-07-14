@@ -99,6 +99,8 @@ export default function ProductsHeader() {
     price_lower_than_competitors: searchParams.get('price_lower_than_competitors') === 'true',
     price_higher_than_competitors: searchParams.get('price_higher_than_competitors') === 'true',
     in_stock_only: searchParams.get('in_stock_only') === 'true',
+    our_products_with_competitor_prices: searchParams.get('our_products_with_competitor_prices') === 'true',
+    our_products_with_supplier_prices: searchParams.get('our_products_with_supplier_prices') === 'true',
   };
 
   return (

@@ -112,6 +112,8 @@ export default function ProductsFilter({
       price_lower_than_competitors: false,
       price_higher_than_competitors: false,
       in_stock_only: false,
+      our_products_with_competitor_prices: false,
+      our_products_with_supplier_prices: false,
       sortBy: "created_at",
       sortOrder: "desc",
       itemsPerPage: 16
@@ -289,6 +291,8 @@ export default function ProductsFilter({
               currentFilters.price_lower_than_competitors ? "price_lower" :
               currentFilters.price_higher_than_competitors ? "price_higher" :
               currentFilters.in_stock_only ? "in_stock" :
+              currentFilters.our_products_with_competitor_prices ? "our_products_with_competitor_prices" :
+              currentFilters.our_products_with_supplier_prices ? "our_products_with_supplier_prices" :
               "all"
             }
             onChange={(e) => {
@@ -300,7 +304,9 @@ export default function ProductsFilter({
                 not_our_products: false,
                 price_lower_than_competitors: false,
                 price_higher_than_competitors: false,
-                in_stock_only: false
+                in_stock_only: false,
+                our_products_with_competitor_prices: false,
+                our_products_with_supplier_prices: false
               };
 
               // Set the selected filter
@@ -323,6 +329,12 @@ export default function ProductsFilter({
                 case "in_stock":
                   onComplexFilterChange({ ...resetFilters, in_stock_only: true });
                   break;
+                case "our_products_with_competitor_prices":
+                  onComplexFilterChange({ ...resetFilters, our_products_with_competitor_prices: true });
+                  break;
+                case "our_products_with_supplier_prices":
+                  onComplexFilterChange({ ...resetFilters, our_products_with_supplier_prices: true });
+                  break;
                 default:
                   onComplexFilterChange(resetFilters);
                   break;
@@ -336,6 +348,8 @@ export default function ProductsFilter({
             <option value="price_lower">Price lower than competitor</option>
             <option value="price_higher">Price higher than competitor</option>
             <option value="in_stock">In Stock Only</option>
+            <option value="our_products_with_competitor_prices">Our products with competitor prices</option>
+            <option value="our_products_with_supplier_prices">Our products with supplier prices</option>
           </select>
         </div>
 

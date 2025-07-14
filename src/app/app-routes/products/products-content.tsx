@@ -73,6 +73,8 @@ export default function ProductsContent({
   const priceLowerThanCompetitors = complexFilters.price_lower_than_competitors;
   const priceHigherThanCompetitors = complexFilters.price_higher_than_competitors;
   const inStockOnly = complexFilters.in_stock_only;
+  const ourProductsWithCompetitorPrices = complexFilters.our_products_with_competitor_prices;
+  const ourProductsWithSupplierPrices = complexFilters.our_products_with_supplier_prices;
 
   useEffect(() => {
     // Function to fetch products based on current searchParams
@@ -123,6 +125,8 @@ export default function ProductsContent({
           price_lower_than_competitors: priceLowerThanCompetitors, // Add new price comparison filter
           price_higher_than_competitors: priceHigherThanCompetitors, // Add new price comparison filter
           in_stock_only: inStockOnly, // Add new stock filter
+          our_products_with_competitor_prices: ourProductsWithCompetitorPrices, // Add new combined filter
+          our_products_with_supplier_prices: ourProductsWithSupplierPrices, // Add new combined filter
         };
 
         // Use the cookieHeader passed down from the parent Server Component
