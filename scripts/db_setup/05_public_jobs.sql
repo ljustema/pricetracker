@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Job-related objects
 -- =========================================================================
--- Generated: 2025-07-14 15:35:17
+-- Generated: 2025-07-15 18:28:16
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -295,4 +295,30 @@ IF should_run_flag AND NOT has_pending_job_flag THEN
             job_created_flag := true;
 
 RETURN QUERY SELECT scraper_record.id, scraper_record.name, should_run_flag, has_pending_job_flag, job_created_flag;
+
+-- Log to a table for monitoring (optional)
+    INSERT INTO cron_job_logs (job_name, execution_date, status, duration_seconds, details, users_processed, snapshots_created)
+    VALUES (
+        'daily_price_snapshots',
+        CURRENT_DATE,
+        CASE WHEN failed_users = 0 THEN 'SUCCESS' ELSE 'PARTIAL_SUCCESS' END,
+        duration_seconds,
+        log_message,
+        total_users,
+        total_snapshots
+    )
+    ON CONFLICT (job_name, execution_date) 
+    DO UPDATE SET
+        status = EXCLUDED.status,
+        duration_seconds = EXCLUDED.duration_seconds,
+        details = EXCLUDED.details,
+        users_processed = EXCLUDED.users_processed,
+        snapshots_created = EXCLUDED.snapshots_created,
+        updated_at = NOW();
+
+--
+-- Name: idx_cron_job_logs_job_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_cron_job_logs_job_date ON public.cron_job_logs USING btree (job_name, execution_date DESC);
 

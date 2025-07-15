@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Row Level Security policies
 -- =========================================================================
--- Generated: 2025-07-14 15:35:17
+-- Generated: 2025-07-15 18:28:16
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -274,6 +274,12 @@ CREATE POLICY "Users can only access their own integration products" ON public.t
 --
 
 CREATE POLICY "Users can only access their own scraped products" ON public.temp_competitors_scraped_data USING ((auth.uid() = user_id));
+
+--
+-- Name: daily_price_competitiveness_snapshots Users can only access their own snapshots; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can only access their own snapshots" ON public.daily_price_competitiveness_snapshots USING ((auth.uid() = user_id));
 
 --
 -- Name: support_conversations Users can update own conversations; Type: POLICY; Schema: public; Owner: -

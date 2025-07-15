@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Public schema tables and sequences
 -- =========================================================================
--- Generated: 2025-07-14 15:35:17
+-- Generated: 2025-07-15 18:28:16
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -575,6 +575,53 @@ CREATE TABLE public.competitors (
 );
 
 --
+-- Name: cron_job_logs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cron_job_logs (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    job_name text NOT NULL,
+    execution_date date NOT NULL,
+    status text NOT NULL,
+    duration_seconds integer,
+    details text,
+    users_processed integer DEFAULT 0,
+    snapshots_created integer DEFAULT 0,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: TABLE cron_job_logs; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.cron_job_logs IS 'Logs for cron job executions, including daily price snapshots';
+
+--
+-- Name: COLUMN cron_job_logs.job_name; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cron_job_logs.job_name IS 'Name of the cron job (e.g., daily_price_snapshots)';
+
+--
+-- Name: COLUMN cron_job_logs.execution_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cron_job_logs.execution_date IS 'Date when the job was executed';
+
+--
+-- Name: COLUMN cron_job_logs.status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cron_job_logs.status IS 'SUCCESS, FAILED, or PARTIAL_SUCCESS';
+
+--
+-- Name: COLUMN cron_job_logs.details; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cron_job_logs.details IS 'Detailed log output from the job execution';
+
+--
 -- Name: csv_uploads; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -589,6 +636,78 @@ CREATE TABLE public.csv_uploads (
     processed_at timestamp with time zone,
     error_message text
 );
+
+--
+-- Name: daily_price_competitiveness_snapshots; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.daily_price_competitiveness_snapshots (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    snapshot_date date NOT NULL,
+    competitor_id uuid,
+    brand_filter text,
+    total_products_analyzed integer DEFAULT 0 NOT NULL,
+    products_we_are_cheapest integer DEFAULT 0 NOT NULL,
+    products_we_are_same_price integer DEFAULT 0 NOT NULL,
+    products_we_are_more_expensive integer DEFAULT 0 NOT NULL,
+    cheapest_percentage numeric(5,2) DEFAULT 0 NOT NULL,
+    same_price_percentage numeric(5,2) DEFAULT 0 NOT NULL,
+    more_expensive_percentage numeric(5,2) DEFAULT 0 NOT NULL,
+    avg_price_difference_when_higher numeric(10,2),
+    avg_price_difference_percentage_when_higher numeric(5,2),
+    total_potential_savings numeric(12,2),
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+--
+-- Name: TABLE daily_price_competitiveness_snapshots; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.daily_price_competitiveness_snapshots IS 'Stores daily snapshots of price competitiveness for historical trend analysis. Supports both competitor-specific and brand-specific filtering.';
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.competitor_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.competitor_id IS 'NULL means analysis across all competitors';
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.brand_filter; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.brand_filter IS 'NULL means analysis across all brands. When set, only products matching this brand are included.';
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.total_products_analyzed; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.total_products_analyzed IS 'Total number of products included in this snapshot analysis';
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.products_we_are_cheapest; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.products_we_are_cheapest IS 'Number of products where our price is lower than or equal to the lowest competitor price';
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.products_we_are_same_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.products_we_are_same_price IS 'Number of products where our price exactly matches the lowest competitor price';
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.products_we_are_more_expensive; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.products_we_are_more_expensive IS 'Number of products where our price is higher than the lowest competitor price';
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.total_potential_savings; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.total_potential_savings IS 'Total amount in kr that customers could save if we matched all lowest competitor prices';
 
 --
 -- Name: debug_logs; Type: TABLE; Schema: public; Owner: -
@@ -1733,11 +1852,32 @@ ALTER TABLE ONLY public.competitors
     ADD CONSTRAINT competitors_pkey PRIMARY KEY (id);
 
 --
+-- Name: cron_job_logs cron_job_logs_job_name_execution_date_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cron_job_logs
+    ADD CONSTRAINT cron_job_logs_job_name_execution_date_key UNIQUE (job_name, execution_date);
+
+--
+-- Name: cron_job_logs cron_job_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cron_job_logs
+    ADD CONSTRAINT cron_job_logs_pkey PRIMARY KEY (id);
+
+--
 -- Name: csv_uploads csv_uploads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.csv_uploads
     ADD CONSTRAINT csv_uploads_pkey PRIMARY KEY (id);
+
+--
+-- Name: daily_price_competitiveness_snapshots daily_price_competitiveness_snapshots_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_price_competitiveness_snapshots
+    ADD CONSTRAINT daily_price_competitiveness_snapshots_pkey PRIMARY KEY (id);
 
 --
 -- Name: debug_logs debug_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -2193,6 +2333,20 @@ ALTER TABLE ONLY public.csv_uploads
 
 ALTER TABLE ONLY public.csv_uploads
     ADD CONSTRAINT csv_uploads_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+--
+-- Name: daily_price_competitiveness_snapshots daily_price_competitiveness_snapshots_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_price_competitiveness_snapshots
+    ADD CONSTRAINT daily_price_competitiveness_snapshots_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id) ON DELETE CASCADE;
+
+--
+-- Name: daily_price_competitiveness_snapshots daily_price_competitiveness_snapshots_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_price_competitiveness_snapshots
+    ADD CONSTRAINT daily_price_competitiveness_snapshots_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 --
 -- Name: dismissed_duplicates dismissed_duplicates_brand_id_1_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -2721,10 +2875,22 @@ ALTER TABLE public.brands ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.competitors ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: cron_job_logs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.cron_job_logs ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: csv_uploads; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.csv_uploads ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: daily_price_competitiveness_snapshots; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.daily_price_competitiveness_snapshots ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: debug_logs; Type: ROW SECURITY; Schema: public; Owner: -

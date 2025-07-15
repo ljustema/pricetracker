@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-07-14 15:35:17
+-- Generated: 2025-07-15 18:28:16
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -274,6 +274,47 @@ DECLARE
 --
 
 COMMENT ON FUNCTION public.auto_trim_progress_messages() IS 'Automatically trims progress_messages when they exceed 200 entries';
+
+--
+-- Name: calculate_all_daily_snapshots(uuid, date); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_all_daily_snapshots(p_user_id uuid, p_snapshot_date date DEFAULT CURRENT_DATE) RETURNS TABLE(combination_type text, competitor_name text, brand_filter text, total_products integer, success boolean)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    competitor_record RECORD;
+
+--
+-- Name: FUNCTION calculate_all_daily_snapshots(p_user_id uuid, p_snapshot_date date); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.calculate_all_daily_snapshots(p_user_id uuid, p_snapshot_date date) IS 'Calculates daily snapshots for all relevant combinations of competitors and brands.
+This is useful for batch processing in cron jobs.
+Parameters:
+- p_user_id: The user ID to calculate snapshots for
+- p_snapshot_date: The date for the snapshot (default: today)';
+
+--
+-- Name: calculate_daily_price_competitiveness_snapshot(uuid, date, uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_daily_price_competitiveness_snapshot(p_user_id uuid, p_snapshot_date date DEFAULT CURRENT_DATE, p_competitor_id uuid DEFAULT NULL::uuid, p_brand_filter text DEFAULT NULL::text) RETURNS TABLE(snapshot_id uuid, total_products integer, cheapest_count integer, same_price_count integer, more_expensive_count integer, cheapest_percentage numeric, same_price_percentage numeric, more_expensive_percentage numeric)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_snapshot_id UUID;
+
+--
+-- Name: FUNCTION calculate_daily_price_competitiveness_snapshot(p_user_id uuid, p_snapshot_date date, p_competitor_id uuid, p_brand_filter text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.calculate_daily_price_competitiveness_snapshot(p_user_id uuid, p_snapshot_date date, p_competitor_id uuid, p_brand_filter text) IS 'Calculates and stores a daily snapshot of price competitiveness metrics for a user.
+Parameters:
+- p_user_id: The user ID to calculate snapshots for
+- p_snapshot_date: The date for the snapshot (default: today)
+- p_competitor_id: Specific competitor to analyze (NULL for all competitors)
+- p_brand_filter: Brand filter to apply (NULL for all brands)';
 
 --
 -- Name: calculate_next_integration_run_time(text, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
@@ -988,6 +1029,139 @@ BEGIN
     p.user_id = p_user_id
     AND p.brand_id = p_brand_id
     AND c.user_id = p_user_id;
+
+--
+-- Name: get_competitor_pressure_analysis(uuid, text, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_competitor_pressure_analysis(p_user_id uuid, p_brand_filter text DEFAULT NULL::text, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS TABLE(competitor_id uuid, competitor_name text, products_where_lowest integer, total_products_tracked integer, lowest_price_percentage numeric, avg_price_when_lowest numeric, is_integration boolean)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+
+--
+-- Name: get_competitor_price_analysis(uuid, uuid[], text, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_competitor_price_analysis(p_user_id uuid, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_brand_filter text DEFAULT NULL::text, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS TABLE(competitor_id uuid, competitor_name text, competitor_website text, total_matching_products integer, our_products_cheaper integer, our_products_more_expensive integer, our_products_same_price integer, avg_price_difference_percentage numeric, avg_our_price numeric, avg_competitor_price numeric, market_coverage_percentage numeric)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+
+--
+-- Name: get_competitor_price_change_frequency(uuid, integer, uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_competitor_price_change_frequency(p_user_id uuid, p_days integer DEFAULT 30, p_competitor_ids uuid[] DEFAULT NULL::uuid[]) RETURNS TABLE(competitor_id uuid, competitor_name text, total_price_changes integer, products_with_changes integer, avg_changes_per_product numeric, price_increases integer, price_decreases integer, avg_change_percentage numeric, most_active_day text, is_integration boolean)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH competitor_price_changes AS (
+        SELECT
+            pcc.competitor_id,
+            pcc.product_id,
+            pcc.old_competitor_price as old_price,
+            pcc.new_competitor_price as new_price,
+            pcc.price_change_percentage,
+            pcc.changed_at,
+            EXTRACT(DOW FROM pcc.changed_at) as day_of_week,
+            'competitor' as price_source
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.changed_at >= NOW() - (p_days || ' days')::INTERVAL
+        AND (p_competitor_ids IS NULL OR pcc.competitor_id = ANY(p_competitor_ids))
+        AND pcc.old_competitor_price IS NOT NULL
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.old_competitor_price != pcc.new_competitor_price
+        
+        UNION ALL
+        
+        -- Add our own price changes
+        SELECT
+            pcc.integration_id as competitor_id,
+            pcc.product_id,
+            pcc.old_our_retail_price as old_price,
+            pcc.new_our_retail_price as new_price,
+            ((pcc.new_our_retail_price - pcc.old_our_retail_price) / pcc.old_our_retail_price * 100) as price_change_percentage,
+            pcc.changed_at,
+            EXTRACT(DOW FROM pcc.changed_at) as day_of_week,
+            'integration' as price_source
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.integration_id IS NOT NULL
+        AND pcc.changed_at >= NOW() - (p_days || ' days')::INTERVAL
+        AND pcc.old_our_retail_price IS NOT NULL
+        AND pcc.new_our_retail_price IS NOT NULL
+        AND pcc.old_our_retail_price != pcc.new_our_retail_price
+    ),
+    day_counts AS (
+        -- Count price changes by entity and day of week
+        SELECT
+            cpc.competitor_id,
+            cpc.price_source,
+            cpc.day_of_week,
+            COUNT(*) as changes_count
+        FROM competitor_price_changes cpc
+        GROUP BY cpc.competitor_id, cpc.price_source, cpc.day_of_week
+    ),
+    most_active_days AS (
+        -- Find the day with most changes for each entity
+        SELECT DISTINCT ON (dc.competitor_id, dc.price_source)
+            dc.competitor_id,
+            dc.price_source,
+            dc.day_of_week as most_active_day_num
+        FROM day_counts dc
+        ORDER BY dc.competitor_id, dc.price_source, dc.changes_count DESC, dc.day_of_week
+    ),
+    entity_stats AS (
+        SELECT
+            cpc.competitor_id,
+            cpc.price_source,
+            COUNT(*) as total_price_changes,
+            COUNT(DISTINCT cpc.product_id) as products_with_changes,
+            COUNT(*)::NUMERIC / COUNT(DISTINCT cpc.product_id) as avg_changes_per_product,
+            COUNT(*) FILTER (WHERE cpc.new_price > cpc.old_price) as price_increases,
+            COUNT(*) FILTER (WHERE cpc.new_price < cpc.old_price) as price_decreases,
+            AVG(ABS(cpc.price_change_percentage)) as avg_change_percentage
+        FROM competitor_price_changes cpc
+        GROUP BY cpc.competitor_id, cpc.price_source
+    )
+    SELECT
+        CASE 
+            WHEN es.price_source = 'integration' THEN NULL
+            ELSE es.competitor_id
+        END as competitor_id,
+        CASE 
+            WHEN es.price_source = 'integration' THEN COALESCE(i.name, 'Our Company')
+            ELSE c.name 
+        END as competitor_name,
+        es.total_price_changes::INTEGER,
+        es.products_with_changes::INTEGER,
+        ROUND(es.avg_changes_per_product, 2) as avg_changes_per_product,
+        es.price_increases::INTEGER,
+        es.price_decreases::INTEGER,
+        ROUND(es.avg_change_percentage, 2) as avg_change_percentage,
+        CASE COALESCE(mad.most_active_day_num, -1)
+            WHEN 1 THEN 'Monday'
+            WHEN 2 THEN 'Tuesday'
+            WHEN 3 THEN 'Wednesday'
+            WHEN 4 THEN 'Thursday'
+            WHEN 5 THEN 'Friday'
+            WHEN 6 THEN 'Saturday'
+            WHEN 0 THEN 'Sunday'
+            ELSE 'Unknown'
+        END as most_active_day,
+        (es.price_source = 'integration') as is_integration
+    FROM entity_stats es
+    LEFT JOIN competitors c ON es.competitor_id = c.id AND es.price_source = 'competitor'
+    LEFT JOIN integrations i ON es.competitor_id = i.id AND es.price_source = 'integration'
+    LEFT JOIN most_active_days mad ON es.competitor_id = mad.competitor_id AND es.price_source = mad.price_source
+    WHERE (c.user_id = p_user_id OR i.user_id = p_user_id)
+    ORDER BY es.total_price_changes DESC;
 
 --
 -- Name: get_competitor_statistics(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -1743,6 +1917,16 @@ BEGIN
     ORDER BY ls.product_id, ls.changed_at DESC;
 
 --
+-- Name: get_market_positioning_overview(uuid, text, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_market_positioning_overview(p_user_id uuid, p_brand_filter text DEFAULT NULL::text, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS TABLE(total_our_products integer, products_with_competitor_data integer, market_coverage_percentage numeric, competitive_products integer, overpriced_products integer, competitive_percentage numeric, avg_price_premium_percentage numeric, total_competitors integer, most_competitive_against text, least_competitive_against text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+
+--
 -- Name: get_or_create_unknown_brand(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1765,6 +1949,26 @@ DECLARE
   v_settings_id UUID;
 
 --
+-- Name: get_price_competitiveness_trends(uuid, date, date, uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_price_competitiveness_trends(p_user_id uuid, p_start_date date DEFAULT (CURRENT_DATE - '30 days'::interval), p_end_date date DEFAULT CURRENT_DATE, p_competitor_id uuid DEFAULT NULL::uuid, p_brand_filter text DEFAULT NULL::text) RETURNS TABLE(snapshot_date date, competitor_id uuid, competitor_name text, brand_filter text, total_products integer, products_we_are_cheapest integer, products_we_are_same_price integer, products_we_are_more_expensive integer, cheapest_percentage numeric, same_price_percentage numeric, more_expensive_percentage numeric, avg_price_difference_when_higher numeric, total_potential_savings numeric)
+    LANGUAGE plpgsql
+    AS $$ BEGIN RETURN QUERY SELECT s.snapshot_date, s.competitor_id, COALESCE(c.name, 'All Competitors') as competitor_name, s.brand_filter, s.total_products_analyzed, s.products_we_are_cheapest, s.products_we_are_same_price, s.products_we_are_more_expensive, s.cheapest_percentage, s.same_price_percentage, s.more_expensive_percentage, s.avg_price_difference_when_higher, s.total_potential_savings FROM daily_price_competitiveness_snapshots s LEFT JOIN competitors c ON s.competitor_id = c.id WHERE s.user_id = p_user_id AND s.snapshot_date BETWEEN p_start_date AND p_end_date AND ( (p_competitor_id IS NULL AND s.competitor_id IS NULL) OR (p_competitor_id IS NOT NULL AND s.competitor_id = p_competitor_id) ) AND (p_brand_filter IS NULL OR s.brand_filter = p_brand_filter OR (p_brand_filter IS NULL AND s.brand_filter IS NULL)) ORDER BY s.snapshot_date ASC, COALESCE(c.name, 'All Competitors'); END; $$;
+
+--
+-- Name: FUNCTION get_price_competitiveness_trends(p_user_id uuid, p_start_date date, p_end_date date, p_competitor_id uuid, p_brand_filter text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_price_competitiveness_trends(p_user_id uuid, p_start_date date, p_end_date date, p_competitor_id uuid, p_brand_filter text) IS 'Retrieves historical price competitiveness trends from stored snapshots.
+Parameters:
+- p_user_id: The user ID to retrieve data for
+- p_start_date: Start date for the trend period (default: 30 days ago)
+- p_end_date: End date for the trend period (default: today)
+- p_competitor_id: Filter by specific competitor (NULL for all competitors)
+- p_brand_filter: Filter by specific brand (NULL for all brands)';
+
+--
 -- Name: get_price_range_analysis(uuid, uuid, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1780,6 +1984,82 @@ DECLARE
 --
 
 COMMENT ON FUNCTION public.get_price_range_analysis(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone) IS 'Returns sales distribution analysis across different price segments';
+
+--
+-- Name: get_priority_products_for_repricing(uuid, uuid, text, integer, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_priority_products_for_repricing(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_brand_filter text DEFAULT NULL::text, p_limit integer DEFAULT 50, p_offset integer DEFAULT 0) RETURNS TABLE(product_id uuid, product_name text, product_sku text, product_brand text, product_ean text, our_price numeric, lowest_competitor_price numeric, price_difference numeric, price_difference_percentage numeric, potential_savings numeric, competitor_count integer, most_competitive_competitor_name text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH recent_competitor_prices AS (
+        -- Get recent competitor prices (last 30 days)
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price,
+            pcc.changed_at
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.changed_at >= NOW() - INTERVAL '30 days'
+        AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    competitor_prices_with_names AS (
+        -- Add competitor names and rank by price
+        SELECT 
+            rcp.product_id,
+            rcp.competitor_id,
+            rcp.new_competitor_price,
+            c.name as competitor_name,
+            ROW_NUMBER() OVER (PARTITION BY rcp.product_id ORDER BY rcp.new_competitor_price ASC) as price_rank
+        FROM recent_competitor_prices rcp
+        JOIN competitors c ON rcp.competitor_id = c.id
+        WHERE c.user_id = p_user_id
+    ),
+    product_analysis AS (
+        -- Analyze each product against competitors
+        SELECT 
+            p.id as product_id,
+            p.name as product_name,
+            p.sku as product_sku,
+            p.brand as product_brand,
+            p.ean as product_ean,
+            p.our_retail_price,
+            MIN(cpn.new_competitor_price) as min_competitor_price,
+            COUNT(DISTINCT cpn.competitor_id) as competitor_count,
+            -- Get the competitor name with the lowest price (rank 1)
+            MAX(CASE WHEN cpn.price_rank = 1 THEN cpn.competitor_name END) as lowest_price_competitor
+        FROM products p
+        JOIN competitor_prices_with_names cpn ON p.id = cpn.product_id
+        WHERE p.user_id = p_user_id
+        AND p.is_active = true
+        AND p.our_retail_price IS NOT NULL
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+        GROUP BY p.id, p.name, p.sku, p.brand, p.ean, p.our_retail_price
+        HAVING p.our_retail_price > MIN(cpn.new_competitor_price) -- Only where we're more expensive
+    )
+    SELECT 
+        pa.product_id,
+        pa.product_name,
+        pa.product_sku,
+        pa.product_brand,
+        pa.product_ean,
+        ROUND(pa.our_retail_price, 2) as our_price,
+        ROUND(pa.min_competitor_price, 2) as lowest_competitor_price,
+        ROUND(pa.our_retail_price - pa.min_competitor_price, 2) as price_difference,
+        ROUND(((pa.our_retail_price - pa.min_competitor_price) / pa.our_retail_price * 100), 2) as price_difference_percentage,
+        ROUND(pa.our_retail_price - pa.min_competitor_price, 2) as potential_savings,
+        pa.competitor_count::INTEGER,
+        COALESCE(pa.lowest_price_competitor, 'Unknown') as most_competitive_competitor_name
+    FROM product_analysis pa
+    ORDER BY (pa.our_retail_price - pa.min_competitor_price) DESC
+    LIMIT p_limit
+    OFFSET p_offset;
 
 --
 -- Name: get_processing_stats(); Type: FUNCTION; Schema: public; Owner: -
@@ -2016,6 +2296,44 @@ BEGIN
         SELECT completed_at FROM public.integration_runs 
         WHERE status = 'completed' AND completed_at >= date_trunc('day', now())
     ) completed_jobs;
+
+--
+-- Name: get_snapshot_statistics(integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_snapshot_statistics(days_back integer DEFAULT 30) RETURNS TABLE(metric text, value text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH stats AS (
+        SELECT 
+            COUNT(DISTINCT snapshot_date) as unique_dates,
+            COUNT(DISTINCT user_id) as unique_users,
+            COUNT(*) as total_snapshots,
+            MIN(snapshot_date) as earliest_date,
+            MAX(snapshot_date) as latest_date,
+            AVG(total_products_analyzed) as avg_products_per_snapshot
+        FROM daily_price_competitiveness_snapshots
+        WHERE snapshot_date >= CURRENT_DATE - (days_back || ' days')::INTERVAL
+    )
+    SELECT 'Unique Dates'::TEXT, unique_dates::TEXT FROM stats
+    UNION ALL
+    SELECT 'Unique Users'::TEXT, unique_users::TEXT FROM stats
+    UNION ALL
+    SELECT 'Total Snapshots'::TEXT, total_snapshots::TEXT FROM stats
+    UNION ALL
+    SELECT 'Earliest Date'::TEXT, earliest_date::TEXT FROM stats
+    UNION ALL
+    SELECT 'Latest Date'::TEXT, latest_date::TEXT FROM stats
+    UNION ALL
+    SELECT 'Avg Products/Snapshot'::TEXT, ROUND(avg_products_per_snapshot, 1)::TEXT FROM stats;
+
+--
+-- Name: FUNCTION get_snapshot_statistics(days_back integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_snapshot_statistics(days_back integer) IS 'Get summary statistics about snapshot data for monitoring and verification purposes.';
 
 --
 -- Name: get_stock_summary_stats(uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -2674,6 +2992,23 @@ DECLARE
 COMMENT ON FUNCTION public.retry_fetch_failed_runs() IS 'Automatically retries runs that failed with "fetch failed" error, up to 3 times within an hour';
 
 --
+-- Name: run_daily_price_snapshots(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.run_daily_price_snapshots() RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    user_record RECORD;
+
+--
+-- Name: FUNCTION run_daily_price_snapshots(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.run_daily_price_snapshots() IS 'Main function executed by pg_cron daily to calculate price competitiveness snapshots for all active users.
+Returns a detailed log of the execution including success/failure counts and timing information.';
+
+--
 -- Name: set_product_brand_id(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -2759,6 +3094,22 @@ DECLARE
     v_updated_count INTEGER;
 
 --
+-- Name: trigger_snapshots_for_date(date); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.trigger_snapshots_for_date(target_date date DEFAULT CURRENT_DATE) RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    result TEXT;
+
+--
+-- Name: FUNCTION trigger_snapshots_for_date(target_date date); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.trigger_snapshots_for_date(target_date date) IS 'Manually trigger snapshot calculations for a specific date. Useful for backfilling or testing.';
+
+--
 -- Name: trigger_sync_our_url_on_product_update(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -2817,6 +3168,16 @@ BEGIN
   UPDATE support_conversations 
   SET updated_at = NOW() 
   WHERE id = NEW.conversation_id;
+
+--
+-- Name: update_daily_snapshots_updated_at(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_daily_snapshots_updated_at() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    NEW.updated_at = NOW();
 
 --
 -- Name: update_integration_next_run_on_completion(); Type: FUNCTION; Schema: public; Owner: -
@@ -3558,6 +3919,12 @@ CREATE TRIGGER trigger_calculate_price_change_percentage BEFORE INSERT OR UPDATE
 --
 
 CREATE TRIGGER trigger_update_conversation_timestamp AFTER INSERT ON public.support_messages FOR EACH ROW EXECUTE FUNCTION public.update_conversation_timestamp();
+
+--
+-- Name: daily_price_competitiveness_snapshots trigger_update_daily_snapshots_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trigger_update_daily_snapshots_updated_at BEFORE UPDATE ON public.daily_price_competitiveness_snapshots FOR EACH ROW EXECUTE FUNCTION public.update_daily_snapshots_updated_at();
 
 --
 -- Name: integration_runs trigger_update_integration_next_run; Type: TRIGGER; Schema: public; Owner: -

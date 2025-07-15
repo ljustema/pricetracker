@@ -56,10 +56,7 @@ const InsightsComponent: React.FC<InsightsComponentProps> = ({ stockData }) => {
         <TabsList className="mb-6 grid w-full grid-cols-6">
           <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
           <TabsTrigger value="stock">Stock Analysis</TabsTrigger>
-          <TabsTrigger value="competitors" className="flex items-center gap-2">
-            Competitor Analysis
-            <Badge className="text-xs bg-yellow-100 text-yellow-800 border-yellow-200 hover:bg-yellow-200">Beta</Badge>
-          </TabsTrigger>
+          <TabsTrigger value="competitors">Competitor Analysis</TabsTrigger>
           <TabsTrigger value="products" className="flex items-center gap-2">
             Product Analysis
             <Badge className="text-xs bg-yellow-100 text-yellow-800 border-yellow-200 hover:bg-yellow-200">Beta</Badge>

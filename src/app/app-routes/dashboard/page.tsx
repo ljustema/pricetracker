@@ -8,6 +8,7 @@ import Link from "next/link";
 import crypto from 'crypto';
 import BrandStatisticsServer from "@/components/brands/BrandStatisticsServer";
 import GenerateReportButton from "@/components/dashboard/generate-report-button";
+import ExportPriceMatchingButton from "@/components/dashboard/ExportPriceMatchingButton";
 import PriceChangeDisplay from "@/components/dashboard/PriceChangeDisplay";
 import { Database } from "@/lib/supabase/database.types";
 
@@ -464,6 +465,8 @@ export default async function DashboardPage() {
           </Link>
 
           <GenerateReportButton />
+
+          <ExportPriceMatchingButton />
 
           <Link
             href="/app-routes/integrations"

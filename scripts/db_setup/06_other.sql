@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-07-14 15:35:17
+-- Generated: 2025-07-15 18:28:16
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -411,6 +411,243 @@ END IF;
 END IF;
 
 RETURN NEW;
+
+END;
+
+$$;
+
+brand_record RECORD;
+
+result_record RECORD;
+
+BEGIN
+    -- 1. Calculate snapshot for all competitors, all brands
+    SELECT * INTO result_record
+    FROM calculate_daily_price_competitiveness_snapshot(p_user_id, p_snapshot_date, NULL, NULL);
+
+RETURN QUERY SELECT
+        'All Competitors, All Brands'::TEXT,
+        'All Competitors'::TEXT,
+        'All Brands'::TEXT,
+        result_record.total_products,
+        TRUE;
+
+-- 2. Calculate snapshots for each individual competitor (all brands)
+    FOR competitor_record IN
+        SELECT id, name FROM competitors WHERE user_id = p_user_id AND is_active = true
+    LOOP
+        SELECT * INTO result_record
+        FROM calculate_daily_price_competitiveness_snapshot(p_user_id, p_snapshot_date, competitor_record.id, NULL);
+
+RETURN QUERY SELECT
+            'Individual Competitor, All Brands'::TEXT,
+            competitor_record.name,
+            'All Brands'::TEXT,
+            result_record.total_products,
+            TRUE;
+
+END LOOP;
+
+-- 3. Calculate snapshots for each brand (all competitors)
+    FOR brand_record IN
+        SELECT DISTINCT brand FROM products
+        WHERE user_id = p_user_id AND is_active = true AND brand IS NOT NULL AND brand != ''
+        ORDER BY brand
+    LOOP
+        SELECT * INTO result_record
+        FROM calculate_daily_price_competitiveness_snapshot(p_user_id, p_snapshot_date, NULL, brand_record.brand);
+
+RETURN QUERY SELECT
+            'All Competitors, Individual Brand'::TEXT,
+            'All Competitors'::TEXT,
+            brand_record.brand,
+            result_record.total_products,
+            TRUE;
+
+END LOOP;
+
+-- Note: We could also add competitor+brand combinations, but that might be too many combinations
+    -- for now. Can be added later if needed.
+END;
+
+$$;
+
+v_total_products INTEGER := 0;
+
+v_cheapest_count INTEGER := 0;
+
+v_same_price_count INTEGER := 0;
+
+v_more_expensive_count INTEGER := 0;
+
+v_cheapest_percentage NUMERIC := 0;
+
+v_same_price_percentage NUMERIC := 0;
+
+v_more_expensive_percentage NUMERIC := 0;
+
+v_avg_diff_when_higher NUMERIC := 0;
+
+v_avg_diff_pct_when_higher NUMERIC := 0;
+
+v_total_potential_savings NUMERIC := 0;
+
+BEGIN
+    -- Calculate the snapshot data
+    WITH latest_competitor_prices AS (
+        -- Get the latest price for each product-competitor combination up to the snapshot date
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price,
+            pcc.changed_at
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.changed_at::date <= p_snapshot_date
+        AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    product_min_prices AS (
+        -- Find the minimum competitor price for each product
+        SELECT 
+            lcp.product_id,
+            MIN(lcp.new_competitor_price) as min_competitor_price
+        FROM latest_competitor_prices lcp
+        JOIN products p ON lcp.product_id = p.id
+        WHERE p.user_id = p_user_id
+        AND p.our_retail_price IS NOT NULL
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+        GROUP BY lcp.product_id
+    ),
+    price_analysis AS (
+        -- Analyze each product's competitiveness
+        SELECT
+            p.id as product_id,
+            p.our_retail_price,
+            pmp.min_competitor_price,
+            CASE
+                WHEN p.our_retail_price < pmp.min_competitor_price THEN 'cheapest'
+                WHEN p.our_retail_price = pmp.min_competitor_price THEN 'same_price'
+                ELSE 'more_expensive'
+            END as price_status,
+            CASE 
+                WHEN p.our_retail_price > pmp.min_competitor_price 
+                THEN p.our_retail_price - pmp.min_competitor_price 
+                ELSE 0 
+            END as price_difference,
+            CASE 
+                WHEN p.our_retail_price > pmp.min_competitor_price 
+                THEN ((p.our_retail_price - pmp.min_competitor_price) / p.our_retail_price * 100)
+                ELSE 0 
+            END as price_difference_percentage
+        FROM products p
+        JOIN product_min_prices pmp ON p.id = pmp.product_id
+        WHERE p.user_id = p_user_id
+        AND p.our_retail_price IS NOT NULL
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+    ),
+    aggregated_stats AS (
+        -- Calculate aggregated statistics
+        SELECT
+            COUNT(*) as total_products,
+            COUNT(*) FILTER (WHERE price_status = 'cheapest') as cheapest_count,
+            COUNT(*) FILTER (WHERE price_status = 'same_price') as same_price_count,
+            COUNT(*) FILTER (WHERE price_status = 'more_expensive') as more_expensive_count,
+            AVG(price_difference) FILTER (WHERE price_status = 'more_expensive') as avg_diff_when_higher,
+            AVG(price_difference_percentage) FILTER (WHERE price_status = 'more_expensive') as avg_diff_pct_when_higher,
+            SUM(price_difference) as total_potential_savings
+        FROM price_analysis
+    )
+    SELECT 
+        ast.total_products,
+        ast.cheapest_count,
+        ast.same_price_count,
+        ast.more_expensive_count,
+        ast.avg_diff_when_higher,
+        ast.avg_diff_pct_when_higher,
+        ast.total_potential_savings
+    INTO 
+        v_total_products,
+        v_cheapest_count,
+        v_same_price_count,
+        v_more_expensive_count,
+        v_avg_diff_when_higher,
+        v_avg_diff_pct_when_higher,
+        v_total_potential_savings
+    FROM aggregated_stats ast;
+
+-- Calculate percentages
+    IF v_total_products > 0 THEN
+        v_cheapest_percentage := ROUND((v_cheapest_count::NUMERIC / v_total_products * 100), 2);
+
+v_same_price_percentage := ROUND((v_same_price_count::NUMERIC / v_total_products * 100), 2);
+
+v_more_expensive_percentage := ROUND((v_more_expensive_count::NUMERIC / v_total_products * 100), 2);
+
+END IF;
+
+-- Insert or update the snapshot
+    INSERT INTO daily_price_competitiveness_snapshots (
+        user_id,
+        snapshot_date,
+        competitor_id,
+        brand_filter,
+        total_products_analyzed,
+        products_we_are_cheapest,
+        products_we_are_same_price,
+        products_we_are_more_expensive,
+        cheapest_percentage,
+        same_price_percentage,
+        more_expensive_percentage,
+        avg_price_difference_when_higher,
+        avg_price_difference_percentage_when_higher,
+        total_potential_savings
+    ) VALUES (
+        p_user_id,
+        p_snapshot_date,
+        p_competitor_id,
+        p_brand_filter,
+        v_total_products,
+        v_cheapest_count,
+        v_same_price_count,
+        v_more_expensive_count,
+        v_cheapest_percentage,
+        v_same_price_percentage,
+        v_more_expensive_percentage,
+        ROUND(v_avg_diff_when_higher, 2),
+        ROUND(v_avg_diff_pct_when_higher, 2),
+        ROUND(v_total_potential_savings, 2)
+    )
+    ON CONFLICT (user_id, snapshot_date, COALESCE(competitor_id::text, 'ALL'), COALESCE(brand_filter, 'ALL'))
+    DO UPDATE SET
+        total_products_analyzed = EXCLUDED.total_products_analyzed,
+        products_we_are_cheapest = EXCLUDED.products_we_are_cheapest,
+        products_we_are_same_price = EXCLUDED.products_we_are_same_price,
+        products_we_are_more_expensive = EXCLUDED.products_we_are_more_expensive,
+        cheapest_percentage = EXCLUDED.cheapest_percentage,
+        same_price_percentage = EXCLUDED.same_price_percentage,
+        more_expensive_percentage = EXCLUDED.more_expensive_percentage,
+        avg_price_difference_when_higher = EXCLUDED.avg_price_difference_when_higher,
+        avg_price_difference_percentage_when_higher = EXCLUDED.avg_price_difference_percentage_when_higher,
+        total_potential_savings = EXCLUDED.total_potential_savings,
+        updated_at = NOW()
+    RETURNING id INTO v_snapshot_id;
+
+-- Return the results
+    RETURN QUERY
+    SELECT 
+        v_snapshot_id,
+        v_total_products,
+        v_cheapest_count,
+        v_same_price_count,
+        v_more_expensive_count,
+        v_cheapest_percentage,
+        v_same_price_percentage,
+        v_more_expensive_percentage;
 
 END;
 
@@ -1962,6 +2199,229 @@ END;
 
 $$;
 
+date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+
+BEGIN
+    RETURN QUERY
+    WITH latest_competitor_prices AS (
+        -- Get the latest price for each product-competitor combination
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price,
+            pcc.changed_at
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.changed_at BETWEEN date_filter_start AND date_filter_end
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    latest_our_prices AS (
+        -- Get the latest price for each product from our price changes (integration_id)
+        SELECT DISTINCT ON (pcc.product_id)
+            pcc.product_id,
+            pcc.integration_id,
+            pcc.new_our_retail_price,
+            pcc.changed_at
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_our_retail_price IS NOT NULL
+        AND pcc.integration_id IS NOT NULL
+        AND pcc.changed_at BETWEEN date_filter_start AND date_filter_end
+        ORDER BY pcc.product_id, pcc.changed_at DESC
+    ),
+    all_prices AS (
+        -- Combine competitor prices with our own prices
+        SELECT 
+            lcp.product_id,
+            lcp.competitor_id::text as entity_id,
+            lcp.new_competitor_price as price,
+            'competitor' as price_source
+        FROM latest_competitor_prices lcp
+        JOIN products p ON lcp.product_id = p.id
+        WHERE p.user_id = p_user_id
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+        
+        UNION ALL
+        
+        -- Add our own prices using integration_id
+        SELECT 
+            lop.product_id,
+            lop.integration_id::text as entity_id,
+            lop.new_our_retail_price as price,
+            'integration' as price_source
+        FROM latest_our_prices lop
+        JOIN products p ON lop.product_id = p.id
+        WHERE p.user_id = p_user_id
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+    ),
+    products_with_competition AS (
+        -- Only include products where there are at least 2 price sources (actual competition)
+        SELECT 
+            ap.product_id
+        FROM all_prices ap
+        GROUP BY ap.product_id
+        HAVING COUNT(DISTINCT ap.entity_id) >= 2
+    ),
+    product_min_prices AS (
+        -- Find the minimum price for each product across all competitors AND us (only for products with competition)
+        SELECT 
+            ap.product_id,
+            MIN(ap.price) as min_price
+        FROM all_prices ap
+        JOIN products_with_competition pwc ON ap.product_id = pwc.product_id
+        GROUP BY ap.product_id
+    ),
+    lowest_price_competitors AS (
+        -- Identify which competitors (including us) have the lowest price for each product
+        SELECT 
+            ap.entity_id,
+            ap.product_id,
+            ap.price,
+            ap.price_source
+        FROM all_prices ap
+        JOIN product_min_prices pmp ON ap.product_id = pmp.product_id 
+            AND ap.price = pmp.min_price
+    ),
+    competitor_totals AS (
+        -- Count total products tracked per competitor (only products with actual competition)
+        SELECT 
+            ap.entity_id,
+            ap.price_source,
+            COUNT(DISTINCT ap.product_id) as total_products_tracked
+        FROM all_prices ap
+        JOIN products_with_competition pwc ON ap.product_id = pwc.product_id
+        GROUP BY ap.entity_id, ap.price_source
+    )
+    SELECT 
+        CASE 
+            WHEN ct.price_source = 'integration' THEN NULL
+            ELSE ct.entity_id::uuid
+        END as competitor_id,
+        CASE 
+            WHEN ct.price_source = 'integration' THEN COALESCE(i.name, 'Our Company')
+            ELSE c.name 
+        END as competitor_name,
+        COALESCE(lpc_stats.products_where_lowest, 0)::INTEGER as products_where_lowest,
+        ct.total_products_tracked::INTEGER,
+        ROUND(
+            COALESCE(lpc_stats.products_where_lowest, 0)::NUMERIC / ct.total_products_tracked * 100, 
+            2
+        ) as lowest_price_percentage,
+        ROUND(COALESCE(lpc_stats.avg_price_when_lowest, 0), 2) as avg_price_when_lowest,
+        (ct.price_source = 'integration') as is_integration
+    FROM competitor_totals ct
+    LEFT JOIN competitors c ON ct.entity_id = c.id::text AND ct.price_source = 'competitor'
+    LEFT JOIN integrations i ON ct.entity_id = i.id::text AND ct.price_source = 'integration'
+    LEFT JOIN (
+        SELECT 
+            lpc.entity_id,
+            lpc.price_source,
+            COUNT(*) as products_where_lowest,
+            AVG(lpc.price) as avg_price_when_lowest
+        FROM lowest_price_competitors lpc
+        GROUP BY lpc.entity_id, lpc.price_source
+    ) lpc_stats ON ct.entity_id = lpc_stats.entity_id AND ct.price_source = lpc_stats.price_source
+    WHERE (c.user_id = p_user_id OR i.user_id = p_user_id)
+    ORDER BY lowest_price_percentage DESC, products_where_lowest DESC;
+
+END;
+
+$$;
+
+date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+
+total_our_products INTEGER;
+
+BEGIN
+    -- Get total count of our products for market coverage calculation
+    SELECT COUNT(*)
+    INTO total_our_products
+    FROM products p
+    WHERE p.user_id = p_user_id
+    AND p.our_retail_price IS NOT NULL
+    AND p.is_active = true
+    AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%');
+
+RETURN QUERY
+    WITH latest_competitor_prices AS (
+        -- Get the latest price for each product-competitor combination
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price,
+            pcc.changed_at
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.changed_at BETWEEN date_filter_start AND date_filter_end
+        AND (p_competitor_ids IS NULL OR pcc.competitor_id = ANY(p_competitor_ids))
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    product_comparisons AS (
+        -- Compare our prices with competitor prices
+        SELECT 
+            lcp.competitor_id,
+            lcp.product_id,
+            p.our_retail_price,
+            lcp.new_competitor_price,
+            CASE 
+                WHEN p.our_retail_price < lcp.new_competitor_price THEN 'cheaper'
+                WHEN p.our_retail_price > lcp.new_competitor_price THEN 'more_expensive'
+                ELSE 'same_price'
+            END as price_comparison,
+            ((lcp.new_competitor_price - p.our_retail_price) / p.our_retail_price * 100) as price_diff_percentage
+        FROM latest_competitor_prices lcp
+        JOIN products p ON lcp.product_id = p.id
+        WHERE p.user_id = p_user_id
+        AND p.our_retail_price IS NOT NULL
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+    ),
+    competitor_stats AS (
+        -- Aggregate statistics per competitor
+        SELECT 
+            pc.competitor_id,
+            COUNT(*) as total_matching_products,
+            COUNT(*) FILTER (WHERE pc.price_comparison = 'cheaper') as our_products_cheaper,
+            COUNT(*) FILTER (WHERE pc.price_comparison = 'more_expensive') as our_products_more_expensive,
+            COUNT(*) FILTER (WHERE pc.price_comparison = 'same_price') as our_products_same_price,
+            AVG(pc.price_diff_percentage) as avg_price_difference_percentage,
+            AVG(pc.our_retail_price) as avg_our_price,
+            AVG(pc.new_competitor_price) as avg_competitor_price,
+            (COUNT(*)::NUMERIC / total_our_products * 100) as market_coverage_percentage
+        FROM product_comparisons pc
+        GROUP BY pc.competitor_id
+    )
+    SELECT 
+        cs.competitor_id,
+        c.name as competitor_name,
+        c.website as competitor_website,
+        cs.total_matching_products::INTEGER,
+        cs.our_products_cheaper::INTEGER,
+        cs.our_products_more_expensive::INTEGER,
+        cs.our_products_same_price::INTEGER,
+        ROUND(cs.avg_price_difference_percentage, 2) as avg_price_difference_percentage,
+        ROUND(cs.avg_our_price, 2) as avg_our_price,
+        ROUND(cs.avg_competitor_price, 2) as avg_competitor_price,
+        ROUND(cs.market_coverage_percentage, 2) as market_coverage_percentage
+    FROM competitor_stats cs
+    JOIN competitors c ON cs.competitor_id = c.id
+    WHERE c.user_id = p_user_id
+    ORDER BY cs.total_matching_products DESC;
+
+END;
+
+$$;
+
+END;
+
+$$;
+
 END;
 
 $$;
@@ -2162,6 +2622,89 @@ END;
 
 $$;
 
+date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+
+BEGIN
+    RETURN QUERY
+    WITH our_products AS (
+        SELECT p.id, p.name, p.brand, p.our_retail_price
+        FROM products p
+        WHERE p.user_id = p_user_id
+        AND p.our_retail_price IS NOT NULL
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+    ),
+    latest_competitor_prices AS (
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.changed_at BETWEEN date_filter_start AND date_filter_end
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    product_min_prices AS (
+        SELECT
+            lcp.product_id,
+            MIN(lcp.new_competitor_price) as min_competitor_price,
+            COUNT(DISTINCT lcp.competitor_id) as competitor_count
+        FROM latest_competitor_prices lcp
+        GROUP BY lcp.product_id
+    ),
+    price_analysis AS (
+        SELECT
+            op.id,
+            op.our_retail_price,
+            pmp.min_competitor_price,
+            CASE
+                WHEN op.our_retail_price <= pmp.min_competitor_price THEN 'competitive'
+                ELSE 'overpriced'
+            END as price_status,
+            ((op.our_retail_price - pmp.min_competitor_price) / op.our_retail_price * 100) as price_premium_percentage
+        FROM our_products op
+        LEFT JOIN product_min_prices pmp ON op.id = pmp.product_id
+    ),
+    competitor_performance AS (
+        SELECT
+            c.name as competitor_name,
+            COUNT(*) FILTER (WHERE op.our_retail_price <= lcp.new_competitor_price) as products_we_beat,
+            COUNT(*) as total_comparisons
+        FROM our_products op
+        JOIN latest_competitor_prices lcp ON op.id = lcp.product_id
+        JOIN competitors c ON lcp.competitor_id = c.id
+        WHERE c.user_id = p_user_id
+        GROUP BY c.id, c.name
+    )
+    SELECT
+        (SELECT COUNT(*) FROM our_products)::INTEGER as total_our_products,
+        (SELECT COUNT(*) FROM price_analysis WHERE min_competitor_price IS NOT NULL)::INTEGER as products_with_competitor_data,
+        ROUND(
+            (SELECT COUNT(*) FROM price_analysis WHERE min_competitor_price IS NOT NULL)::NUMERIC /
+            (SELECT COUNT(*) FROM our_products) * 100,
+            2
+        ) as market_coverage_percentage,
+        (SELECT COUNT(*) FROM price_analysis WHERE price_status = 'competitive')::INTEGER as competitive_products,
+        (SELECT COUNT(*) FROM price_analysis WHERE price_status = 'overpriced')::INTEGER as overpriced_products,
+        ROUND(
+            (SELECT COUNT(*) FROM price_analysis WHERE price_status = 'competitive')::NUMERIC /
+            NULLIF((SELECT COUNT(*) FROM price_analysis WHERE min_competitor_price IS NOT NULL), 0) * 100,
+            2
+        ) as competitive_percentage,
+        ROUND(
+            (SELECT AVG(price_premium_percentage) FROM price_analysis WHERE price_premium_percentage > 0),
+            2
+        ) as avg_price_premium_percentage,
+        (SELECT COUNT(DISTINCT competitor_id) FROM latest_competitor_prices)::INTEGER as total_competitors,
+        (SELECT competitor_name FROM competitor_performance ORDER BY (products_we_beat::NUMERIC / total_comparisons) DESC LIMIT 1) as most_competitive_against,
+        (SELECT competitor_name FROM competitor_performance ORDER BY (products_we_beat::NUMERIC / total_comparisons) ASC LIMIT 1) as least_competitive_against;
+
+END;
+
+$$;
+
 BEGIN
     -- Try to find existing 'Unknown' brand
     SELECT id INTO brand_id_result
@@ -2291,6 +2834,10 @@ BEGIN
     FROM range_analysis ra
     CROSS JOIN totals t
     ORDER BY ra.range_order;
+
+END;
+
+$$;
 
 END;
 
@@ -3018,6 +3565,10 @@ BEGIN
     CROSS JOIN totals t
     WHERE swr.total_sold > 0  -- Only include products with actual sales
     ORDER BY swr.total_sold DESC;
+
+END;
+
+$$;
 
 END;
 
@@ -5138,6 +5689,110 @@ END;
 
 $$;
 
+result_record RECORD;
+
+total_users INTEGER := 0;
+
+successful_users INTEGER := 0;
+
+failed_users INTEGER := 0;
+
+total_snapshots INTEGER := 0;
+
+start_time TIMESTAMP := NOW();
+
+end_time TIMESTAMP;
+
+duration_seconds INTEGER;
+
+log_message TEXT := '';
+
+error_message TEXT;
+
+BEGIN
+    log_message := log_message || '🚀 Starting daily price competitiveness snapshots for ' || CURRENT_DATE || E'\n';
+
+log_message := log_message || '⏰ Started at: ' || start_time || ' UTC (after daily scrapers)' || E'\n';
+
+-- Get all active users who have both products and competitors
+    FOR user_record IN 
+        SELECT DISTINCT p.user_id
+        FROM products p
+        WHERE p.is_active = true
+        AND p.our_retail_price IS NOT NULL
+        AND EXISTS (
+            SELECT 1 FROM competitors c 
+            WHERE c.user_id = p.user_id 
+            AND c.is_active = true
+        )
+        AND EXISTS (
+            SELECT 1 FROM price_changes_competitors pcc 
+            WHERE pcc.user_id = p.user_id 
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '7 days'
+        )
+        LIMIT 100 -- Safety limit
+    LOOP
+        total_users := total_users + 1;
+
+BEGIN
+            -- Calculate snapshots for this user
+            SELECT COUNT(*) INTO result_record
+            FROM calculate_all_daily_snapshots(user_record.user_id, CURRENT_DATE);
+
+successful_users := successful_users + 1;
+
+total_snapshots := total_snapshots + COALESCE(result_record.count, 0);
+
+log_message := log_message || '✅ User ' || user_record.user_id || ': ' || COALESCE(result_record.count, 0) || ' snapshots' || E'\n';
+
+EXCEPTION WHEN OTHERS THEN
+            failed_users := failed_users + 1;
+
+error_message := SQLERRM;
+
+log_message := log_message || '❌ User ' || user_record.user_id || ': ' || error_message || E'\n';
+
+END;
+
+-- Small delay to prevent overwhelming the database
+        PERFORM pg_sleep(0.1);
+
+END LOOP;
+
+end_time := NOW();
+
+duration_seconds := EXTRACT(EPOCH FROM (end_time - start_time))::INTEGER;
+
+-- Build summary
+    log_message := log_message || E'\n📈 DAILY SNAPSHOTS SUMMARY' || E'\n';
+
+log_message := log_message || '═══════════════════════════════════════════════════' || E'\n';
+
+log_message := log_message || '📅 Date: ' || CURRENT_DATE || E'\n';
+
+log_message := log_message || '⏱️ Duration: ' || duration_seconds || ' seconds' || E'\n';
+
+log_message := log_message || '👥 Users processed: ' || total_users || E'\n';
+
+log_message := log_message || '✅ Successful: ' || successful_users || E'\n';
+
+log_message := log_message || '❌ Failed: ' || failed_users || E'\n';
+
+log_message := log_message || '📊 Total snapshots created: ' || total_snapshots || E'\n';
+
+IF total_users = 0 THEN
+        log_message := log_message || 'ℹ️ No active users found with recent price data.' || E'\n';
+
+END IF;
+
+log_message := log_message || '🎉 Daily snapshots completed!' || E'\n';
+
+RETURN log_message;
+
+END;
+
+$$;
+
 END IF;
 
 RETURN NEW;
@@ -5368,6 +6023,18 @@ END;
 
 $$;
 
+BEGIN
+    -- Temporarily modify the function to use the target date
+    -- This is a simple approach - in production you might want a more sophisticated method
+    
+    SELECT run_daily_price_snapshots() INTO result;
+
+RETURN 'Triggered snapshots for ' || target_date || E'\n' || result;
+
+END;
+
+$$;
+
 END IF;
 
 RETURN NEW;
@@ -5455,6 +6122,12 @@ EXCEPTION WHEN OTHERS THEN
         'product_id_1', p_product_id_1,
         'product_id_2', p_product_id_2
     );
+
+END;
+
+$$;
+
+RETURN NEW;
 
 END;
 
@@ -6735,6 +7408,36 @@ CREATE INDEX idx_brands_needs_review ON public.brands USING btree (needs_review)
 CREATE INDEX idx_brands_user_id ON public.brands USING btree (user_id);
 
 --
+-- Name: idx_daily_snapshots_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_daily_snapshots_unique ON public.daily_price_competitiveness_snapshots USING btree (user_id, snapshot_date, COALESCE((competitor_id)::text, 'ALL'::text), COALESCE(brand_filter, 'ALL'::text));
+
+--
+-- Name: idx_daily_snapshots_user_brand_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_daily_snapshots_user_brand_date ON public.daily_price_competitiveness_snapshots USING btree (user_id, brand_filter, snapshot_date DESC);
+
+--
+-- Name: idx_daily_snapshots_user_competitor_brand_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_daily_snapshots_user_competitor_brand_date ON public.daily_price_competitiveness_snapshots USING btree (user_id, competitor_id, brand_filter, snapshot_date DESC);
+
+--
+-- Name: idx_daily_snapshots_user_competitor_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_daily_snapshots_user_competitor_date ON public.daily_price_competitiveness_snapshots USING btree (user_id, competitor_id, snapshot_date DESC);
+
+--
+-- Name: idx_daily_snapshots_user_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_daily_snapshots_user_date ON public.daily_price_competitiveness_snapshots USING btree (user_id, snapshot_date DESC);
+
+--
 -- Name: idx_dismissed_duplicates_brand_ids; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6805,6 +7508,12 @@ CREATE INDEX idx_price_changes_analysis ON public.price_changes_competitors USIN
 --
 
 CREATE INDEX idx_price_changes_competitor_id ON public.price_changes_competitors USING btree (competitor_id);
+
+--
+-- Name: idx_price_changes_competitors_user_product_competitor; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_user_product_competitor ON public.price_changes_competitors USING btree (user_id, product_id, competitor_id, changed_at DESC) WHERE ((new_competitor_price IS NOT NULL) AND (competitor_id IS NOT NULL));
 
 --
 -- Name: idx_price_changes_integration_id; Type: INDEX; Schema: public; Owner: -
@@ -7081,6 +7790,12 @@ CREATE INDEX idx_products_name_length ON public.products USING btree (user_id, l
 --
 
 CREATE INDEX idx_products_user_active ON public.products USING btree (user_id, is_active) WHERE (is_active = true);
+
+--
+-- Name: idx_products_user_active_price; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_active_price ON public.products USING btree (user_id, is_active, our_retail_price) WHERE ((is_active = true) AND (our_retail_price IS NOT NULL));
 
 --
 -- Name: idx_products_user_brand; Type: INDEX; Schema: public; Owner: -
