@@ -52,6 +52,9 @@ interface PriceChange {
   competitors?: {
     name: string;
   };
+  integrations?: {
+    name: string;
+  };
 }
 
 interface Product {
@@ -109,10 +112,12 @@ interface SupplierPriceChange {
 }
 
 interface DashboardActivity {
-  latestPriceChanges: PriceChange[];
+  latestCompetitorPriceChanges: PriceChange[];
+  latestOurRetailPriceChanges: PriceChange[];
   latestProducts: Product[];
   latestStockChanges: StockChange[];
   latestSupplierPriceChanges: SupplierPriceChange[];
+  latestOurWholesalePriceChanges: SupplierPriceChange[];
 }
 
 const DashboardTab: React.FC = () => {
@@ -125,10 +130,12 @@ const DashboardTab: React.FC = () => {
 
   // Modal states
   const [modalData, setModalData] = useState<{
-    latestPriceChanges: PriceChange[];
+    latestCompetitorPriceChanges: PriceChange[];
+    latestOurRetailPriceChanges: PriceChange[];
     latestProducts: Product[];
     latestStockChanges: StockChange[];
     latestSupplierPriceChanges: SupplierPriceChange[];
+    latestOurWholesalePriceChanges: SupplierPriceChange[];
   } | null>(null);
   const [isLoadingModal, setIsLoadingModal] = useState(false);
 
@@ -295,8 +302,8 @@ const DashboardTab: React.FC = () => {
                   <div className="overflow-y-auto max-h-[60vh] space-y-3 pr-4">
                     {isLoadingModal ? (
                       <div className="text-center py-8">Loading...</div>
-                    ) : modalData?.latestPriceChanges ? (
-                      modalData.latestPriceChanges.map((priceChange) => (
+                    ) : modalData?.latestCompetitorPriceChanges ? (
+                      modalData.latestCompetitorPriceChanges.map((priceChange) => (
                         <div key={priceChange.id} className="border-b pb-3 last:border-0">
                           <div className="flex justify-between items-start">
                             <div>
@@ -308,44 +315,15 @@ const DashboardTab: React.FC = () => {
                                 {priceChange.products.name}
                               </Link>
                               <p className="text-sm text-gray-500">
-                                {priceChange.competitors ? priceChange.competitors.name : 'Your price'}
+                                {priceChange.competitors?.name || 'Unknown competitor'}
                               </p>
                             </div>
                             <div className="text-right">
-                              {(() => {
-                                // Calculate percentage if not available in database
-                                let percentage = priceChange.price_change_percentage;
-                                if (percentage === null || percentage === undefined) {
-                                  const oldPrice = priceChange.competitor_id
-                                    ? priceChange.old_competitor_price
-                                    : priceChange.old_our_retail_price;
-                                  const newPrice = priceChange.competitor_id
-                                    ? priceChange.new_competitor_price
-                                    : priceChange.new_our_retail_price;
-
-                                  if (oldPrice && newPrice && oldPrice > 0) {
-                                    percentage = ((newPrice - oldPrice) / oldPrice) * 100;
-                                  } else {
-                                    percentage = 0;
-                                  }
-                                }
-
-                                return (
-                                  <div className={`font-medium ${percentage > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                    {percentage > 0 ? '+' : ''}{percentage.toFixed(2)}%
-                                  </div>
-                                );
-                              })()}
+                              <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
+                              </div>
                               <div className="text-sm text-gray-500">
-                                {formatCurrency(
-                                  priceChange.competitor_id
-                                    ? (priceChange.old_competitor_price || 0)
-                                    : (priceChange.old_our_retail_price || 0)
-                                )} → {formatCurrency(
-                                  priceChange.competitor_id
-                                    ? (priceChange.new_competitor_price || 0)
-                                    : (priceChange.new_our_retail_price || 0)
-                                )}
+                                {formatCurrency(priceChange.old_competitor_price || 0)} → {formatCurrency(priceChange.new_competitor_price || 0)}
                               </div>
                             </div>
                           </div>
@@ -355,7 +333,7 @@ const DashboardTab: React.FC = () => {
                         </div>
                       ))
                     ) : (
-                      <div className="text-center py-8 text-gray-500">No price changes found</div>
+                      <div className="text-center py-8 text-gray-500">No recent competitor price changes</div>
                     )}
                   </div>
                 </DialogContent>
@@ -363,13 +341,13 @@ const DashboardTab: React.FC = () => {
             </div>
           </CardHeader>
           <CardContent>
-            {activity.latestPriceChanges.length === 0 ? (
+            {(activity.latestCompetitorPriceChanges || []).length === 0 ? (
               <div className="text-center py-4 text-gray-500">
-                <p>No recent price changes</p>
+                <p>No recent competitor price changes</p>
               </div>
             ) : (
               <div className="space-y-4">
-                {activity.latestPriceChanges.map((priceChange) => (
+                {(activity.latestCompetitorPriceChanges || []).map((priceChange) => (
                   <div key={priceChange.id} className="border-b pb-3 last:border-0">
                     <div className="flex justify-between items-start">
                       <div>
@@ -380,44 +358,15 @@ const DashboardTab: React.FC = () => {
                           {priceChange.products.name}
                         </Link>
                         <p className="text-sm text-gray-500">
-                          {priceChange.competitors ? priceChange.competitors.name : 'Your price'}
+                          {priceChange.competitors?.name || 'Unknown competitor'}
                         </p>
                       </div>
                       <div className="text-right">
-                        {(() => {
-                          // Calculate percentage if not available in database
-                          let percentage = priceChange.price_change_percentage;
-                          if (percentage === null || percentage === undefined) {
-                            const oldPrice = priceChange.competitor_id
-                              ? priceChange.old_competitor_price
-                              : priceChange.old_our_retail_price;
-                            const newPrice = priceChange.competitor_id
-                              ? priceChange.new_competitor_price
-                              : priceChange.new_our_retail_price;
-
-                            if (oldPrice && newPrice && oldPrice > 0) {
-                              percentage = ((newPrice - oldPrice) / oldPrice) * 100;
-                            } else {
-                              percentage = 0;
-                            }
-                          }
-
-                          return (
-                            <div className={`font-medium ${percentage > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {percentage > 0 ? '+' : ''}{percentage.toFixed(2)}%
-                            </div>
-                          );
-                        })()}
+                        <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
+                        </div>
                         <div className="text-sm text-gray-500">
-                          {formatCurrency(
-                            priceChange.competitor_id
-                              ? (priceChange.old_competitor_price || 0)
-                              : (priceChange.old_our_retail_price || 0)
-                          )} → {formatCurrency(
-                            priceChange.competitor_id
-                              ? (priceChange.new_competitor_price || 0)
-                              : (priceChange.new_our_retail_price || 0)
-                          )}
+                          {formatCurrency(priceChange.old_competitor_price || 0)} → {formatCurrency(priceChange.new_competitor_price || 0)}
                         </div>
                       </div>
                     </div>
@@ -431,6 +380,108 @@ const DashboardTab: React.FC = () => {
           </CardContent>
         </Card>
 
+        {/* Recent Our Retail Price Changes */}
+        <Card>
+          <CardHeader>
+            <div className="flex justify-between items-center">
+              <CardTitle>Recent Our Retail Price Changes</CardTitle>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" onClick={fetchModalData}>
+                    See more
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="w-[50vw] !max-w-none max-h-[80vh]">
+                  <DialogHeader>
+                    <DialogTitle>Recent Our Retail Price Changes (Latest 50)</DialogTitle>
+                    <DialogDescription>
+                      View the latest 50 retail price changes from your integrations.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="overflow-y-auto max-h-[60vh] space-y-3 pr-4">
+                    {isLoadingModal ? (
+                      <div className="text-center py-8">Loading...</div>
+                    ) : modalData?.latestOurRetailPriceChanges ? (
+                      modalData.latestOurRetailPriceChanges.map((priceChange) => (
+                        <div key={priceChange.id} className="border-b pb-3 last:border-0">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <Link
+                                href={`/app-routes/products/${priceChange.product_id}`}
+                                className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                                target="_blank"
+                              >
+                                {priceChange.products.name}
+                              </Link>
+                              <p className="text-sm text-gray-500">
+                                {priceChange.integrations?.name || 'Unknown integration'}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
+                              </div>
+                              <div className="text-sm text-gray-500">
+                                {formatCurrency(priceChange.old_our_retail_price || 0)} → {formatCurrency(priceChange.new_our_retail_price || 0)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            {new Date(priceChange.changed_at).toLocaleString()}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">No recent retail price changes</div>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {(activity.latestOurRetailPriceChanges || []).length === 0 ? (
+              <div className="text-center py-4 text-gray-500">
+                <p>No recent retail price changes</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {(activity.latestOurRetailPriceChanges || []).map((priceChange) => (
+                  <div key={priceChange.id} className="border-b pb-3 last:border-0">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <Link
+                          href={`/app-routes/products/${priceChange.product_id}`}
+                          className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                        >
+                          {priceChange.products.name}
+                        </Link>
+                        <p className="text-sm text-gray-500">
+                          {priceChange.integrations?.name || 'Unknown integration'}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          {formatCurrency(priceChange.old_our_retail_price || 0)} → {formatCurrency(priceChange.new_our_retail_price || 0)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {new Date(priceChange.changed_at).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Second row for supplier price changes */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Recent Supplier Price Changes */}
         <Card>
           <CardHeader>
@@ -465,7 +516,7 @@ const DashboardTab: React.FC = () => {
                                 {supplierPriceChange.products.name}
                               </Link>
                               <p className="text-sm text-gray-500">
-                                {supplierPriceChange.suppliers?.name || supplierPriceChange.integrations?.name || 'Unknown source'}
+                                {supplierPriceChange.suppliers?.name || 'Unknown supplier'}
                               </p>
                             </div>
                             <div className="text-right">
@@ -473,17 +524,7 @@ const DashboardTab: React.FC = () => {
                                 {(supplierPriceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(supplierPriceChange.price_change_percentage || 0).toFixed(2)}%
                               </div>
                               <div className="text-sm text-gray-500">
-                                {supplierPriceChange.supplier_id ? (
-                                  // Show supplier prices for supplier changes
-                                  <>
-                                    {formatCurrency(supplierPriceChange.old_supplier_price || 0)} → {formatCurrency(supplierPriceChange.new_supplier_price || 0)}
-                                  </>
-                                ) : (
-                                  // Show wholesale prices for integration changes
-                                  <>
-                                    {formatCurrency(supplierPriceChange.old_our_wholesale_price || 0)} → {formatCurrency(supplierPriceChange.new_our_wholesale_price || 0)}
-                                  </>
-                                )}
+                                {formatCurrency(supplierPriceChange.old_supplier_price || 0)} → {formatCurrency(supplierPriceChange.new_supplier_price || 0)}
                               </div>
                             </div>
                           </div>
@@ -518,7 +559,7 @@ const DashboardTab: React.FC = () => {
                           {supplierPriceChange.products.name}
                         </Link>
                         <p className="text-sm text-gray-500">
-                          {supplierPriceChange.suppliers?.name || supplierPriceChange.integrations?.name || 'Unknown source'}
+                          {supplierPriceChange.suppliers?.name || 'Unknown supplier'}
                         </p>
                       </div>
                       <div className="text-right">
@@ -526,17 +567,7 @@ const DashboardTab: React.FC = () => {
                           {(supplierPriceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(supplierPriceChange.price_change_percentage || 0).toFixed(2)}%
                         </div>
                         <div className="text-sm text-gray-500">
-                          {supplierPriceChange.supplier_id ? (
-                            // Show supplier prices for supplier changes
-                            <>
-                              {formatCurrency(supplierPriceChange.old_supplier_price || 0)} → {formatCurrency(supplierPriceChange.new_supplier_price || 0)}
-                            </>
-                          ) : (
-                            // Show wholesale prices for integration changes
-                            <>
-                              {formatCurrency(supplierPriceChange.old_our_wholesale_price || 0)} → {formatCurrency(supplierPriceChange.new_our_wholesale_price || 0)}
-                            </>
-                          )}
+                          {formatCurrency(supplierPriceChange.old_supplier_price || 0)} → {formatCurrency(supplierPriceChange.new_supplier_price || 0)}
                         </div>
                       </div>
                     </div>
@@ -550,6 +581,108 @@ const DashboardTab: React.FC = () => {
           </CardContent>
         </Card>
 
+        {/* Recent Our Wholesale Price Changes */}
+        <Card>
+          <CardHeader>
+            <div className="flex justify-between items-center">
+              <CardTitle>Recent Our Wholesale Price Changes</CardTitle>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" onClick={fetchModalData}>
+                    See more
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="w-[50vw] !max-w-none max-h-[80vh]">
+                  <DialogHeader>
+                    <DialogTitle>Recent Our Wholesale Price Changes (Latest 50)</DialogTitle>
+                    <DialogDescription>
+                      View the latest 50 wholesale price changes from your integrations.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="overflow-y-auto max-h-[60vh] space-y-3 pr-4">
+                    {isLoadingModal ? (
+                      <div className="text-center py-8">Loading...</div>
+                    ) : modalData?.latestOurWholesalePriceChanges ? (
+                      modalData.latestOurWholesalePriceChanges.map((priceChange) => (
+                        <div key={priceChange.id} className="border-b pb-3 last:border-0">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <Link
+                                href={`/app-routes/products/${priceChange.product_id}`}
+                                className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                                target="_blank"
+                              >
+                                {priceChange.products.name}
+                              </Link>
+                              <p className="text-sm text-gray-500">
+                                {priceChange.integrations?.name || 'Unknown integration'}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
+                              </div>
+                              <div className="text-sm text-gray-500">
+                                {formatCurrency(priceChange.old_our_wholesale_price || 0)} → {formatCurrency(priceChange.new_our_wholesale_price || 0)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            {new Date(priceChange.changed_at).toLocaleString()}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">No recent wholesale price changes</div>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {(activity.latestOurWholesalePriceChanges || []).length === 0 ? (
+              <div className="text-center py-4 text-gray-500">
+                <p>No recent wholesale price changes</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {(activity.latestOurWholesalePriceChanges || []).map((priceChange) => (
+                  <div key={priceChange.id} className="border-b pb-3 last:border-0">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <Link
+                          href={`/app-routes/products/${priceChange.product_id}`}
+                          className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                        >
+                          {priceChange.products.name}
+                        </Link>
+                        <p className="text-sm text-gray-500">
+                          {priceChange.integrations?.name || 'Unknown integration'}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          {formatCurrency(priceChange.old_our_wholesale_price || 0)} → {formatCurrency(priceChange.new_our_wholesale_price || 0)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {new Date(priceChange.changed_at).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Third row for other content */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Recent Products */}
         <Card>
           <CardHeader>

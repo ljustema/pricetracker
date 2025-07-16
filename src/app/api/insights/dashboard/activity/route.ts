@@ -25,32 +25,58 @@ export async function GET(request: NextRequest) {
 
     console.time('api-insights-dashboard-activity');
 
-    // Get latest price changes (only actual changes, not new prices)
-    const { data: latestPriceChanges, error: priceChangesError } = await supabase
+    // Get latest competitor price changes (only competitor changes)
+    const { data: latestCompetitorPriceChanges, error: competitorPriceChangesError } = await supabase
       .from('price_changes_competitors')
       .select(`
         id,
         product_id,
         competitor_id,
-        integration_id,
         old_competitor_price,
         new_competitor_price,
-        old_our_retail_price,
-        new_our_retail_price,
         price_change_percentage,
         changed_at,
         products(name),
         competitors(name)
       `)
       .eq('user_id', userId)
-      .or('old_competitor_price.not.is.null,old_our_retail_price.not.is.null')
+      .not('competitor_id', 'is', null)
+      .not('old_competitor_price', 'is', null)
       .order('changed_at', { ascending: false })
       .limit(limit);
 
-    if (priceChangesError) {
-      console.error('Error fetching latest price changes:', priceChangesError);
+    // Get latest our retail price changes (only our price changes)
+    const { data: latestOurRetailPriceChanges, error: ourRetailPriceChangesError } = await supabase
+      .from('price_changes_competitors')
+      .select(`
+        id,
+        product_id,
+        integration_id,
+        old_our_retail_price,
+        new_our_retail_price,
+        price_change_percentage,
+        changed_at,
+        products(name),
+        integrations(name)
+      `)
+      .eq('user_id', userId)
+      .not('integration_id', 'is', null)
+      .not('old_our_retail_price', 'is', null)
+      .order('changed_at', { ascending: false })
+      .limit(limit);
+
+    if (competitorPriceChangesError) {
+      console.error('Error fetching latest competitor price changes:', competitorPriceChangesError);
       return NextResponse.json(
-        { error: 'Failed to fetch latest price changes', details: priceChangesError.message },
+        { error: 'Failed to fetch latest competitor price changes', details: competitorPriceChangesError.message },
+        { status: 500 }
+      );
+    }
+
+    if (ourRetailPriceChangesError) {
+      console.error('Error fetching latest our retail price changes:', ourRetailPriceChangesError);
+      return NextResponse.json(
+        { error: 'Failed to fetch latest our retail price changes', details: ourRetailPriceChangesError.message },
         { status: 500 }
       );
     }
@@ -111,25 +137,43 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get latest supplier price changes (includes both supplier and integration changes)
+    // Get latest supplier price changes (only supplier changes)
     const { data: latestSupplierPriceChanges, error: supplierPriceChangesError } = await supabase
       .from('price_changes_suppliers')
       .select(`
         id,
         product_id,
         supplier_id,
-        integration_id,
         old_supplier_price,
         new_supplier_price,
+        price_change_percentage,
+        changed_at,
+        products(name),
+        suppliers(name)
+      `)
+      .eq('user_id', userId)
+      .not('supplier_id', 'is', null)
+      .not('old_supplier_price', 'is', null)
+      .order('changed_at', { ascending: false })
+      .limit(limit);
+
+    // Get latest our wholesale price changes (only our wholesale price changes)
+    const { data: latestOurWholesalePriceChanges, error: ourWholesalePriceChangesError } = await supabase
+      .from('price_changes_suppliers')
+      .select(`
+        id,
+        product_id,
+        integration_id,
         old_our_wholesale_price,
         new_our_wholesale_price,
         price_change_percentage,
         changed_at,
         products(name),
-        suppliers(name),
         integrations(name)
       `)
       .eq('user_id', userId)
+      .not('integration_id', 'is', null)
+      .not('old_our_wholesale_price', 'is', null)
       .order('changed_at', { ascending: false })
       .limit(limit);
 
@@ -141,14 +185,24 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    if (ourWholesalePriceChangesError) {
+      console.error('Error fetching latest our wholesale price changes:', ourWholesalePriceChangesError);
+      return NextResponse.json(
+        { error: 'Failed to fetch latest our wholesale price changes', details: ourWholesalePriceChangesError.message },
+        { status: 500 }
+      );
+    }
+
     console.timeEnd('api-insights-dashboard-activity');
 
     // Add cache headers to the response
     const response = NextResponse.json({
-      latestPriceChanges: latestPriceChanges || [],
+      latestCompetitorPriceChanges: latestCompetitorPriceChanges || [],
+      latestOurRetailPriceChanges: latestOurRetailPriceChanges || [],
       latestProducts: latestProducts || [],
       latestStockChanges: latestStockChanges || [],
-      latestSupplierPriceChanges: latestSupplierPriceChanges || []
+      latestSupplierPriceChanges: latestSupplierPriceChanges || [],
+      latestOurWholesalePriceChanges: latestOurWholesalePriceChanges || []
     });
 
     // Set cache headers
