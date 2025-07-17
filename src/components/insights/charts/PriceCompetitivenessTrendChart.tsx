@@ -220,11 +220,20 @@ const PriceCompetitivenessTrendChart: React.FC<PriceCompetitivenessTrendChartPro
       const total = cheapest + samePrice + moreExpensive;
       const normalizer = total > 0 ? 100 / total : 1;
 
+      const normalizedCheapest = Number((cheapest * normalizer).toFixed(2));
+      const normalizedSamePrice = Number((samePrice * normalizer).toFixed(2));
+      const normalizedMoreExpensive = Number((moreExpensive * normalizer).toFixed(2));
+
+      // Double-check that values are within bounds
+      const finalCheapest = Math.max(0, Math.min(100, normalizedCheapest));
+      const finalSamePrice = Math.max(0, Math.min(100, normalizedSamePrice));
+      const finalMoreExpensive = Math.max(0, Math.min(100, normalizedMoreExpensive));
+
       return {
         date: item.snapshot_date,
-        cheapest: Number((cheapest * normalizer).toFixed(2)),
-        samePrice: Number((samePrice * normalizer).toFixed(2)),
-        moreExpensive: Number((moreExpensive * normalizer).toFixed(2)),
+        cheapest: finalCheapest,
+        samePrice: finalSamePrice,
+        moreExpensive: finalMoreExpensive,
         total_products: item.total_products,
         competitor_name: item.competitor_name
       };
@@ -380,9 +389,15 @@ const PriceCompetitivenessTrendChart: React.FC<PriceCompetitivenessTrendChartPro
                     }}
                   />
                   <YAxis
-                    tickFormatter={(value) => `${value}%`}
+                    tickFormatter={(value) => {
+                      const clampedValue = Math.min(100, Math.max(0, Number(value) || 0));
+                      return `${clampedValue}%`;
+                    }}
                     domain={[0, 100]}
                     type="number"
+                    allowDataOverflow={false}
+                    scale="linear"
+                    ticks={[0, 25, 50, 75, 100]}
                   />
                   <Tooltip content={<CustomAreaTooltip />} />
                   <Legend />

@@ -125,7 +125,7 @@ const CONFIG = {
   // Performance settings
   PERFORMANCE: {
     MAX_CONCURRENCY: 10, // Maximum number of concurrent requests, max is 10.
-    BATCH_SIZE: 500, // Number of products to collect before outputting to PriceTracker (affects memory usage)
+    BATCH_SIZE: 50, // Number of products to collect before outputting to PriceTracker (affects memory usage)
     REQUEST_TIMEOUT: 60, // Timeout in seconds for each request
     MAX_RETRIES: 3, // Maximum number of retries for failed requests
     REQUEST_DELAY: 100, // Delay between requests in milliseconds (0 for no delay)
