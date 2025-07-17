@@ -124,7 +124,7 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div>
                   <h3 className="text-sm font-medium text-gray-500">Our Retail Price</h3>
                   <p className="text-lg font-semibold text-gray-900">
@@ -136,6 +136,13 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                   <h3 className="text-sm font-medium text-gray-500">Our Wholesale Price</h3>
                   <p className="text-lg font-semibold text-gray-900">
                     {product.our_wholesale_price ? formatPrice(product.our_wholesale_price) : "Not set"}
+                  </p>
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-medium text-gray-500">Retail Price 30%</h3>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {product.our_wholesale_price ? formatPrice(product.our_wholesale_price * 1.25 * 1.30) : "Not set"}
                   </p>
                 </div>
 
