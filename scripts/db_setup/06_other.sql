@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-07-16 09:38:53
+-- Generated: 2025-07-17 15:33:46
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -784,6 +784,22 @@ $$;
 -- Calculate percentage for our retail price changes (integration changes)
     ELSIF NEW.integration_id IS NOT NULL AND NEW.old_our_retail_price IS NOT NULL AND NEW.new_our_retail_price IS NOT NULL AND NEW.old_our_retail_price > 0 THEN
         NEW.price_change_percentage = ((NEW.new_our_retail_price - NEW.old_our_retail_price) / NEW.old_our_retail_price) * 100;
+
+-- If neither condition is met, set to NULL
+    ELSE
+        NEW.price_change_percentage = NULL;
+
+END IF;
+
+RETURN NEW;
+
+END;
+
+$$;
+
+-- Calculate percentage for our wholesale price changes (integration changes)
+    ELSIF NEW.integration_id IS NOT NULL AND NEW.old_our_wholesale_price IS NOT NULL AND NEW.new_our_wholesale_price IS NOT NULL AND NEW.old_our_wholesale_price > 0 THEN
+        NEW.price_change_percentage = ((NEW.new_our_wholesale_price - NEW.old_our_wholesale_price) / NEW.old_our_wholesale_price) * 100;
 
 -- If neither condition is met, set to NULL
     ELSE
@@ -2753,6 +2769,10 @@ BEGIN
 END IF;
 
 RETURN v_settings_id;
+
+END;
+
+$$;
 
 END;
 

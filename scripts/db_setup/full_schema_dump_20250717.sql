@@ -1235,6 +1235,32 @@ END;
 $$;
 
 
+--
+-- Name: calculate_supplier_price_change_percentage(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_supplier_price_change_percentage() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Calculate percentage for supplier price changes
+    IF NEW.supplier_id IS NOT NULL AND NEW.old_supplier_price IS NOT NULL AND NEW.new_supplier_price IS NOT NULL AND NEW.old_supplier_price > 0 THEN
+        NEW.price_change_percentage = ((NEW.new_supplier_price - NEW.old_supplier_price) / NEW.old_supplier_price) * 100;
+    
+    -- Calculate percentage for our wholesale price changes (integration changes)
+    ELSIF NEW.integration_id IS NOT NULL AND NEW.old_our_wholesale_price IS NOT NULL AND NEW.new_our_wholesale_price IS NOT NULL AND NEW.old_our_wholesale_price > 0 THEN
+        NEW.price_change_percentage = ((NEW.new_our_wholesale_price - NEW.old_our_wholesale_price) / NEW.old_our_wholesale_price) * 100;
+    
+    -- If neither condition is met, set to NULL
+    ELSE
+        NEW.price_change_percentage = NULL;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -4896,7 +4922,38 @@ $$;
 
 CREATE FUNCTION public.get_price_competitiveness_trends(p_user_id uuid, p_start_date date DEFAULT (CURRENT_DATE - '30 days'::interval), p_end_date date DEFAULT CURRENT_DATE, p_competitor_id uuid DEFAULT NULL::uuid, p_brand_filter text DEFAULT NULL::text) RETURNS TABLE(snapshot_date date, competitor_id uuid, competitor_name text, brand_filter text, total_products integer, products_we_are_cheapest integer, products_we_are_same_price integer, products_we_are_more_expensive integer, cheapest_percentage numeric, same_price_percentage numeric, more_expensive_percentage numeric, avg_price_difference_when_higher numeric, total_potential_savings numeric)
     LANGUAGE plpgsql
-    AS $$ BEGIN RETURN QUERY SELECT s.snapshot_date, s.competitor_id, COALESCE(c.name, 'All Competitors') as competitor_name, s.brand_filter, s.total_products_analyzed, s.products_we_are_cheapest, s.products_we_are_same_price, s.products_we_are_more_expensive, s.cheapest_percentage, s.same_price_percentage, s.more_expensive_percentage, s.avg_price_difference_when_higher, s.total_potential_savings FROM daily_price_competitiveness_snapshots s LEFT JOIN competitors c ON s.competitor_id = c.id WHERE s.user_id = p_user_id AND s.snapshot_date BETWEEN p_start_date AND p_end_date AND ( (p_competitor_id IS NULL AND s.competitor_id IS NULL) OR (p_competitor_id IS NOT NULL AND s.competitor_id = p_competitor_id) ) AND (p_brand_filter IS NULL OR s.brand_filter = p_brand_filter OR (p_brand_filter IS NULL AND s.brand_filter IS NULL)) ORDER BY s.snapshot_date ASC, COALESCE(c.name, 'All Competitors'); END; $$;
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        s.snapshot_date,
+        s.competitor_id,
+        COALESCE(c.name, 'All Competitors') as competitor_name,
+        s.brand_filter,
+        s.total_products_analyzed,
+        s.products_we_are_cheapest,
+        s.products_we_are_same_price,
+        s.products_we_are_more_expensive,
+        s.cheapest_percentage,
+        s.same_price_percentage,
+        s.more_expensive_percentage,
+        s.avg_price_difference_when_higher,
+        s.total_potential_savings
+    FROM daily_price_competitiveness_snapshots s
+    LEFT JOIN competitors c ON s.competitor_id = c.id
+    WHERE s.user_id = p_user_id
+        AND s.snapshot_date BETWEEN p_start_date AND p_end_date
+        AND (
+            (p_competitor_id IS NULL AND s.competitor_id IS NULL) OR
+            (p_competitor_id IS NOT NULL AND s.competitor_id = p_competitor_id)
+        )
+        AND (
+            (p_brand_filter IS NULL AND s.brand_filter IS NULL) OR
+            (p_brand_filter IS NOT NULL AND s.brand_filter = p_brand_filter)
+        )
+    ORDER BY s.snapshot_date ASC, COALESCE(c.name, 'All Competitors');
+END;
+$$;
 
 
 --
@@ -14666,6 +14723,13 @@ CREATE TRIGGER sync_our_url_trigger AFTER UPDATE ON public.products FOR EACH ROW
 --
 
 CREATE TRIGGER trigger_calculate_price_change_percentage BEFORE INSERT OR UPDATE ON public.price_changes_competitors FOR EACH ROW EXECUTE FUNCTION public.calculate_price_change_percentage();
+
+
+--
+-- Name: price_changes_suppliers trigger_calculate_supplier_price_change_percentage; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trigger_calculate_supplier_price_change_percentage BEFORE INSERT OR UPDATE ON public.price_changes_suppliers FOR EACH ROW EXECUTE FUNCTION public.calculate_supplier_price_change_percentage();
 
 
 --

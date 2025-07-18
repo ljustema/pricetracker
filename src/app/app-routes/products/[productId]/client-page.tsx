@@ -140,9 +140,9 @@ export default function ClientProductPage({ product, retailPrices, retailPriceHi
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-medium text-gray-500">Retail Price 30%</h3>
+                  <h3 className="text-sm font-medium text-gray-500">Retail Price 31% x1,8</h3>
                   <p className="text-lg font-semibold text-gray-900">
-                    {product.our_wholesale_price ? formatPrice(product.our_wholesale_price * 1.25 * 1.30) : "Not set"}
+                    {product.our_wholesale_price ? formatPrice(product.our_wholesale_price * 1.8) : "Not set"}
                   </p>
                 </div>
 
