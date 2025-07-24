@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-07-17 15:33:46
+-- Generated: 2025-07-20 11:36:10
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -2066,6 +2066,10 @@ END;
 
 $$;
 
+END;
+
+$$;
+
 date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
 
 BEGIN
@@ -2122,6 +2126,96 @@ BEGIN
     FROM brand_sales bs
     CROSS JOIN totals t
     ORDER BY bs.total_revenue DESC;
+
+END;
+
+$$;
+
+END;
+
+$$;
+
+BEGIN
+    RETURN QUERY
+    WITH price_changes_analysis AS (
+        SELECT 
+            p.brand,
+            pcc.product_id,
+            p.name as product_name,
+            COUNT(*) as change_count,
+            AVG(ABS(pcc.price_change_percentage)) as avg_abs_change_pct,
+            SUM(CASE WHEN pcc.price_change_percentage > 0 THEN 1 ELSE 0 END) as increases,
+            SUM(CASE WHEN pcc.price_change_percentage < 0 THEN 1 ELSE 0 END) as decreases,
+            AVG(pcc.price_change_percentage) as avg_change_pct
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+            AND p.brand IS NOT NULL
+            AND pcc.changed_at >= v_start_date
+            AND pcc.price_change_percentage IS NOT NULL
+            AND ABS(pcc.price_change_percentage) > 0.1  -- Filter out tiny changes
+        GROUP BY p.brand, pcc.product_id, p.name
+    ),
+    brand_pressure_metrics AS (
+        SELECT 
+            pca.brand,
+            COUNT(DISTINCT pca.product_id) as total_products,
+            SUM(pca.change_count) as total_changes,
+            AVG(pca.change_count) as avg_changes_per_product,
+            AVG(pca.avg_abs_change_pct) as avg_price_change_percentage,
+            SUM(pca.increases) as total_increases,
+            SUM(pca.decreases) as total_decreases,
+            AVG(pca.avg_change_pct) as net_avg_change_pct,
+            -- Find most volatile product
+            (SELECT pca2.product_name 
+             FROM price_changes_analysis pca2 
+             WHERE pca2.brand = pca.brand 
+             ORDER BY pca2.change_count DESC, pca2.avg_abs_change_pct DESC 
+             LIMIT 1) as most_volatile_product,
+            (SELECT MAX(pca2.change_count) 
+             FROM price_changes_analysis pca2 
+             WHERE pca2.brand = pca.brand) as max_product_changes
+        FROM price_changes_analysis pca
+        GROUP BY pca.brand
+    )
+    SELECT 
+        bpm.brand::TEXT,
+        bpm.total_products::INTEGER,
+        bpm.total_changes::INTEGER,
+        ROUND(COALESCE(bpm.avg_changes_per_product, 0), 2) as avg_price_changes_per_product,
+        -- Frequency score: changes per product per day, normalized to 0-100 scale
+        ROUND(LEAST(100, (bpm.avg_changes_per_product / p_days_back * 30 * 10)), 2) as price_change_frequency_score,
+        ROUND(COALESCE(bpm.avg_price_change_percentage, 0), 2) as avg_price_change_percentage,
+        bpm.total_increases::INTEGER,
+        bpm.total_decreases::INTEGER,
+        
+        -- Net price direction
+        CASE 
+            WHEN bpm.total_increases > bpm.total_decreases * 1.2 THEN 'Increasing'
+            WHEN bpm.total_decreases > bpm.total_increases * 1.2 THEN 'Decreasing'
+            ELSE 'Mixed'
+        END::TEXT as net_price_direction,
+        
+        COALESCE(bpm.most_volatile_product, 'N/A')::TEXT as most_volatile_product_name,
+        COALESCE(bpm.max_product_changes, 0)::INTEGER as most_volatile_product_changes,
+        
+        -- Pressure level assessment
+        CASE 
+            WHEN bpm.avg_changes_per_product >= 3 AND bpm.avg_price_change_percentage >= 5 THEN 'Very High'
+            WHEN bpm.avg_changes_per_product >= 2 AND bpm.avg_price_change_percentage >= 3 THEN 'High'
+            WHEN bpm.avg_changes_per_product >= 1 AND bpm.avg_price_change_percentage >= 2 THEN 'Moderate'
+            WHEN bpm.avg_changes_per_product >= 0.5 THEN 'Low'
+            ELSE 'Very Low'
+        END::TEXT as pressure_level
+        
+    FROM brand_pressure_metrics bpm
+    WHERE bpm.total_products >= 3  -- Only include brands with meaningful product count
+    ORDER BY bpm.avg_changes_per_product DESC, bpm.avg_price_change_percentage DESC;
+
+END;
+
+$$;
 
 END;
 
@@ -2194,6 +2288,10 @@ BEGIN
     FROM products_with_prices pwp
     WHERE pwp.total_sold > 0
     ORDER BY pwp.total_sold DESC;
+
+END;
+
+$$;
 
 END;
 
@@ -2556,6 +2654,10 @@ EXCEPTION
     WHEN OTHERS THEN
         -- If any error occurs, return empty result
         RETURN;
+
+END;
+
+$$;
 
 END;
 
@@ -3754,6 +3856,163 @@ BEGIN
         ta.last_sale
     FROM turnover_analysis ta
     ORDER BY ta.stock_turnover_ratio DESC NULLS LAST;
+
+END;
+
+$$;
+
+v_mid_date DATE := CURRENT_DATE - ((p_days_back / 2)::INTEGER || ' days')::INTERVAL;
+
+BEGIN
+    RETURN QUERY
+    WITH our_brands AS (
+        -- Brands we already have products for
+        SELECT DISTINCT brand
+        FROM products 
+        WHERE user_id = p_user_id
+            AND brand IS NOT NULL
+            AND (our_wholesale_price IS NOT NULL OR our_retail_price IS NOT NULL)
+    ),
+    brand_first_appearance AS (
+        -- Find when each brand first appeared in our competitor data (excluding brands we already have)
+        SELECT 
+            p.brand,
+            MIN(pcc.changed_at)::DATE as first_seen_date
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.changed_at >= v_start_date
+        GROUP BY p.brand
+    ),
+    current_brand_metrics AS (
+        -- Current metrics for these brands (excluding brands we already have)
+        SELECT 
+            p.brand,
+            COUNT(DISTINCT pcc.product_id) as current_products,
+            COUNT(DISTINCT pcc.competitor_id) as competitor_count,
+            AVG(pcc.new_competitor_price) as avg_price
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.new_competitor_price IS NOT NULL
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '7 days'  -- Recent data
+        GROUP BY p.brand
+    ),
+    historical_brand_metrics AS (
+        -- Historical metrics for growth calculation (excluding brands we already have)
+        SELECT 
+            p.brand,
+            COUNT(DISTINCT pcc.product_id) as historical_products
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.changed_at BETWEEN v_start_date AND v_mid_date
+        GROUP BY p.brand
+    ),
+    price_trend_analysis AS (
+        -- Analyze price trends for these brands (excluding brands we already have)
+        SELECT 
+            p.brand,
+            AVG(CASE WHEN pcc.changed_at >= v_mid_date THEN pcc.new_competitor_price END) as recent_avg_price,
+            AVG(CASE WHEN pcc.changed_at < v_mid_date THEN pcc.new_competitor_price END) as historical_avg_price
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.new_competitor_price IS NOT NULL
+            AND pcc.changed_at >= v_start_date
+        GROUP BY p.brand
+    ),
+    stock_metrics AS (
+        -- Get stock information (excluding brands we already have)
+        SELECT 
+            p.brand,
+            AVG(COALESCE(scc.new_stock_quantity, 0)) as avg_stock
+        FROM stock_changes_competitors scc
+        JOIN products p ON scc.product_id = p.id
+        WHERE scc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND scc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+        GROUP BY p.brand
+    )
+    SELECT 
+        bfa.brand::TEXT,
+        bfa.first_seen_date,
+        (CURRENT_DATE - bfa.first_seen_date)::INTEGER as days_since_first_seen,
+        COALESCE(cbm.current_products, 0)::INTEGER as current_product_count,
+        COALESCE(cbm.competitor_count, 0)::INTEGER as competitor_count,
+        
+        -- Product growth rate (percentage increase from historical to current)
+        ROUND(CASE 
+            WHEN COALESCE(hbm.historical_products, 0) > 0 THEN
+                ((cbm.current_products - hbm.historical_products)::NUMERIC / hbm.historical_products * 100)
+            WHEN cbm.current_products > 0 THEN 100.0  -- New brand, 100% growth
+            ELSE 0.0
+        END, 2) as product_growth_rate,
+        
+        ROUND(COALESCE(cbm.avg_price, 0), 2) as avg_competitor_price,
+        
+        -- Price trend
+        CASE 
+            WHEN pta.recent_avg_price IS NULL OR pta.historical_avg_price IS NULL THEN 'Insufficient Data'
+            WHEN pta.recent_avg_price > pta.historical_avg_price * 1.05 THEN 'Increasing'
+            WHEN pta.recent_avg_price < pta.historical_avg_price * 0.95 THEN 'Decreasing'
+            ELSE 'Stable'
+        END::TEXT as price_trend,
+        
+        ROUND(COALESCE(sm.avg_stock, 0), 2) as avg_stock_level,
+        
+        -- Trending score (0-100)
+        ROUND(
+            -- Recency factor (newer = higher score, max 30 points)
+            (CASE WHEN (CURRENT_DATE - bfa.first_seen_date) <= 30 THEN 30
+                  WHEN (CURRENT_DATE - bfa.first_seen_date) <= 60 THEN 20
+                  ELSE 10 END) +
+            
+            -- Product count factor (max 25 points)
+            (LEAST(25, cbm.current_products * 0.25)) +
+            
+            -- Growth rate factor (max 25 points)
+            (LEAST(25, CASE 
+                WHEN COALESCE(hbm.historical_products, 0) > 0 THEN
+                    ((cbm.current_products - hbm.historical_products)::NUMERIC / hbm.historical_products * 25)
+                WHEN cbm.current_products > 0 THEN 25.0
+                ELSE 0.0
+            END)) +
+            
+            -- Competitor interest factor (max 20 points)
+            (LEAST(20, cbm.competitor_count * 5))
+        , 2) as trending_score,
+        
+        -- Trend category
+        CASE 
+            WHEN (CURRENT_DATE - bfa.first_seen_date) <= 30 AND cbm.current_products >= 50 THEN 'Hot New Brand - EXPANSION OPPORTUNITY'
+            WHEN (CURRENT_DATE - bfa.first_seen_date) <= 60 AND cbm.current_products >= 100 THEN 'Rapidly Growing - EXPANSION OPPORTUNITY'
+            WHEN cbm.current_products >= 200 AND cbm.competitor_count >= 3 THEN 'Established Trending - EXPANSION OPPORTUNITY'
+            WHEN COALESCE(hbm.historical_products, 0) > 0 AND 
+                 ((cbm.current_products - hbm.historical_products)::NUMERIC / hbm.historical_products) >= 0.5 THEN 'Fast Growing - EXPANSION OPPORTUNITY'
+            ELSE 'Emerging - EXPANSION OPPORTUNITY'
+        END::TEXT as trend_category
+        
+    FROM brand_first_appearance bfa
+    LEFT JOIN current_brand_metrics cbm ON bfa.brand = cbm.brand
+    LEFT JOIN historical_brand_metrics hbm ON bfa.brand = hbm.brand
+    LEFT JOIN price_trend_analysis pta ON bfa.brand = pta.brand
+    LEFT JOIN stock_metrics sm ON bfa.brand = sm.brand
+    WHERE COALESCE(cbm.current_products, 0) >= 10  -- Minimum threshold for trending
+    ORDER BY trending_score DESC, cbm.current_products DESC;
 
 END;
 
@@ -7530,6 +7789,36 @@ CREATE INDEX idx_price_changes_analysis ON public.price_changes_competitors USIN
 CREATE INDEX idx_price_changes_competitor_id ON public.price_changes_competitors USING btree (competitor_id);
 
 --
+-- Name: idx_price_changes_competitors_competitor_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_competitor_date ON public.price_changes_competitors USING btree (competitor_id, changed_at) WHERE (competitor_id IS NOT NULL);
+
+--
+-- Name: idx_price_changes_competitors_integration; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_integration ON public.price_changes_competitors USING btree (user_id, integration_id, changed_at) WHERE (integration_id IS NOT NULL);
+
+--
+-- Name: idx_price_changes_competitors_our_prices; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_our_prices ON public.price_changes_competitors USING btree (user_id, product_id, changed_at) WHERE (new_our_retail_price IS NOT NULL);
+
+--
+-- Name: idx_price_changes_competitors_prices; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_prices ON public.price_changes_competitors USING btree (user_id, product_id, changed_at) WHERE (new_competitor_price IS NOT NULL);
+
+--
+-- Name: idx_price_changes_competitors_product_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_product_user ON public.price_changes_competitors USING btree (user_id, product_id, changed_at);
+
+--
 -- Name: idx_price_changes_competitors_user_product_competitor; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7980,10 +8269,22 @@ CREATE INDEX idx_stock_changes_analysis ON public.stock_changes_competitors USIN
 CREATE INDEX idx_stock_changes_competitors_changed_at ON public.stock_changes_competitors USING btree (changed_at DESC);
 
 --
+-- Name: idx_stock_changes_competitors_competitor_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_competitor_date ON public.stock_changes_competitors USING btree (competitor_id, changed_at) WHERE (competitor_id IS NOT NULL);
+
+--
 -- Name: idx_stock_changes_competitors_product_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_stock_changes_competitors_product_id ON public.stock_changes_competitors USING btree (product_id);
+
+--
+-- Name: idx_stock_changes_competitors_product_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_product_user ON public.stock_changes_competitors USING btree (user_id, product_id, changed_at);
 
 --
 -- Name: idx_stock_changes_competitors_user_competitor; Type: INDEX; Schema: public; Owner: -

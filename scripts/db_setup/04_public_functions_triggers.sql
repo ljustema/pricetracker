@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-07-17 15:33:46
+-- Generated: 2025-07-20 11:36:10
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -855,6 +855,95 @@ BEGIN
 COMMENT ON FUNCTION public.get_brand_analytics(p_user_id uuid, p_brand_id uuid) IS 'Enhanced brand analytics function that includes our_products_count (products with our_retail_price IS NOT NULL)';
 
 --
+-- Name: get_brand_market_positioning(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_market_positioning(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid) RETURNS TABLE(brand_name text, total_products bigint, market_position_score numeric, competitive_strength text, cheapest_percentage numeric, same_price_percentage numeric, more_expensive_percentage numeric, avg_competitor_count numeric, positioning_category text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_our_prices AS (
+        SELECT DISTINCT ON (pcc.product_id)
+            pcc.product_id,
+            pcc.new_our_retail_price as our_price
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+            AND pcc.integration_id IS NOT NULL
+            AND pcc.new_our_retail_price IS NOT NULL
+        ORDER BY pcc.product_id, pcc.changed_at DESC
+    ),
+    latest_competitor_prices AS (
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price as competitor_price
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.new_competitor_price IS NOT NULL
+            AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    product_price_analysis AS (
+        SELECT 
+            p.brand,
+            lop.product_id,
+            lop.our_price,
+            MIN(lcp.competitor_price) as min_competitor_price,
+            COUNT(DISTINCT lcp.competitor_id) as competitor_count,
+            CASE 
+                WHEN lop.our_price < MIN(lcp.competitor_price) THEN 'cheaper'
+                WHEN lop.our_price = MIN(lcp.competitor_price) THEN 'same'
+                ELSE 'more_expensive'
+            END as price_comparison
+        FROM latest_our_prices lop
+        JOIN latest_competitor_prices lcp ON lop.product_id = lcp.product_id
+        JOIN products p ON lop.product_id = p.id
+        WHERE p.brand IS NOT NULL
+            AND lop.our_price > 0
+            AND lcp.competitor_price > 0
+        GROUP BY p.brand, lop.product_id, lop.our_price
+    ),
+    brand_stats AS (
+        SELECT 
+            ppa.brand,
+            COUNT(*) as total_products,
+            COUNT(CASE WHEN ppa.price_comparison = 'cheaper' THEN 1 END) as products_we_are_cheapest,
+            COUNT(CASE WHEN ppa.price_comparison = 'same' THEN 1 END) as products_we_are_same_price,
+            COUNT(CASE WHEN ppa.price_comparison = 'more_expensive' THEN 1 END) as products_we_are_more_expensive,
+            AVG(ppa.competitor_count) as avg_competitor_count
+        FROM product_price_analysis ppa
+        GROUP BY ppa.brand
+    )
+    SELECT 
+        bs.brand::TEXT as brand_name,
+        bs.total_products,
+        ROUND(
+            (bs.products_we_are_cheapest::NUMERIC * 3 + bs.products_we_are_same_price::NUMERIC * 2) / 
+            (bs.total_products::NUMERIC * 3) * 100, 2
+        ) as market_position_score,
+        CASE 
+            WHEN (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.7 THEN 'Dominant'
+            WHEN (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.5 THEN 'Strong'
+            WHEN (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.3 THEN 'Competitive'
+            ELSE 'Weak'
+        END as competitive_strength,
+        ROUND((bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) * 100, 2) as cheapest_percentage,
+        ROUND((bs.products_we_are_same_price::NUMERIC / bs.total_products::NUMERIC) * 100, 2) as same_price_percentage,
+        ROUND((bs.products_we_are_more_expensive::NUMERIC / bs.total_products::NUMERIC) * 100, 2) as more_expensive_percentage,
+        ROUND(COALESCE(bs.avg_competitor_count, 0), 1) as avg_competitor_count,
+        CASE 
+            WHEN bs.total_products >= 100 AND (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.6 THEN 'Market Leader'
+            WHEN bs.total_products >= 50 AND (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.4 THEN 'Strong Player'
+            WHEN bs.total_products >= 20 AND (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.3 THEN 'Niche Player'
+            ELSE 'Emerging'
+        END as positioning_category
+    FROM brand_stats bs
+    WHERE bs.total_products > 0
+    ORDER BY market_position_score DESC, bs.total_products DESC;
+
+--
 -- Name: get_brand_performance_data(uuid, uuid, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -870,6 +959,217 @@ DECLARE
 --
 
 COMMENT ON FUNCTION public.get_brand_performance_data(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone) IS 'Returns brand-level sales performance metrics including revenue percentages and daily averages';
+
+--
+-- Name: get_brand_price_competitiveness(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_price_competitiveness(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid) RETURNS TABLE(brand_name text, total_products_with_prices bigint, products_we_are_cheapest bigint, products_we_are_same_price bigint, products_we_are_more_expensive bigint, cheapest_percentage numeric, same_price_percentage numeric, more_expensive_percentage numeric, avg_price_difference_when_higher numeric, avg_price_difference_percentage_when_higher numeric, market_dominance_percentage numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_our_prices AS (
+        SELECT DISTINCT ON (pcc.product_id)
+            pcc.product_id,
+            pcc.new_our_retail_price as our_price
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+            AND pcc.integration_id IS NOT NULL
+            AND pcc.new_our_retail_price IS NOT NULL
+        ORDER BY pcc.product_id, pcc.changed_at DESC
+    ),
+    latest_competitor_prices AS (
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price as competitor_price
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.new_competitor_price IS NOT NULL
+            AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    product_price_analysis AS (
+        -- For each product, determine if we are cheapest, same, or more expensive
+        SELECT 
+            p.brand,
+            lop.product_id,
+            lop.our_price,
+            MIN(lcp.competitor_price) as min_competitor_price,
+            MAX(lcp.competitor_price) as max_competitor_price,
+            AVG(lcp.competitor_price) as avg_competitor_price,
+            CASE 
+                WHEN lop.our_price < MIN(lcp.competitor_price) THEN 'cheaper'
+                WHEN lop.our_price = MIN(lcp.competitor_price) THEN 'same'
+                ELSE 'more_expensive'
+            END as price_comparison,
+            CASE 
+                WHEN lop.our_price > MIN(lcp.competitor_price) 
+                THEN lop.our_price - MIN(lcp.competitor_price)
+                ELSE 0 
+            END as price_difference,
+            CASE 
+                WHEN lop.our_price > MIN(lcp.competitor_price) AND MIN(lcp.competitor_price) > 0
+                THEN ((lop.our_price - MIN(lcp.competitor_price)) / MIN(lcp.competitor_price)) * 100
+                ELSE 0 
+            END as price_difference_percentage
+        FROM latest_our_prices lop
+        JOIN latest_competitor_prices lcp ON lop.product_id = lcp.product_id
+        JOIN products p ON lop.product_id = p.id
+        WHERE p.brand IS NOT NULL
+            AND lop.our_price > 0
+            AND lcp.competitor_price > 0
+        GROUP BY p.brand, lop.product_id, lop.our_price
+    ),
+    brand_stats AS (
+        SELECT 
+            ppa.brand,
+            COUNT(*) as total_products_with_prices,
+            COUNT(CASE WHEN ppa.price_comparison = 'cheaper' THEN 1 END) as products_we_are_cheapest,
+            COUNT(CASE WHEN ppa.price_comparison = 'same' THEN 1 END) as products_we_are_same_price,
+            COUNT(CASE WHEN ppa.price_comparison = 'more_expensive' THEN 1 END) as products_we_are_more_expensive,
+            AVG(CASE WHEN ppa.price_comparison = 'more_expensive' THEN ppa.price_difference END) as avg_price_difference_when_higher,
+            AVG(CASE WHEN ppa.price_comparison = 'more_expensive' THEN ppa.price_difference_percentage END) as avg_price_difference_percentage_when_higher
+        FROM product_price_analysis ppa
+        GROUP BY ppa.brand
+    )
+    SELECT 
+        bs.brand::TEXT as brand_name,
+        bs.total_products_with_prices,
+        bs.products_we_are_cheapest,
+        bs.products_we_are_same_price,
+        bs.products_we_are_more_expensive,
+        ROUND((bs.products_we_are_cheapest::NUMERIC / bs.total_products_with_prices::NUMERIC) * 100, 2) as cheapest_percentage,
+        ROUND((bs.products_we_are_same_price::NUMERIC / bs.total_products_with_prices::NUMERIC) * 100, 2) as same_price_percentage,
+        ROUND((bs.products_we_are_more_expensive::NUMERIC / bs.total_products_with_prices::NUMERIC) * 100, 2) as more_expensive_percentage,
+        ROUND(COALESCE(bs.avg_price_difference_when_higher, 0), 2) as avg_price_difference_when_higher,
+        ROUND(COALESCE(bs.avg_price_difference_percentage_when_higher, 0), 2) as avg_price_difference_percentage_when_higher,
+        ROUND((bs.products_we_are_cheapest::NUMERIC / bs.total_products_with_prices::NUMERIC) * 100, 2) as market_dominance_percentage
+    FROM brand_stats bs
+    ORDER BY bs.total_products_with_prices DESC, bs.products_we_are_cheapest DESC;
+
+--
+-- Name: get_brand_price_pressure_analysis(uuid, uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_price_pressure_analysis(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_days_back integer DEFAULT 30) RETURNS TABLE(brand_name text, total_products integer, total_price_changes integer, avg_price_changes_per_product numeric, price_change_frequency_score numeric, avg_price_change_percentage numeric, price_increases integer, price_decreases integer, net_price_direction text, most_volatile_product_name text, most_volatile_product_changes integer, pressure_level text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_start_date DATE := CURRENT_DATE - (p_days_back || ' days')::INTERVAL;
+
+--
+-- Name: FUNCTION get_brand_price_pressure_analysis(p_user_id uuid, p_competitor_id uuid, p_days_back integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brand_price_pressure_analysis(p_user_id uuid, p_competitor_id uuid, p_days_back integer) IS 'Analyzes price pressure and volatility per brand, identifying brands under competitive pressure';
+
+--
+-- Name: get_brand_price_spread_analysis(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_price_spread_analysis(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid) RETURNS TABLE(brand_name text, total_products integer, avg_price_spread_amount numeric, avg_price_spread_percentage numeric, max_price_spread_amount numeric, max_price_spread_percentage numeric, min_competitor_price numeric, max_competitor_price numeric, avg_our_price numeric, avg_competitor_price numeric, price_volatility_score numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_prices AS (
+        -- Get latest competitor prices per product
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price,
+            pcc.new_our_retail_price,
+            p.brand
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+            AND pcc.new_competitor_price IS NOT NULL
+            AND pcc.new_our_retail_price IS NOT NULL
+            AND p.brand IS NOT NULL
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    price_spreads AS (
+        SELECT 
+            lp.brand,
+            lp.product_id,
+            lp.new_our_retail_price as our_price,
+            MIN(lp.new_competitor_price) as min_competitor_price,
+            MAX(lp.new_competitor_price) as max_competitor_price,
+            AVG(lp.new_competitor_price) as avg_competitor_price,
+            COUNT(DISTINCT lp.competitor_id) as competitor_count,
+            -- Price spread calculations
+            (MAX(lp.new_competitor_price) - MIN(lp.new_competitor_price)) as price_spread_amount,
+            CASE 
+                WHEN MIN(lp.new_competitor_price) > 0 THEN
+                    ((MAX(lp.new_competitor_price) - MIN(lp.new_competitor_price)) / MIN(lp.new_competitor_price) * 100)
+                ELSE 0
+            END as price_spread_percentage
+        FROM latest_prices lp
+        GROUP BY lp.brand, lp.product_id, lp.new_our_retail_price
+        HAVING COUNT(DISTINCT lp.competitor_id) >= 2  -- Need at least 2 competitors for meaningful spread
+    ),
+    price_volatility AS (
+        -- Calculate price change frequency for volatility score
+        SELECT 
+            p.brand,
+            COUNT(*) as total_price_changes,
+            COUNT(DISTINCT pcc.product_id) as products_with_changes,
+            AVG(ABS(pcc.price_change_percentage)) as avg_price_change_percentage
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+            AND p.brand IS NOT NULL
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+            AND pcc.price_change_percentage IS NOT NULL
+        GROUP BY p.brand
+    ),
+    brand_spreads AS (
+        SELECT 
+            ps.brand,
+            COUNT(*) as total_products,
+            AVG(ps.price_spread_amount) as avg_spread_amount,
+            AVG(ps.price_spread_percentage) as avg_spread_percentage,
+            MAX(ps.price_spread_amount) as max_spread_amount,
+            MAX(ps.price_spread_percentage) as max_spread_percentage,
+            MIN(ps.min_competitor_price) as overall_min_competitor_price,
+            MAX(ps.max_competitor_price) as overall_max_competitor_price,
+            AVG(ps.our_price) as avg_our_price,
+            AVG(ps.avg_competitor_price) as avg_competitor_price
+        FROM price_spreads ps
+        GROUP BY ps.brand
+    )
+    SELECT 
+        bs.brand::TEXT,
+        bs.total_products::INTEGER,
+        ROUND(COALESCE(bs.avg_spread_amount, 0), 2) as avg_price_spread_amount,
+        ROUND(COALESCE(bs.avg_spread_percentage, 0), 2) as avg_price_spread_percentage,
+        ROUND(COALESCE(bs.max_spread_amount, 0), 2) as max_price_spread_amount,
+        ROUND(COALESCE(bs.max_spread_percentage, 0), 2) as max_price_spread_percentage,
+        ROUND(COALESCE(bs.overall_min_competitor_price, 0), 2) as min_competitor_price,
+        ROUND(COALESCE(bs.overall_max_competitor_price, 0), 2) as max_competitor_price,
+        ROUND(COALESCE(bs.avg_our_price, 0), 2) as avg_our_price,
+        ROUND(COALESCE(bs.avg_competitor_price, 0), 2) as avg_competitor_price,
+        -- Volatility score: combination of price change frequency and average change percentage
+        ROUND(COALESCE(
+            (pv.total_price_changes::NUMERIC / GREATEST(pv.products_with_changes, 1)) * 
+            (pv.avg_price_change_percentage / 100) * 100, 0
+        ), 2) as price_volatility_score
+    FROM brand_spreads bs
+    LEFT JOIN price_volatility pv ON bs.brand = pv.brand
+    WHERE bs.total_products >= 3  -- Only include brands with meaningful product count
+    ORDER BY bs.avg_spread_percentage DESC, bs.total_products DESC;
+
+--
+-- Name: FUNCTION get_brand_price_spread_analysis(p_user_id uuid, p_competitor_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brand_price_spread_analysis(p_user_id uuid, p_competitor_id uuid) IS 'Analyzes price spreads and volatility per brand, showing market price ranges and competitive dynamics';
 
 --
 -- Name: get_brand_products_detail(uuid, text, uuid, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
@@ -1018,6 +1318,88 @@ BEGIN
     pc.user_id = p_user_id
     AND pc.competitor_id = p_competitor_id
     AND p.brand_id IS NOT NULL;
+
+--
+-- Name: get_brands_without_our_prices(uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brands_without_our_prices(p_user_id uuid, p_min_products integer DEFAULT 100) RETURNS TABLE(brand_name text, competitor_product_count integer, competitor_count integer, avg_competitor_price numeric, min_competitor_price numeric, max_competitor_price numeric, avg_stock_level numeric, products_in_stock integer, products_out_of_stock integer, opportunity_score numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH brands_with_our_prices AS (
+        -- Brands where we have prices (from price_changes_competitors with our integration_id)
+        SELECT DISTINCT p.brand
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND pcc.integration_id IS NOT NULL  -- This indicates our prices
+            AND pcc.new_our_retail_price IS NOT NULL
+            AND p.brand IS NOT NULL
+    ),
+    competitor_brand_data AS (
+        -- Get competitor data for brands we don't have prices for
+        SELECT 
+            p.brand,
+            COUNT(DISTINCT pcc.product_id) as product_count,
+            COUNT(DISTINCT pcc.competitor_id) as competitor_count,
+            AVG(pcc.new_competitor_price) as avg_price,
+            MIN(pcc.new_competitor_price) as min_price,
+            MAX(pcc.new_competitor_price) as max_price
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND pcc.competitor_id IS NOT NULL  -- Only competitor prices
+            AND pcc.new_competitor_price IS NOT NULL
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM brands_with_our_prices)
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '60 days'  -- Recent data
+        GROUP BY p.brand
+        HAVING COUNT(DISTINCT pcc.product_id) >= p_min_products
+    ),
+    stock_data AS (
+        -- Get stock information for these brands
+        SELECT 
+            p.brand,
+            AVG(CASE WHEN scc.new_stock_quantity IS NOT NULL THEN scc.new_stock_quantity ELSE 0 END) as avg_stock,
+            SUM(CASE WHEN scc.new_stock_status = 'in_stock' OR scc.new_stock_quantity > 0 THEN 1 ELSE 0 END) as in_stock_count,
+            SUM(CASE WHEN scc.new_stock_status = 'out_of_stock' OR scc.new_stock_quantity = 0 THEN 1 ELSE 0 END) as out_of_stock_count
+        FROM stock_changes_competitors scc
+        JOIN products p ON scc.product_id = p.id
+        WHERE scc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM brands_with_our_prices)
+            AND scc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+        GROUP BY p.brand
+    )
+    SELECT 
+        cbd.brand::TEXT,
+        cbd.product_count::INTEGER,
+        cbd.competitor_count::INTEGER,
+        ROUND(COALESCE(cbd.avg_price, 0), 2) as avg_competitor_price,
+        ROUND(COALESCE(cbd.min_price, 0), 2) as min_competitor_price,
+        ROUND(COALESCE(cbd.max_price, 0), 2) as max_competitor_price,
+        ROUND(COALESCE(sd.avg_stock, 0), 2) as avg_stock_level,
+        COALESCE(sd.in_stock_count, 0)::INTEGER as products_in_stock,
+        COALESCE(sd.out_of_stock_count, 0)::INTEGER as products_out_of_stock,
+        
+        -- Opportunity score: weighted by product count, competitor count, and reasonable stock levels
+        ROUND(
+            (LEAST(cbd.product_count / 100.0, 5) * 20) +  -- Product count factor (max 100 points)
+            (LEAST(cbd.competitor_count, 5) * 10) +        -- Competitor count factor (max 50 points)
+            (CASE WHEN COALESCE(sd.avg_stock, 0) BETWEEN 1 AND 50 THEN 30 ELSE 0 END) -- Stock level factor
+        , 2) as opportunity_score
+        
+    FROM competitor_brand_data cbd
+    LEFT JOIN stock_data sd ON cbd.brand = sd.brand
+    ORDER BY opportunity_score DESC, cbd.product_count DESC;
+
+--
+-- Name: FUNCTION get_brands_without_our_prices(p_user_id uuid, p_min_products integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brands_without_our_prices(p_user_id uuid, p_min_products integer) IS 'Finds brands that competitors sell but we do not have prices for, with opportunity scoring';
 
 --
 -- Name: get_competitor_names_for_brand(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
@@ -1319,6 +1701,145 @@ BEGIN
         j.jobname
     FROM cron.job j
     ORDER BY j.jobname;
+
+--
+-- Name: get_cross_docking_friendly_brands(uuid, integer, numeric); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_cross_docking_friendly_brands(p_user_id uuid, p_min_products integer DEFAULT 100, p_max_avg_stock numeric DEFAULT 50.0) RETURNS TABLE(brand_name text, total_products integer, competitor_count integer, avg_stock_level numeric, products_with_low_stock integer, low_stock_percentage numeric, avg_competitor_price numeric, stock_turnover_indicator text, cross_docking_suitability_score numeric, suitability_reason text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH our_brands AS (
+        -- Brands we already have products for
+        SELECT DISTINCT brand
+        FROM products 
+        WHERE user_id = p_user_id
+            AND brand IS NOT NULL
+            AND (our_wholesale_price IS NOT NULL OR our_retail_price IS NOT NULL)
+    ),
+    recent_stock_data AS (
+        -- Get recent stock data per brand (excluding brands we already have)
+        SELECT DISTINCT ON (scc.product_id, scc.competitor_id)
+            p.brand,
+            scc.product_id,
+            scc.competitor_id,
+            scc.new_stock_quantity,
+            scc.new_stock_status
+        FROM stock_changes_competitors scc
+        JOIN products p ON scc.product_id = p.id
+        WHERE scc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND scc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+        ORDER BY scc.product_id, scc.competitor_id, scc.changed_at DESC
+    ),
+    recent_price_data AS (
+        -- Get recent price data for the same brands (excluding brands we already have)
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            p.brand,
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND pcc.new_competitor_price IS NOT NULL
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    brand_stock_analysis AS (
+        SELECT 
+            rsd.brand,
+            COUNT(DISTINCT rsd.product_id) as total_products,
+            COUNT(DISTINCT rsd.competitor_id) as competitor_count,
+            AVG(COALESCE(rsd.new_stock_quantity, 0)) as avg_stock_level,
+            SUM(CASE WHEN COALESCE(rsd.new_stock_quantity, 0) <= 10 THEN 1 ELSE 0 END) as low_stock_products,
+            AVG(rpd.new_competitor_price) as avg_price
+        FROM recent_stock_data rsd
+        LEFT JOIN recent_price_data rpd ON rsd.brand = rpd.brand AND rsd.product_id = rpd.product_id AND rsd.competitor_id = rpd.competitor_id
+        GROUP BY rsd.brand
+        HAVING COUNT(DISTINCT rsd.product_id) >= p_min_products
+    ),
+    stock_turnover_analysis AS (
+        -- Analyze stock changes to estimate turnover (excluding brands we already have)
+        SELECT 
+            p.brand,
+            COUNT(*) as stock_change_events,
+            COUNT(DISTINCT scc.product_id) as products_with_changes,
+            AVG(ABS(COALESCE(scc.stock_change_quantity, 0))) as avg_stock_change
+        FROM stock_changes_competitors scc
+        JOIN products p ON scc.product_id = p.id
+        WHERE scc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND scc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+            AND scc.stock_change_quantity IS NOT NULL
+            AND ABS(scc.stock_change_quantity) > 0
+        GROUP BY p.brand
+    )
+    SELECT 
+        bsa.brand::TEXT,
+        bsa.total_products::INTEGER,
+        bsa.competitor_count::INTEGER,
+        ROUND(bsa.avg_stock_level, 2) as avg_stock_level,
+        bsa.low_stock_products::INTEGER,
+        ROUND((bsa.low_stock_products::NUMERIC / bsa.total_products * 100), 2) as low_stock_percentage,
+        ROUND(COALESCE(bsa.avg_price, 0), 2) as avg_competitor_price,
+        
+        -- Stock turnover indicator
+        CASE 
+            WHEN COALESCE(sta.stock_change_events, 0) >= bsa.total_products * 0.5 THEN 'High Turnover'
+            WHEN COALESCE(sta.stock_change_events, 0) >= bsa.total_products * 0.2 THEN 'Medium Turnover'
+            ELSE 'Low Turnover'
+        END::TEXT as stock_turnover_indicator,
+        
+        -- Cross-docking suitability score (0-100)
+        ROUND(
+            -- Low average stock (40 points max)
+            (CASE WHEN bsa.avg_stock_level <= p_max_avg_stock THEN 
+                40 * (1 - (bsa.avg_stock_level / p_max_avg_stock))
+            ELSE 0 END) +
+            
+            -- High percentage of low stock products (30 points max)
+            (LEAST(30, (bsa.low_stock_products::NUMERIC / bsa.total_products * 100) * 0.3)) +
+            
+            -- Multiple competitors (indicates market demand) (20 points max)
+            (LEAST(20, bsa.competitor_count * 4)) +
+            
+            -- Stock turnover activity (10 points max)
+            (CASE WHEN COALESCE(sta.stock_change_events, 0) > 0 THEN
+                LEAST(10, (sta.stock_change_events::NUMERIC / bsa.total_products * 10))
+            ELSE 0 END)
+        , 2) as cross_docking_suitability_score,
+        
+        -- Suitability reason
+        CASE 
+            WHEN bsa.avg_stock_level <= p_max_avg_stock AND (bsa.low_stock_products::NUMERIC / bsa.total_products) >= 0.6 THEN
+                'Low stock levels indicate JIT/cross-docking model - NEW BRAND OPPORTUNITY'
+            WHEN bsa.avg_stock_level <= p_max_avg_stock AND bsa.competitor_count >= 3 THEN
+                'Low stock with multiple competitors suggests fast-moving products - NEW BRAND OPPORTUNITY'
+            WHEN (bsa.low_stock_products::NUMERIC / bsa.total_products) >= 0.5 THEN
+                'High percentage of low-stock products - NEW BRAND OPPORTUNITY'
+            WHEN COALESCE(sta.stock_change_events, 0) >= bsa.total_products * 0.3 THEN
+                'High stock turnover activity - NEW BRAND OPPORTUNITY'
+            ELSE
+                'Moderate suitability for cross-docking - NEW BRAND OPPORTUNITY'
+        END::TEXT as suitability_reason
+        
+    FROM brand_stock_analysis bsa
+    LEFT JOIN stock_turnover_analysis sta ON bsa.brand = sta.brand
+    WHERE bsa.avg_stock_level <= p_max_avg_stock  -- Filter by max average stock
+    ORDER BY cross_docking_suitability_score DESC, bsa.total_products DESC;
+
+--
+-- Name: FUNCTION get_cross_docking_friendly_brands(p_user_id uuid, p_min_products integer, p_max_avg_stock numeric); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_cross_docking_friendly_brands(p_user_id uuid, p_min_products integer, p_max_avg_stock numeric) IS 'Finds brands suitable for cross-docking model based on low stock levels and turnover patterns';
 
 --
 -- Name: get_current_stock_analysis(uuid, uuid, text); Type: FUNCTION; Schema: public; Owner: -
@@ -2409,6 +2930,22 @@ DECLARE
 --
 
 COMMENT ON FUNCTION public.get_stock_turnover_analysis(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone, p_dead_stock_days integer) IS 'Returns stock turnover ratios, dead stock detection, and velocity categorization';
+
+--
+-- Name: get_trending_new_brands(uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_trending_new_brands(p_user_id uuid, p_days_back integer DEFAULT 90) RETURNS TABLE(brand_name text, first_seen_date date, days_since_first_seen integer, current_product_count integer, competitor_count integer, product_growth_rate numeric, avg_competitor_price numeric, price_trend text, avg_stock_level numeric, trending_score numeric, trend_category text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_start_date DATE := CURRENT_DATE - (p_days_back || ' days')::INTERVAL;
+
+--
+-- Name: FUNCTION get_trending_new_brands(p_user_id uuid, p_days_back integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_trending_new_brands(p_user_id uuid, p_days_back integer) IS 'Finds new and trending brands based on recent appearance and growth patterns in competitor data';
 
 --
 -- Name: get_unique_competitor_products(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
