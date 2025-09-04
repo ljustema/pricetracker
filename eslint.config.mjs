@@ -17,6 +17,7 @@ const eslintConfig = [
       "src/workers/ts-worker/dist/**",
       "src/workers/ts-worker/*.js", // Ignore JS utility files
       "src/workers/ts-worker/**/*.js", // Ignore all JS files in ts-worker
+      "src/workers/ts-worker/src/**/*.ts", // Ignore TypeScript files in ts-worker (separate build process)
       // Temporarily ignore files with parsing errors (false positives)
       "src/components/scrapers/scraper-list.tsx",
       "src/workers/ts-util-worker/src/prestashop-client.ts",
