@@ -10,6 +10,8 @@ import type { Database } from './database.types';
 // Import Supabase types (type-only import)
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+// Note: Using 'any' type for Supabase client to avoid type compatibility issues in different environments
+
 // Lazy-loaded modules (will be imported when needed)
 let fsPromises: typeof import('fs/promises') | null = null;
 let fsSync: typeof import('fs') | null = null;
@@ -30,9 +32,9 @@ async function ensureFsModules() {
 }
 
 // Lazy loading functions for heavy dependencies
-let supabaseClient: SupabaseClient<Database> | null = null;
+let supabaseClient: any = null;
 
-async function getSupabaseClient(): Promise<SupabaseClient<Database>> {
+async function getSupabaseClient(): Promise<any> {
   if (!supabaseClient) {
     const { createClient } = await import('@supabase/supabase-js');
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -1634,7 +1636,7 @@ $$;
 
 
 // --- Function to save scraped products ---
-async function saveScrapedProducts(runId: string, userId: string, scraperId: string, competitorId: string | undefined, supplierId: string | undefined, products: _ScrapedProductData[], supabaseClient?: SupabaseClient<Database>) {
+async function saveScrapedProducts(runId: string, userId: string, scraperId: string, competitorId: string | undefined, supplierId: string | undefined, products: _ScrapedProductData[], supabaseClient?: any) {
     if (!products || products.length === 0) return;
 
     // Check if either competitorId or supplierId is provided

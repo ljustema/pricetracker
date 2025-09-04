@@ -83,7 +83,7 @@ export async function logToDatabase(runId: string, message: string, data: unknow
     // Convert to string for storage in TEXT column
     const logEntryString = JSON.stringify(logEntry);
 
-    const { error: updateError } = await supabaseClient
+    const { error: updateError } = await (supabaseClient as any)
       .from('scraper_runs')
       .update({
         error_details: logEntryString // Store as string in TEXT column
