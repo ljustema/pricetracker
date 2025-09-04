@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 /**
  * Database warmup endpoint to prevent cold starts
@@ -10,7 +10,7 @@ export async function GET(_request: NextRequest) {
     const supabase = createSupabaseAdminClient();
     
     // Perform a simple query to warm up the database
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('products')
       .select('count')
       .limit(1)

@@ -72,9 +72,12 @@ export async function GET(request: NextRequest) {
     const batchSize = 1000;
     let hasMore = true;
 
+    // Set a longer statement timeout for complex product queries (especially after cold starts)
+    await supabase.rpc('set_statement_timeout', { p_milliseconds: 45000 }); // 45 seconds
+
     while (hasMore && allProducts.length < limit) {
       const remainingLimit = Math.min(batchSize, limit - allProducts.length);
-      
+
       const { data: priorityProducts, error } = await supabase.rpc('get_priority_products_for_repricing', {
         p_user_id: userId,
         p_competitor_id: competitorId || null,
@@ -85,8 +88,40 @@ export async function GET(request: NextRequest) {
 
       if (error) {
         console.error('Error fetching priority products data:', error);
+
+        // Handle timeout errors specifically
+        if (error.code === '57014') {
+          return NextResponse.json(
+            {
+              error: 'The priority products query timed out. This usually happens after periods of inactivity.',
+              details: 'The database query took too long to complete. This is common after the database has been idle. Please try again in a few minutes.',
+              code: error.code,
+              retryable: true
+            },
+            { status: 504 } // Gateway Timeout status
+          );
+        }
+
+        // Handle connection errors
+        if (error.code === '08006' || error.code === '08000') {
+          return NextResponse.json(
+            {
+              error: 'Database connection error. Please try again in a moment.',
+              details: 'The database connection was interrupted. This is common after periods of inactivity.',
+              code: error.code,
+              retryable: true
+            },
+            { status: 503 } // Service Unavailable
+          );
+        }
+
         return NextResponse.json(
-          { error: 'Failed to fetch priority products data', details: error.message },
+          {
+            error: 'Failed to fetch priority products data',
+            details: error.message,
+            code: error.code,
+            retryable: false
+          },
           { status: 500 }
         );
       }

@@ -2,7 +2,7 @@
 
 import type { ComplexFiltersState } from './products-client-wrapper'; // Import filter state type
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { Competitor } from "@/lib/services/competitor-service"; // Import Competitor type
 import type { Product, StockChange } from "@/lib/services/product-service"; // Import the shared type
 import ProductCard from "@/components/products/product-card";
@@ -77,15 +77,11 @@ export default function ProductsContent({
   const ourProductsWithSupplierPrices = complexFilters.our_products_with_supplier_prices;
 
   // Function to fetch products based on current searchParams with retry logic
-  const fetchProducts = async (retryCount = 0) => {
-    const maxRetries = 3;
+  const fetchProducts = useCallback(async (retryCount = 0) => {
+    const _maxRetries = 3;
     setIsLoading(true);
     setError(null);
     try {
-      const maxRetries = 3;
-      setIsLoading(true);
-      setError(null);
-      try {
         // Use the extracted dependency variables
         const page = parseInt(pageParam, 10);
         // itemsPerPage is defined outside useEffect
@@ -235,9 +231,9 @@ export default function ProductsContent({
                                 errorMessage.includes('timeout');
 
         // Retry logic for timeout/connection errors
-        if (isRetryableError && retryCount < maxRetries) {
-          console.log(`Retrying products fetch (attempt ${retryCount + 1}/${maxRetries}) after error:`, errorMessage);
-          setError(`Loading products... (attempt ${retryCount + 1}/${maxRetries + 1})`);
+        if (isRetryableError && retryCount < _maxRetries) {
+          console.log(`Retrying products fetch (attempt ${retryCount + 1}/${_maxRetries}) after error:`, errorMessage);
+          setError(`Loading products... (attempt ${retryCount + 1}/${_maxRetries + 1})`);
 
           // Exponential backoff: 1s, 2s, 4s
           const delay = 1000 * Math.pow(2, retryCount);
@@ -256,40 +252,38 @@ export default function ProductsContent({
         setProducts([]); // Clear products on error
         setTotalProductCount(0);
         setIsLoading(false); // Stop loading on final error
-      }
-
-      // Only set loading to false if we're not retrying
+    } finally {
+      // Ensure loading is stopped if not retrying
       if (retryCount === 0) {
         setIsLoading(false);
       }
-    };
+    }
+  }, [
+    pageParam,
+    sortParam,
+    sortOrderParam,
+    refreshParam,
+    brandFilter,
+    categoryFilter,
+    searchQuery,
+    showInactive,
+    sourceFilter,
+    supplierFilter,
+    hasPriceFilter,
+    notOurProductsFilter,
+    priceLowerThanCompetitors,
+    priceHigherThanCompetitors,
+    inStockOnly,
+    ourProductsWithCompetitorPrices,
+    ourProductsWithSupplierPrices,
+    itemsPerPage,
+    cookieHeader,
+    complexFilters
+  ]);
 
   useEffect(() => {
     fetchProducts(0); // Start with retry count 0
-
-    // Dependency array: Use the extracted primitive values
-  }, [
-      pageParam,
-      sortParam,
-      sortOrderParam,
-      refreshParam, // Add refresh parameter to trigger refetch when it changes
-      brandFilter,
-      categoryFilter,
-      searchQuery,
-      showInactive,
-      sourceFilter,
-      supplierFilter, // Add missing supplier filter dependency
-      hasPriceFilter,
-      notOurProductsFilter, // Add missing not_our_products filter dependency
-      priceLowerThanCompetitors, // Add new price comparison filter
-      priceHigherThanCompetitors, // Add new price comparison filter
-      inStockOnly, // Add new stock filter
-      ourProductsWithCompetitorPrices, // Add missing dependency
-      ourProductsWithSupplierPrices, // Add missing dependency
-      itemsPerPage, // Add itemsPerPage to trigger refetch when pagination size changes
-      cookieHeader, // Keep cookieHeader dependency
-      complexFilters // Add complexFilters dependency
-    ]);
+  }, [fetchProducts]);
 
   // --- Start: Rendering Logic (Moved from ProductsPage) ---
   const totalProducts = totalProductCount; // Use state variable
