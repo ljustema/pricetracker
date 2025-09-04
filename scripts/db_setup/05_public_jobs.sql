@@ -1,13 +1,9 @@
 -- =========================================================================
 -- Job-related objects
 -- =========================================================================
--- Generated: 2025-07-25 12:31:28
+-- Generated: 2025-09-04 14:04:57
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
-
-revoke all on table cron.job from postgres;
-
-grant select on table cron.job to postgres with grant option;
 
 BEGIN
   -- Find the oldest pending job for integration runs.

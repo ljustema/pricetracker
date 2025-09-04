@@ -110,13 +110,47 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       p_our_products_with_supplier_prices: body.our_products_with_supplier_prices === true ? true : null
     };
 
+    // Set a longer statement timeout for complex product queries (especially after cold starts)
+    await supabase.rpc('set_statement_timeout', { p_milliseconds: 45000 }); // 45 seconds
+
     // Execute the RPC call
     const { data: rpcResult, error } = await supabase.rpc('get_products_filtered', rpcParams);
 
     if (error) {
       console.error("Error calling get_products_filtered RPC:", error);
+
+      // Handle timeout errors specifically
+      if (error.code === '57014') {
+        return NextResponse.json(
+          {
+            error: "The product query timed out. This usually happens after periods of inactivity. Please try again.",
+            details: "The database query took too long to complete. This is common after the database has been idle.",
+            code: error.code,
+            retryable: true
+          },
+          { status: 504 } // Gateway Timeout status
+        );
+      }
+
+      // Handle connection errors
+      if (error.code === '08006' || error.code === '08000') {
+        return NextResponse.json(
+          {
+            error: "Database connection error. Please try again in a moment.",
+            details: "The database connection was interrupted. This is common after periods of inactivity.",
+            code: error.code,
+            retryable: true
+          },
+          { status: 503 } // Service Unavailable
+        );
+      }
+
       return NextResponse.json(
-        { error: "Database error: " + error.message },
+        {
+          error: "Database error: " + error.message,
+          code: error.code,
+          retryable: false
+        },
         { status: 500 }
       );
     }

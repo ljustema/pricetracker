@@ -1,0 +1,13762 @@
+--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 17.4
+-- Dumped by pg_dump version 17.0
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+--
+-- Name: public; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA public;
+
+
+--
+-- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON SCHEMA public IS 'standard public schema';
+
+
+--
+-- Name: append_log_to_scraper_run(uuid, jsonb); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.append_log_to_scraper_run(p_run_id uuid, p_log_entry jsonb) RETURNS void
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  UPDATE scraper_runs
+  SET progress_messages = coalesce(progress_messages, '[]'::jsonb) || p_log_entry
+  WHERE id = p_run_id;
+END;
+$$;
+
+
+--
+-- Name: append_logs_to_scraper_run(uuid, text[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.append_logs_to_scraper_run(p_run_id uuid, p_log_entries text[]) RETURNS void
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  -- Use a single update to append all log entries at once
+  UPDATE scraper_runs
+  SET progress_messages = COALESCE(progress_messages, ARRAY[]::text[]) || p_log_entries
+  WHERE id = p_run_id;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION append_logs_to_scraper_run(p_run_id uuid, p_log_entries text[]); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.append_logs_to_scraper_run(p_run_id uuid, p_log_entries text[]) IS 'Efficiently appends multiple log entries to a scraper run''s progress_messages in a single database operation';
+
+
+--
+-- Name: auto_trim_progress_messages(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.auto_trim_progress_messages() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+  v_message_count integer;
+BEGIN
+  -- If progress_messages has more than 200 entries, trim it to 100
+  IF NEW.progress_messages IS NOT NULL THEN
+    v_message_count := array_length(NEW.progress_messages, 1);
+    
+    IF v_message_count IS NOT NULL AND v_message_count > 200 THEN
+      NEW.progress_messages := NEW.progress_messages[(v_message_count - 100 + 1):v_message_count];
+    END IF;
+  END IF;
+  
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION auto_trim_progress_messages(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.auto_trim_progress_messages() IS 'Automatically trims progress_messages when they exceed 200 entries';
+
+
+--
+-- Name: calculate_all_daily_snapshots(uuid, date); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_all_daily_snapshots(p_user_id uuid, p_snapshot_date date DEFAULT CURRENT_DATE) RETURNS TABLE(combination_type text, competitor_name text, brand_filter text, total_products integer, success boolean)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    competitor_record RECORD;
+    brand_record RECORD;
+    result_record RECORD;
+BEGIN
+    -- 1. Calculate snapshot for all competitors, all brands
+    SELECT * INTO result_record
+    FROM calculate_daily_price_competitiveness_snapshot(p_user_id, p_snapshot_date, NULL, NULL);
+
+    RETURN QUERY SELECT
+        'All Competitors, All Brands'::TEXT,
+        'All Competitors'::TEXT,
+        'All Brands'::TEXT,
+        result_record.total_products,
+        TRUE;
+
+    -- 2. Calculate snapshots for each individual competitor (all brands)
+    FOR competitor_record IN
+        SELECT id, name FROM competitors WHERE user_id = p_user_id AND is_active = true
+    LOOP
+        SELECT * INTO result_record
+        FROM calculate_daily_price_competitiveness_snapshot(p_user_id, p_snapshot_date, competitor_record.id, NULL);
+
+        RETURN QUERY SELECT
+            'Individual Competitor, All Brands'::TEXT,
+            competitor_record.name,
+            'All Brands'::TEXT,
+            result_record.total_products,
+            TRUE;
+    END LOOP;
+
+    -- 3. Calculate snapshots for each brand (all competitors)
+    FOR brand_record IN
+        SELECT DISTINCT brand FROM products
+        WHERE user_id = p_user_id AND is_active = true AND brand IS NOT NULL AND brand != ''
+        ORDER BY brand
+    LOOP
+        SELECT * INTO result_record
+        FROM calculate_daily_price_competitiveness_snapshot(p_user_id, p_snapshot_date, NULL, brand_record.brand);
+
+        RETURN QUERY SELECT
+            'All Competitors, Individual Brand'::TEXT,
+            'All Competitors'::TEXT,
+            brand_record.brand,
+            result_record.total_products,
+            TRUE;
+    END LOOP;
+
+    -- Note: We could also add competitor+brand combinations, but that might be too many combinations
+    -- for now. Can be added later if needed.
+END;
+$$;
+
+
+--
+-- Name: FUNCTION calculate_all_daily_snapshots(p_user_id uuid, p_snapshot_date date); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.calculate_all_daily_snapshots(p_user_id uuid, p_snapshot_date date) IS 'Calculates daily snapshots for all relevant combinations of competitors and brands.
+This is useful for batch processing in cron jobs.
+Parameters:
+- p_user_id: The user ID to calculate snapshots for
+- p_snapshot_date: The date for the snapshot (default: today)';
+
+
+--
+-- Name: calculate_daily_price_competitiveness_snapshot(uuid, date, uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_daily_price_competitiveness_snapshot(p_user_id uuid, p_snapshot_date date DEFAULT CURRENT_DATE, p_competitor_id uuid DEFAULT NULL::uuid, p_brand_filter text DEFAULT NULL::text) RETURNS TABLE(snapshot_id uuid, total_products integer, cheapest_count integer, same_price_count integer, more_expensive_count integer, cheapest_percentage numeric, same_price_percentage numeric, more_expensive_percentage numeric)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_snapshot_id UUID;
+    v_total_products INTEGER := 0;
+    v_cheapest_count INTEGER := 0;
+    v_same_price_count INTEGER := 0;
+    v_more_expensive_count INTEGER := 0;
+    v_cheapest_percentage NUMERIC := 0;
+    v_same_price_percentage NUMERIC := 0;
+    v_more_expensive_percentage NUMERIC := 0;
+    v_avg_diff_when_higher NUMERIC := 0;
+    v_avg_diff_pct_when_higher NUMERIC := 0;
+    v_total_potential_savings NUMERIC := 0;
+BEGIN
+    -- Calculate the snapshot data
+    WITH latest_competitor_prices AS (
+        -- Get the latest price for each product-competitor combination up to the snapshot date
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price,
+            pcc.changed_at
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.changed_at::date <= p_snapshot_date
+        AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    product_min_prices AS (
+        -- Find the minimum competitor price for each product
+        SELECT 
+            lcp.product_id,
+            MIN(lcp.new_competitor_price) as min_competitor_price
+        FROM latest_competitor_prices lcp
+        JOIN products p ON lcp.product_id = p.id
+        WHERE p.user_id = p_user_id
+        AND p.our_retail_price IS NOT NULL
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+        GROUP BY lcp.product_id
+    ),
+    price_analysis AS (
+        -- Analyze each product's competitiveness
+        SELECT
+            p.id as product_id,
+            p.our_retail_price,
+            pmp.min_competitor_price,
+            CASE
+                WHEN p.our_retail_price < pmp.min_competitor_price THEN 'cheapest'
+                WHEN p.our_retail_price = pmp.min_competitor_price THEN 'same_price'
+                ELSE 'more_expensive'
+            END as price_status,
+            CASE 
+                WHEN p.our_retail_price > pmp.min_competitor_price 
+                THEN p.our_retail_price - pmp.min_competitor_price 
+                ELSE 0 
+            END as price_difference,
+            CASE 
+                WHEN p.our_retail_price > pmp.min_competitor_price 
+                THEN ((p.our_retail_price - pmp.min_competitor_price) / p.our_retail_price * 100)
+                ELSE 0 
+            END as price_difference_percentage
+        FROM products p
+        JOIN product_min_prices pmp ON p.id = pmp.product_id
+        WHERE p.user_id = p_user_id
+        AND p.our_retail_price IS NOT NULL
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+    ),
+    aggregated_stats AS (
+        -- Calculate aggregated statistics
+        SELECT
+            COUNT(*) as total_products,
+            COUNT(*) FILTER (WHERE price_status = 'cheapest') as cheapest_count,
+            COUNT(*) FILTER (WHERE price_status = 'same_price') as same_price_count,
+            COUNT(*) FILTER (WHERE price_status = 'more_expensive') as more_expensive_count,
+            AVG(price_difference) FILTER (WHERE price_status = 'more_expensive') as avg_diff_when_higher,
+            AVG(price_difference_percentage) FILTER (WHERE price_status = 'more_expensive') as avg_diff_pct_when_higher,
+            SUM(price_difference) as total_potential_savings
+        FROM price_analysis
+    )
+    SELECT 
+        ast.total_products,
+        ast.cheapest_count,
+        ast.same_price_count,
+        ast.more_expensive_count,
+        ast.avg_diff_when_higher,
+        ast.avg_diff_pct_when_higher,
+        ast.total_potential_savings
+    INTO 
+        v_total_products,
+        v_cheapest_count,
+        v_same_price_count,
+        v_more_expensive_count,
+        v_avg_diff_when_higher,
+        v_avg_diff_pct_when_higher,
+        v_total_potential_savings
+    FROM aggregated_stats ast;
+
+    -- Calculate percentages
+    IF v_total_products > 0 THEN
+        v_cheapest_percentage := ROUND((v_cheapest_count::NUMERIC / v_total_products * 100), 2);
+        v_same_price_percentage := ROUND((v_same_price_count::NUMERIC / v_total_products * 100), 2);
+        v_more_expensive_percentage := ROUND((v_more_expensive_count::NUMERIC / v_total_products * 100), 2);
+    END IF;
+
+    -- Insert or update the snapshot
+    INSERT INTO daily_price_competitiveness_snapshots (
+        user_id,
+        snapshot_date,
+        competitor_id,
+        brand_filter,
+        total_products_analyzed,
+        products_we_are_cheapest,
+        products_we_are_same_price,
+        products_we_are_more_expensive,
+        cheapest_percentage,
+        same_price_percentage,
+        more_expensive_percentage,
+        avg_price_difference_when_higher,
+        avg_price_difference_percentage_when_higher,
+        total_potential_savings
+    ) VALUES (
+        p_user_id,
+        p_snapshot_date,
+        p_competitor_id,
+        p_brand_filter,
+        v_total_products,
+        v_cheapest_count,
+        v_same_price_count,
+        v_more_expensive_count,
+        v_cheapest_percentage,
+        v_same_price_percentage,
+        v_more_expensive_percentage,
+        ROUND(v_avg_diff_when_higher, 2),
+        ROUND(v_avg_diff_pct_when_higher, 2),
+        ROUND(v_total_potential_savings, 2)
+    )
+    ON CONFLICT (user_id, snapshot_date, COALESCE(competitor_id::text, 'ALL'), COALESCE(brand_filter, 'ALL'))
+    DO UPDATE SET
+        total_products_analyzed = EXCLUDED.total_products_analyzed,
+        products_we_are_cheapest = EXCLUDED.products_we_are_cheapest,
+        products_we_are_same_price = EXCLUDED.products_we_are_same_price,
+        products_we_are_more_expensive = EXCLUDED.products_we_are_more_expensive,
+        cheapest_percentage = EXCLUDED.cheapest_percentage,
+        same_price_percentage = EXCLUDED.same_price_percentage,
+        more_expensive_percentage = EXCLUDED.more_expensive_percentage,
+        avg_price_difference_when_higher = EXCLUDED.avg_price_difference_when_higher,
+        avg_price_difference_percentage_when_higher = EXCLUDED.avg_price_difference_percentage_when_higher,
+        total_potential_savings = EXCLUDED.total_potential_savings,
+        updated_at = NOW()
+    RETURNING id INTO v_snapshot_id;
+
+    -- Return the results
+    RETURN QUERY
+    SELECT 
+        v_snapshot_id,
+        v_total_products,
+        v_cheapest_count,
+        v_same_price_count,
+        v_more_expensive_count,
+        v_cheapest_percentage,
+        v_same_price_percentage,
+        v_more_expensive_percentage;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION calculate_daily_price_competitiveness_snapshot(p_user_id uuid, p_snapshot_date date, p_competitor_id uuid, p_brand_filter text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.calculate_daily_price_competitiveness_snapshot(p_user_id uuid, p_snapshot_date date, p_competitor_id uuid, p_brand_filter text) IS 'Calculates and stores a daily snapshot of price competitiveness metrics for a user.
+Parameters:
+- p_user_id: The user ID to calculate snapshots for
+- p_snapshot_date: The date for the snapshot (default: today)
+- p_competitor_id: Specific competitor to analyze (NULL for all competitors)
+- p_brand_filter: Brand filter to apply (NULL for all brands)';
+
+
+--
+-- Name: calculate_next_integration_run_time(text, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_next_integration_run_time(sync_frequency text, last_sync_at timestamp with time zone) RETURNS timestamp with time zone
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    next_run timestamp with time zone;
+    base_time timestamp with time zone;
+BEGIN
+    -- Use last_sync_at as base, or current time minus interval if never synced
+    base_time := COALESCE(last_sync_at, now() - interval '1 day');
+
+    CASE sync_frequency
+        WHEN 'daily' THEN
+            -- Run once per day at 3 AM
+            next_run := date_trunc('day', base_time) + interval '3 hours';
+            IF next_run <= base_time THEN
+                next_run := next_run + interval '1 day';
+            END IF;
+
+        WHEN 'weekly' THEN
+            -- Run once per week on Monday at 3 AM
+            next_run := date_trunc('week', base_time) + interval '1 day' + interval '3 hours';
+            IF next_run <= base_time THEN
+                next_run := next_run + interval '1 week';
+            END IF;
+
+        WHEN 'monthly' THEN
+            -- Run once per month on the 1st at 3 AM
+            next_run := date_trunc('month', base_time) + interval '1 month' + interval '3 hours';
+
+        ELSE
+            -- Default to daily
+            next_run := date_trunc('day', base_time) + interval '3 hours';
+            IF next_run <= base_time THEN
+                next_run := next_run + interval '1 day';
+            END IF;
+    END CASE;
+
+    RETURN next_run;
+END;
+$$;
+
+
+--
+-- Name: calculate_next_scraper_run_time(jsonb, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_next_scraper_run_time(schedule_config jsonb, last_run timestamp with time zone) RETURNS timestamp with time zone
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    frequency text;
+    time_of_day text;
+    next_run timestamp with time zone;
+    current_time timestamp with time zone := now();
+    today_start timestamp with time zone;
+    scheduled_time timestamp with time zone;
+BEGIN
+    -- Extract schedule parameters
+    frequency := schedule_config->>'frequency';
+    time_of_day := COALESCE(schedule_config->>'time', '02:00');
+
+    -- Get today's start (midnight)
+    today_start := date_trunc('day', current_time);
+
+    -- Calculate scheduled time for today
+    scheduled_time := today_start + time_of_day::time;
+
+    CASE frequency
+        WHEN 'daily' THEN
+            -- If today's scheduled time has passed, schedule for tomorrow
+            IF scheduled_time <= current_time THEN
+                next_run := scheduled_time + interval '1 day';
+            ELSE
+                next_run := scheduled_time;
+            END IF;
+
+        WHEN 'weekly' THEN
+            -- Run once per week on the same day as last run (or Monday if no last run)
+            IF last_run IS NULL THEN
+                -- Default to next Monday at scheduled time
+                next_run := date_trunc('week', current_time) + interval '1 day' + time_of_day::time;
+                IF next_run <= current_time THEN
+                    next_run := next_run + interval '1 week';
+                END IF;
+            ELSE
+                -- Run on the same day of week as last run
+                next_run := date_trunc('week', last_run) + interval '1 week' +
+                           (extract(dow from last_run) * interval '1 day') + time_of_day::time;
+            END IF;
+
+        WHEN 'monthly' THEN
+            -- Run once per month on the same day as last run (or 1st if no last run)
+            IF last_run IS NULL THEN
+                -- Default to next 1st of month at scheduled time
+                next_run := date_trunc('month', current_time) + interval '1 month' + time_of_day::time;
+            ELSE
+                -- Run on the same day of month as last run
+                next_run := date_trunc('month', last_run) + interval '1 month' +
+                           ((extract(day from last_run) - 1) * interval '1 day') + time_of_day::time;
+            END IF;
+
+        ELSE
+            -- Default to daily
+            IF scheduled_time <= current_time THEN
+                next_run := scheduled_time + interval '1 day';
+            ELSE
+                next_run := scheduled_time;
+            END IF;
+    END CASE;
+
+    RETURN next_run;
+END;
+$$;
+
+
+--
+-- Name: calculate_price_change_percentage(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_price_change_percentage() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Calculate percentage for competitor price changes
+    IF NEW.competitor_id IS NOT NULL AND NEW.old_competitor_price IS NOT NULL AND NEW.new_competitor_price IS NOT NULL AND NEW.old_competitor_price > 0 THEN
+        NEW.price_change_percentage = ((NEW.new_competitor_price - NEW.old_competitor_price) / NEW.old_competitor_price) * 100;
+    
+    -- Calculate percentage for our retail price changes (integration changes)
+    ELSIF NEW.integration_id IS NOT NULL AND NEW.old_our_retail_price IS NOT NULL AND NEW.new_our_retail_price IS NOT NULL AND NEW.old_our_retail_price > 0 THEN
+        NEW.price_change_percentage = ((NEW.new_our_retail_price - NEW.old_our_retail_price) / NEW.old_our_retail_price) * 100;
+    
+    -- If neither condition is met, set to NULL
+    ELSE
+        NEW.price_change_percentage = NULL;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: calculate_supplier_price_change_percentage(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.calculate_supplier_price_change_percentage() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Calculate percentage for supplier price changes
+    IF NEW.supplier_id IS NOT NULL AND NEW.old_supplier_price IS NOT NULL AND NEW.new_supplier_price IS NOT NULL AND NEW.old_supplier_price > 0 THEN
+        NEW.price_change_percentage = ((NEW.new_supplier_price - NEW.old_supplier_price) / NEW.old_supplier_price) * 100;
+    
+    -- Calculate percentage for our wholesale price changes (integration changes)
+    ELSIF NEW.integration_id IS NOT NULL AND NEW.old_our_wholesale_price IS NOT NULL AND NEW.new_our_wholesale_price IS NOT NULL AND NEW.old_our_wholesale_price > 0 THEN
+        NEW.price_change_percentage = ((NEW.new_our_wholesale_price - NEW.old_our_wholesale_price) / NEW.old_our_wholesale_price) * 100;
+    
+    -- If neither condition is met, set to NULL
+    ELSE
+        NEW.price_change_percentage = NULL;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: integration_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.integration_runs (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    integration_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    started_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    products_processed integer DEFAULT 0,
+    products_updated integer DEFAULT 0,
+    products_created integer DEFAULT 0,
+    error_message text,
+    log_details jsonb,
+    created_at timestamp with time zone DEFAULT now(),
+    test_products jsonb,
+    configuration jsonb,
+    last_progress_update timestamp with time zone
+);
+
+
+--
+-- Name: claim_next_integration_job(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.claim_next_integration_job() RETURNS SETOF public.integration_runs
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+  claimed_job_id UUID;
+BEGIN
+  -- Find the oldest pending job for integration runs.
+  -- Lock the row to prevent other workers from picking it up simultaneously.
+  -- SKIP LOCKED ensures that if another worker has already locked this row,
+  -- this transaction won't wait but will instead try to find the next available job.
+  SELECT ir.id
+  INTO claimed_job_id
+  FROM integration_runs ir
+  WHERE ir.status = 'pending'
+  ORDER BY ir.created_at
+  LIMIT 1
+  FOR UPDATE SKIP LOCKED;
+
+  IF claimed_job_id IS NULL THEN
+    -- No job found, or all available jobs are currently locked by other transactions.
+    RETURN;
+  END IF;
+
+  -- Update the job status to 'processing' and set the started_at timestamp.
+  -- The RETURNING clause will return the updated row(s).
+  RETURN QUERY
+  UPDATE integration_runs ir
+  SET status = 'processing', started_at = NOW()
+  WHERE ir.id = claimed_job_id AND ir.status = 'pending' -- Double-check status
+  RETURNING ir.*; -- Return all columns from the updated integration_runs row
+END;
+$$;
+
+
+--
+-- Name: FUNCTION claim_next_integration_job(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.claim_next_integration_job() IS 'Atomically claims the next pending integration job. It selects, locks, and updates the job status to "processing" in a single transaction, returning the claimed job. Uses FOR UPDATE SKIP LOCKED for concurrency.';
+
+
+--
+-- Name: claim_next_scraper_job(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.claim_next_scraper_job(worker_type_filter text) RETURNS TABLE(id uuid, created_at timestamp with time zone, scraper_id uuid, user_id uuid, status text, scraper_type text, started_at timestamp with time zone, completed_at timestamp with time zone, error_message text, error_details text, product_count integer, is_test_run boolean, fetched_competitor_id uuid)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+  claimed_job_id_val UUID;
+BEGIN
+  -- Atomically find a job, lock it, and update its status.
+  -- This CTE structure ensures atomicity for the find-and-update part.
+  WITH potential_job AS (
+    SELECT sr_inner.id
+    FROM scraper_runs sr_inner
+    WHERE sr_inner.status IN ('pending', 'initializing') AND sr_inner.scraper_type = worker_type_filter
+    ORDER BY sr_inner.created_at
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED -- Crucial for concurrency: if locked, try next
+  ),
+  updated_job AS (
+    UPDATE scraper_runs sr_update
+    SET
+      status = 'running',
+      started_at = NOW(),
+      claimed_by_worker_at = NOW(), -- Set the claimed_by_worker_at timestamp
+      error_message = NULL -- Clear any info messages when worker claims the job
+    FROM potential_job pj
+    WHERE sr_update.id = pj.id AND sr_update.status IN ('pending', 'initializing') -- Ensure it's still pending or initializing before update
+    RETURNING sr_update.id -- Return the ID of the job that was actually updated
+  )
+  SELECT uj.id INTO claimed_job_id_val FROM updated_job uj;
+
+  IF claimed_job_id_val IS NULL THEN
+    -- No job was found and claimed (either no pending jobs, or all were locked by other transactions).
+    RETURN; -- Exits the function, returning an empty set.
+  END IF;
+
+  -- If a job was successfully claimed and updated,
+  -- return its full details along with the competitor_id from the related scraper.
+  RETURN QUERY
+  SELECT
+    sr.id,
+    sr.created_at,
+    sr.scraper_id,
+    sr.user_id,
+    CAST(sr.status AS TEXT), -- Cast to TEXT if status is an ENUM, to match RETURNS TABLE
+    CAST(sr.scraper_type AS TEXT), -- Cast to TEXT if scraper_type is an ENUM
+    sr.started_at,
+    sr.completed_at,
+    sr.error_message,
+    sr.error_details,
+    sr.product_count,
+    sr.is_test_run,
+    s.competitor_id AS fetched_competitor_id -- Alias to match the RETURNS TABLE definition
+  FROM scraper_runs sr
+  JOIN scrapers s ON sr.scraper_id = s.id
+  WHERE sr.id = claimed_job_id_val; -- Select the specific job that was claimed
+END;
+$$;
+
+
+--
+-- Name: FUNCTION claim_next_scraper_job(worker_type_filter text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.claim_next_scraper_job(worker_type_filter text) IS 'Atomically claims the next pending or initializing scraper job for a given worker type. It selects, locks, updates the job status, and then returns the claimed job''s details including the competitor_id from the associated scraper. Uses FOR UPDATE SKIP LOCKED for improved concurrency.';
+
+
+--
+-- Name: cleanup_old_debug_logs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_old_debug_logs() RETURNS integer
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    deleted_count integer;
+BEGIN
+    DELETE FROM public.debug_logs
+    WHERE created_at < now() - interval '7 days';
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$;
+
+
+--
+-- Name: cleanup_old_scraper_runs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_old_scraper_runs() RETURNS integer
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$ DECLARE deleted_count integer; BEGIN DELETE FROM public.scraper_runs WHERE created_at < now() - interval '30 days' AND status IN ('completed', 'failed'); GET DIAGNOSTICS deleted_count = ROW_COUNT; INSERT INTO public.debug_logs (message, created_at) VALUES ('Cleaned up ' || deleted_count || ' old scraper runs', now()); RETURN deleted_count; END; $$;
+
+
+--
+-- Name: cleanup_rate_limit_logs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_rate_limit_logs() RETURNS void
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  DELETE FROM rate_limit_log 
+  WHERE created_at < NOW() - INTERVAL '24 hours';
+END;
+$$;
+
+
+--
+-- Name: cleanup_stalled_integration_runs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_stalled_integration_runs() RETURNS integer
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    timeout_record record;
+    timeout_count integer := 0;
+BEGIN
+    -- Find stalled integration runs (running for more than 1 hour without progress)
+    FOR timeout_record IN
+        SELECT ir.id, ir.integration_id, ir.started_at, ir.last_progress_update
+        FROM public.integration_runs ir
+        WHERE ir.status IN ('running', 'processing')
+          AND (
+            (ir.last_progress_update IS NOT NULL AND ir.last_progress_update < now() - interval '1 hour') OR
+            (ir.last_progress_update IS NULL AND ir.started_at IS NOT NULL AND ir.started_at < now() - interval '1 hour')
+          )
+    LOOP
+        -- Update the stalled run to failed status
+        UPDATE public.integration_runs
+        SET 
+            status = 'failed',
+            completed_at = now(),
+            error_message = 'Integration run stalled - no progress update for over 1 hour (likely due to worker restart)'
+        WHERE id = timeout_record.id;
+        
+        -- Keep the integration status as active (don't set to error) so it can be rescheduled
+        UPDATE public.integrations
+        SET 
+            last_sync_status = 'failed',
+            last_sync_at = now(),
+            updated_at = now()
+            -- Note: NOT setting status = 'error', keeping it as 'active'
+        WHERE id = timeout_record.integration_id;
+        
+        timeout_count := timeout_count + 1;
+        
+        -- Log the timeout
+        INSERT INTO public.debug_logs (message, created_at)
+        VALUES (
+            'Integration run timed out - run_id: ' || timeout_record.id || 
+            ', integration_id: ' || timeout_record.integration_id || 
+            ', started_at: ' || timeout_record.started_at ||
+            ', last_progress: ' || COALESCE(timeout_record.last_progress_update::text, 'NULL'),
+            now()
+        );
+    END LOOP;
+    
+    RETURN timeout_count;
+END;
+$$;
+
+
+--
+-- Name: cleanup_temp_competitors_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_temp_competitors_scraped_data() RETURNS void
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  -- Remove all records in temp_competitors_scraped_data that are older than 30 days
+  DELETE FROM temp_competitors_scraped_data
+  WHERE scraped_at < NOW() - INTERVAL '30 days';
+
+  -- Keep only the most recent record for each product/competitor combination
+  -- for records that are between 3 and 30 days old
+  DELETE FROM temp_competitors_scraped_data sp1
+  WHERE scraped_at < NOW() - INTERVAL '3 days'
+    AND scraped_at > NOW() - INTERVAL '30 days'
+    AND EXISTS (
+      SELECT 1
+      FROM temp_competitors_scraped_data sp2
+      WHERE sp2.product_id = sp1.product_id
+        AND sp2.competitor_id = sp1.competitor_id
+        AND sp2.scraped_at > sp1.scraped_at
+    );
+
+  -- Remove products without product_id that are older than 1 day
+  -- (these couldn't be matched and have insufficient data)
+  DELETE FROM temp_competitors_scraped_data
+  WHERE product_id IS NULL
+    AND scraped_at < NOW() - INTERVAL '1 day';
+END;
+$$;
+
+
+--
+-- Name: count_distinct_competitors_for_brand(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.count_distinct_competitors_for_brand(p_user_id uuid, p_brand_id uuid) RETURNS integer
+    LANGUAGE sql
+    SET search_path TO 'public'
+    AS $$
+  SELECT COUNT(DISTINCT pc.competitor_id)
+  FROM price_changes_competitors pc
+  JOIN products p ON pc.product_id = p.id
+  WHERE p.user_id = p_user_id
+    AND p.brand_id = p_brand_id;
+$$;
+
+
+--
+-- Name: create_profile_for_user(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_profile_for_user() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  -- Create a user profile when a user is created in auth.users
+  BEGIN
+    INSERT INTO user_profiles (id, name)
+    VALUES (NEW.id, NEW.raw_user_meta_data->>'name');
+  EXCEPTION WHEN OTHERS THEN
+    -- Log the error but don't fail the transaction
+    RAISE WARNING 'Error creating user profile for %: %', NEW.id, SQLERRM;
+  END;
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION create_profile_for_user(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.create_profile_for_user() IS 'Creates a user profile when a user is created in auth.users. Includes error handling to prevent failures during user creation.';
+
+
+--
+-- Name: create_scheduled_integration_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_scheduled_integration_jobs() RETURNS TABLE(jobs_created integer, message text)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    integration_record record;
+    job_count integer := 0;
+    new_job_id uuid;
+    current_timestamp timestamp with time zone := now();
+
+    -- Concurrency limits for integration worker
+    max_integration_jobs integer := 1; -- 1 ts-util-worker
+    current_integration_jobs integer;
+    max_jobs_per_run integer := 1; -- Maximum integration jobs to create in one run
+BEGIN
+    -- Check current integration job count (include 'processing' status)
+    SELECT COUNT(*) INTO current_integration_jobs
+    FROM public.integration_runs ir
+    WHERE ir.status IN ('pending', 'initializing', 'running', 'processing');
+
+    -- Log current state
+    RAISE NOTICE 'Integration job scheduler: Current jobs: %/%, Max per run: %',
+        current_integration_jobs, max_integration_jobs, max_jobs_per_run;
+
+    -- Exit early if we're at capacity
+    IF current_integration_jobs >= max_integration_jobs THEN
+        RETURN QUERY SELECT 0, format('Integration worker at capacity (%s/%s)',
+            current_integration_jobs, max_integration_jobs);
+        RETURN;
+    END IF;
+
+    -- Process integrations that are due to run based on their stored next_run_time
+    FOR integration_record IN
+        SELECT
+            i.id,
+            i.user_id,
+            i.name,
+            i.platform,
+            i.sync_frequency,
+            i.last_sync_at,
+            i.next_run_time
+        FROM public.integrations i
+        WHERE i.status = 'active'
+          AND i.is_active = true  -- Only run active integrations
+          AND i.sync_frequency IS NOT NULL
+          AND i.next_run_time IS NOT NULL
+          -- Only consider integrations that are due to run
+          AND i.next_run_time <= current_timestamp
+        ORDER BY
+          -- Prioritize integrations that are most overdue
+          i.next_run_time ASC
+        LIMIT 10 -- Only check the 10 most overdue integrations
+    LOOP
+        -- Stop if we've reached the per-run job limit or worker capacity
+        IF job_count >= max_jobs_per_run OR current_integration_jobs >= max_integration_jobs THEN
+            EXIT;
+        END IF;
+
+        -- Check if there's already a pending/running job for this integration
+        IF NOT EXISTS (
+            SELECT 1 FROM public.integration_runs ir
+            WHERE ir.integration_id = integration_record.id
+              AND ir.status IN ('pending', 'initializing', 'running', 'processing')
+        ) THEN
+            -- Create a new integration run job
+            INSERT INTO public.integration_runs (
+                integration_id,
+                user_id,
+                status,
+                created_at
+            ) VALUES (
+                integration_record.id,
+                integration_record.user_id,
+                'pending',
+                current_timestamp
+            ) RETURNING id INTO new_job_id;
+
+            job_count := job_count + 1;
+            current_integration_jobs := current_integration_jobs + 1;
+
+            -- Log the job creation
+            RAISE NOTICE 'Created scheduled job % for integration % (%) - Due at: %',
+                new_job_id, integration_record.name, integration_record.platform,
+                integration_record.next_run_time;
+        END IF;
+    END LOOP;
+
+    RETURN QUERY SELECT job_count, format('Created %s scheduled integration jobs (%s/%s)',
+        job_count, current_integration_jobs, max_integration_jobs);
+END;
+$$;
+
+
+--
+-- Name: create_scheduled_scraper_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_scheduled_scraper_jobs() RETURNS TABLE(jobs_created integer, message text)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    scraper_record record;
+    job_count integer := 0;
+    new_job_id uuid;
+    current_timestamp timestamp with time zone := now();
+
+    -- Concurrency limits for scraper workers
+    max_python_jobs integer := 1;
+    max_typescript_jobs integer := 1;
+    current_python_jobs integer;
+    current_typescript_jobs integer;
+    max_jobs_per_run integer := 2;
+BEGIN
+    -- Check current job counts by type
+    SELECT COUNT(*) INTO current_python_jobs
+    FROM public.scraper_runs sr
+    WHERE sr.status IN ('pending', 'initializing', 'running')
+      AND sr.scraper_type = 'python';
+
+    SELECT COUNT(*) INTO current_typescript_jobs
+    FROM public.scraper_runs sr
+    WHERE sr.status IN ('pending', 'initializing', 'running')
+      AND sr.scraper_type = 'typescript';
+
+    -- Log current status
+    RAISE NOTICE 'Current jobs - Python: %/%, TypeScript: %/%, Max per run: %',
+        current_python_jobs, max_python_jobs, current_typescript_jobs, max_typescript_jobs, max_jobs_per_run;
+
+    -- If all workers are busy, don't create any jobs
+    IF current_python_jobs >= max_python_jobs AND current_typescript_jobs >= max_typescript_jobs THEN
+        RETURN QUERY SELECT 0, 'All workers busy - Python: ' || current_python_jobs || '/' || max_python_jobs || ', TypeScript: ' || current_typescript_jobs || '/' || max_typescript_jobs;
+        RETURN;
+    END IF;
+
+    -- Process scrapers that are due to run based on their stored next_run_time
+    FOR scraper_record IN
+        SELECT
+            s.id,
+            s.user_id,
+            s.name,
+            s.scraper_type,
+            s.schedule,
+            s.last_run,
+            s.next_run_time,
+            s.competitor_id
+        FROM public.scrapers s
+        WHERE s.is_active = true
+          AND s.schedule IS NOT NULL
+          AND s.next_run_time IS NOT NULL
+          -- Only consider scrapers that are due to run
+          AND s.next_run_time <= current_timestamp
+        ORDER BY
+          -- Prioritize scrapers that are most overdue
+          s.next_run_time ASC
+        LIMIT 20 -- Only check the 20 most overdue scrapers
+    LOOP
+        -- Stop if we've reached the per-run job limit
+        IF job_count >= max_jobs_per_run THEN
+            RAISE NOTICE 'Reached max jobs per run limit (%)', max_jobs_per_run;
+            EXIT;
+        END IF;
+
+        -- Check worker capacity by type
+        IF scraper_record.scraper_type = 'python' AND current_python_jobs >= max_python_jobs THEN
+            CONTINUE;
+        END IF;
+
+        IF scraper_record.scraper_type = 'typescript' AND current_typescript_jobs >= max_typescript_jobs THEN
+            CONTINUE;
+        END IF;
+
+        -- Check if there's already a pending, running job for this scraper
+        IF NOT EXISTS (
+            SELECT 1 FROM public.scraper_runs sr
+            WHERE sr.scraper_id = scraper_record.id
+              AND sr.status IN ('pending', 'initializing', 'running')
+        ) THEN
+            -- Create new scraper run job
+            INSERT INTO public.scraper_runs (
+                id,
+                scraper_id,
+                user_id,
+                status,
+                started_at,
+                is_test_run,
+                scraper_type,
+                created_at
+            ) VALUES (
+                gen_random_uuid(),
+                scraper_record.id,
+                scraper_record.user_id,
+                'pending',
+                current_timestamp,
+                false,
+                scraper_record.scraper_type,
+                current_timestamp
+            ) RETURNING id INTO new_job_id;
+
+            job_count := job_count + 1;
+
+            -- Update worker counts
+            IF scraper_record.scraper_type = 'python' THEN
+                current_python_jobs := current_python_jobs + 1;
+            ELSIF scraper_record.scraper_type = 'typescript' THEN
+                current_typescript_jobs := current_typescript_jobs + 1;
+            END IF;
+
+            -- Log the job creation
+            RAISE NOTICE 'Created scheduled job % for scraper % (%) - Due at: %',
+                new_job_id, scraper_record.name, scraper_record.scraper_type,
+                scraper_record.next_run_time;
+        END IF;
+    END LOOP;
+
+    RETURN QUERY SELECT job_count, 'Created ' || job_count || ' scheduled scraper jobs (Python: ' || current_python_jobs || '/' || max_python_jobs || ', TypeScript: ' || current_typescript_jobs || '/' || max_typescript_jobs || ')';
+END;
+$$;
+
+
+--
+-- Name: create_user_for_nextauth(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_user_for_nextauth() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  -- Create a user in the next_auth schema when a user is created in auth.users
+  INSERT INTO next_auth.users (id, name, email, "emailVerified", image)
+  VALUES (
+    NEW.id,
+    NEW.raw_user_meta_data->>'name',
+    NEW.email,
+    NOW(),
+    NEW.raw_user_meta_data->>'avatar_url'
+  );
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION create_user_for_nextauth(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.create_user_for_nextauth() IS 'Creates a user in the next_auth schema when a user is created in auth.users. Uses the correct column name "emailVerified" (camelCase) instead of "email_verified" (snake_case).';
+
+
+--
+-- Name: create_user_for_nextauth(uuid, text, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_user_for_nextauth(user_id uuid, email text, name text) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  -- Insert the user into auth.users if it doesn't exist
+  INSERT INTO auth.users (
+    id,
+    email,
+    raw_user_meta_data,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    user_id,
+    email,
+    jsonb_build_object('name', name),
+    NOW(),
+    NOW()
+  )
+  ON CONFLICT (id) DO NOTHING;
+  
+  -- The trigger create_profile_for_user will automatically create a profile
+END;
+$$;
+
+
+--
+-- Name: create_utility_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_utility_jobs() RETURNS TABLE(jobs_created integer, message text)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$ DECLARE job_count integer := 0; last_cleanup_check timestamp with time zone; BEGIN SELECT COALESCE(MAX(dl.created_at), '1970-01-01'::timestamp with time zone) INTO last_cleanup_check FROM public.debug_logs dl WHERE dl.message LIKE '%cleanup_utility_job%' AND dl.created_at > now() - interval '1 day'; IF last_cleanup_check < now() - interval '23 hours' THEN INSERT INTO public.debug_logs (message, created_at) VALUES ('cleanup_utility_job - daily_cleanup at ' || now(), now()); job_count := job_count + 1; PERFORM cleanup_old_scraper_runs(); PERFORM cleanup_old_debug_logs(); PERFORM process_scraper_timeouts(); RAISE NOTICE 'Created utility cleanup job at %', now(); END IF; RETURN QUERY SELECT job_count, 'Created ' || job_count || ' utility jobs'; END; $$;
+
+
+--
+-- Name: debug_create_scheduled_scraper_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.debug_create_scheduled_scraper_jobs() RETURNS TABLE(scraper_id uuid, scraper_name text, should_run boolean, has_pending_job boolean, job_created boolean)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    scraper_record record;
+    current_time timestamp with time zone := now();
+    should_run_flag boolean;
+    has_pending_job_flag boolean;
+    job_created_flag boolean;
+BEGIN
+    -- Process all active scrapers
+    FOR scraper_record IN
+        SELECT
+            s.id,
+            s.user_id,
+            s.name,
+            s.scraper_type,
+            s.schedule,
+            s.last_run,
+            s.competitor_id
+        FROM public.scrapers s
+        WHERE s.is_active = true
+          AND s.schedule IS NOT NULL
+    LOOP
+        -- Check if scraper should run
+        should_run_flag := (scraper_record.last_run IS NULL OR scraper_record.last_run < current_time - interval '23 hours');
+        
+        -- Check if there's already a pending job
+        SELECT EXISTS (
+            SELECT 1 FROM public.scraper_runs sr
+            WHERE sr.scraper_id = scraper_record.id
+              AND sr.status IN ('pending', 'initializing', 'running')
+        ) INTO has_pending_job_flag;
+        
+        job_created_flag := false;
+        
+        IF should_run_flag AND NOT has_pending_job_flag THEN
+            job_created_flag := true;
+        END IF;
+        
+        RETURN QUERY SELECT scraper_record.id, scraper_record.name, should_run_flag, has_pending_job_flag, job_created_flag;
+    END LOOP;
+END;
+$$;
+
+
+--
+-- Name: delete_user_product_data(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.delete_user_product_data(target_user_id uuid) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+  -- Delete custom field values for products owned by the user
+  BEGIN
+    DELETE FROM product_custom_field_values 
+    WHERE product_id IN (
+      SELECT id FROM products WHERE user_id = target_user_id
+    );
+  EXCEPTION
+    WHEN undefined_table THEN
+      RAISE NOTICE 'product_custom_field_values table does not exist, skipping';
+  END;
+  
+  -- Delete temp competitors data
+  BEGIN
+    DELETE FROM temp_competitors_scraped_data 
+    WHERE user_id = target_user_id;
+  EXCEPTION
+    WHEN undefined_table THEN
+      RAISE NOTICE 'temp_competitors_scraped_data table does not exist, skipping';
+  END;
+  
+  -- Delete dismissed duplicates
+  BEGIN
+    DELETE FROM products_dismissed_duplicates 
+    WHERE user_id = target_user_id;
+  EXCEPTION
+    WHEN undefined_table THEN
+      RAISE NOTICE 'products_dismissed_duplicates table does not exist, skipping';
+  END;
+END;
+$$;
+
+
+--
+-- Name: detect_and_process_integration_conflicts(uuid, uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.detect_and_process_integration_conflicts(p_user_id uuid, p_integration_run_id uuid, p_batch_ids uuid[]) RETURNS TABLE(processed_count integer, conflict_count integer)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    record_data RECORD;
+    existing_product RECORD;
+    conflict_reason TEXT;
+    price_diff_percent NUMERIC;
+    processed_count INTEGER := 0;
+    conflict_count INTEGER := 0;
+    ean_count_in_run INTEGER;
+BEGIN
+    -- Process each record in the batch
+    FOR record_data IN
+        SELECT t.id, t.user_id, t.ean, t.name, t.sku, t.brand, t.our_retail_price, t.our_url
+        FROM temp_integrations_scraped_data t
+        WHERE t.user_id = p_user_id 
+          AND t.integration_run_id = p_integration_run_id
+          AND t.status = 'integration_pending'
+          AND (p_batch_ids IS NULL OR t.id = ANY(p_batch_ids))
+    LOOP
+        processed_count := processed_count + 1;
+        conflict_reason := NULL;
+        price_diff_percent := NULL;
+        
+        -- Check for duplicate EANs in the same integration run
+        IF record_data.ean IS NOT NULL AND record_data.ean != '' THEN
+            SELECT COUNT(*) INTO ean_count_in_run
+            FROM temp_integrations_scraped_data t2 
+            WHERE t2.ean = record_data.ean 
+              AND t2.user_id = p_user_id 
+              AND t2.integration_run_id = p_integration_run_id;
+            
+            IF ean_count_in_run > 1 THEN
+                conflict_reason := 'multiple_ean_in_batch';
+            END IF;
+        END IF;
+        
+        -- Check for conflicts with existing products
+        IF record_data.ean IS NOT NULL AND record_data.ean != '' THEN
+            SELECT p.id, p.name, p.sku, p.brand, p.our_retail_price
+            INTO existing_product
+            FROM products p
+            WHERE p.user_id = p_user_id AND p.ean = record_data.ean
+            LIMIT 1;
+            
+            IF existing_product.id IS NOT NULL THEN
+                -- Check for large price difference (>50%)
+                IF existing_product.our_retail_price IS NOT NULL AND record_data.our_retail_price IS NOT NULL THEN
+                    price_diff_percent := ABS(record_data.our_retail_price - existing_product.our_retail_price) / existing_product.our_retail_price * 100;
+                    IF price_diff_percent > 50 AND conflict_reason IS NULL THEN
+                        conflict_reason := 'large_price_difference';
+                    END IF;
+                END IF;
+                
+                -- Check for name mismatch (very different names)
+                IF conflict_reason IS NULL AND 
+                   similarity(LOWER(record_data.name), LOWER(existing_product.name)) < 0.3 THEN
+                    conflict_reason := 'name_mismatch';
+                END IF;
+            END IF;
+        END IF;
+        
+        -- If conflict detected, create review and mark as conflict_review
+        IF conflict_reason IS NOT NULL THEN
+            INSERT INTO product_match_reviews (
+                user_id, ean, existing_product_id, existing_product_name, 
+                existing_product_sku, existing_product_brand, existing_product_price,
+                new_product_name, new_product_sku, new_product_brand, new_product_price,
+                new_product_data, source_table, source_record_id, 
+                conflict_reason, price_difference_percent
+            ) VALUES (
+                p_user_id, record_data.ean, existing_product.id, existing_product.name,
+                existing_product.sku, existing_product.brand, existing_product.our_retail_price,
+                record_data.name, record_data.sku, record_data.brand, record_data.our_retail_price,
+                row_to_json(record_data), 'temp_integrations_scraped_data', record_data.id,
+                conflict_reason, price_diff_percent
+            );
+            
+            -- Mark as conflict_review
+            UPDATE temp_integrations_scraped_data 
+            SET status = 'conflict_review' 
+            WHERE id = record_data.id;
+            
+            conflict_count := conflict_count + 1;
+        ELSE
+            -- No conflict, mark as pending for processing
+            UPDATE temp_integrations_scraped_data 
+            SET status = 'pending' 
+            WHERE id = record_data.id;
+        END IF;
+    END LOOP;
+    
+    RETURN QUERY SELECT processed_count, conflict_count;
+END;
+$$;
+
+
+--
+-- Name: detect_custom_field_type(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.detect_custom_field_type(field_value text) RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Always return text to avoid type detection issues
+    -- This is simpler and more reliable than trying to detect types
+    RETURN 'text';
+END;
+$$;
+
+
+--
+-- Name: detect_ean_conflicts_and_create_reviews(uuid, text, uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.detect_ean_conflicts_and_create_reviews(p_user_id uuid, p_source_table text, p_batch_ids uuid[] DEFAULT NULL::uuid[]) RETURNS TABLE(conflicts_count integer, reviews_count integer)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    conflict_record RECORD;
+    existing_product RECORD;
+    price_diff_percent NUMERIC;
+    conflict_reason TEXT;
+    reviews_count INTEGER := 0;
+    conflicts_count INTEGER := 0;
+BEGIN
+    -- Detect conflicts in temp_competitors_scraped_data
+    IF p_source_table = 'temp_competitors_scraped_data' THEN
+        FOR conflict_record IN
+            SELECT t.id, t.user_id, t.ean, t.name, t.sku, t.brand, t.competitor_price,
+                   -- Check for multiple EANs in same batch
+                   (SELECT COUNT(*) FROM temp_competitors_scraped_data t2 
+                    WHERE t2.ean = t.ean AND t2.user_id = t.user_id AND t2.ean IS NOT NULL 
+                    AND (p_batch_ids IS NULL OR t2.id = ANY(p_batch_ids))) as ean_count_in_batch
+            FROM temp_competitors_scraped_data t
+            WHERE t.user_id = p_user_id 
+              AND t.ean IS NOT NULL 
+              AND t.ean != ''
+              AND t.processed = false
+              AND (p_batch_ids IS NULL OR t.id = ANY(p_batch_ids))
+        LOOP
+            conflicts_count := conflicts_count + 1;
+            
+            -- Find existing product with same EAN
+            SELECT p.id, p.name, p.sku, p.brand, p.our_retail_price
+            INTO existing_product
+            FROM products p
+            WHERE p.user_id = p_user_id AND p.ean = conflict_record.ean
+            LIMIT 1;
+            
+            IF existing_product.id IS NOT NULL THEN
+                conflict_reason := NULL;
+                price_diff_percent := NULL;
+                
+                -- Check for multiple EANs in batch
+                IF conflict_record.ean_count_in_batch > 1 THEN
+                    conflict_reason := 'multiple_ean_in_batch';
+                END IF;
+                
+                -- Check for large price difference (>50%)
+                IF existing_product.our_retail_price IS NOT NULL AND conflict_record.competitor_price IS NOT NULL THEN
+                    price_diff_percent := ABS(conflict_record.competitor_price - existing_product.our_retail_price) / existing_product.our_retail_price * 100;
+                    IF price_diff_percent > 50 AND conflict_reason IS NULL THEN
+                        conflict_reason := 'large_price_difference';
+                    END IF;
+                END IF;
+                
+                -- Check for name mismatch (very different names)
+                IF conflict_reason IS NULL AND 
+                   similarity(LOWER(conflict_record.name), LOWER(existing_product.name)) < 0.3 THEN
+                    conflict_reason := 'name_mismatch';
+                END IF;
+                
+                -- Create review record if conflict detected
+                IF conflict_reason IS NOT NULL THEN
+                    INSERT INTO product_match_reviews (
+                        user_id, ean, existing_product_id, existing_product_name, 
+                        existing_product_sku, existing_product_brand, existing_product_price,
+                        new_product_name, new_product_sku, new_product_brand, new_product_price,
+                        new_product_data, source_table, source_record_id, 
+                        conflict_reason, price_difference_percent
+                    ) VALUES (
+                        p_user_id, conflict_record.ean, existing_product.id, existing_product.name,
+                        existing_product.sku, existing_product.brand, existing_product.our_retail_price,
+                        conflict_record.name, conflict_record.sku, conflict_record.brand, conflict_record.competitor_price,
+                        row_to_json(conflict_record), p_source_table, conflict_record.id,
+                        conflict_reason, price_diff_percent
+                    );
+                    
+                    reviews_count := reviews_count + 1;
+                    
+                    -- Mark temp record as processed to prevent auto-matching
+                    UPDATE temp_competitors_scraped_data 
+                    SET processed = true 
+                    WHERE id = conflict_record.id;
+                END IF;
+            END IF;
+        END LOOP;
+    END IF;
+    
+    -- Similar logic for temp_suppliers_scraped_data
+    IF p_source_table = 'temp_suppliers_scraped_data' THEN
+        FOR conflict_record IN
+            SELECT t.id, t.user_id, t.ean, t.name, t.sku, t.brand, t.supplier_price,
+                   (SELECT COUNT(*) FROM temp_suppliers_scraped_data t2 
+                    WHERE t2.ean = t.ean AND t2.user_id = t.user_id AND t2.ean IS NOT NULL 
+                    AND (p_batch_ids IS NULL OR t2.id = ANY(p_batch_ids))) as ean_count_in_batch
+            FROM temp_suppliers_scraped_data t
+            WHERE t.user_id = p_user_id 
+              AND t.ean IS NOT NULL 
+              AND t.ean != ''
+              AND t.processed = false
+              AND (p_batch_ids IS NULL OR t.id = ANY(p_batch_ids))
+        LOOP
+            conflicts_count := conflicts_count + 1;
+            
+            SELECT p.id, p.name, p.sku, p.brand, p.our_wholesale_price
+            INTO existing_product
+            FROM products p
+            WHERE p.user_id = p_user_id AND p.ean = conflict_record.ean
+            LIMIT 1;
+            
+            IF existing_product.id IS NOT NULL THEN
+                conflict_reason := NULL;
+                price_diff_percent := NULL;
+                
+                IF conflict_record.ean_count_in_batch > 1 THEN
+                    conflict_reason := 'multiple_ean_in_batch';
+                END IF;
+                
+                IF existing_product.our_wholesale_price IS NOT NULL AND conflict_record.supplier_price IS NOT NULL THEN
+                    price_diff_percent := ABS(conflict_record.supplier_price - existing_product.our_wholesale_price) / existing_product.our_wholesale_price * 100;
+                    IF price_diff_percent > 50 AND conflict_reason IS NULL THEN
+                        conflict_reason := 'large_price_difference';
+                    END IF;
+                END IF;
+                
+                IF conflict_reason IS NULL AND 
+                   similarity(LOWER(conflict_record.name), LOWER(existing_product.name)) < 0.3 THEN
+                    conflict_reason := 'name_mismatch';
+                END IF;
+                
+                IF conflict_reason IS NOT NULL THEN
+                    INSERT INTO product_match_reviews (
+                        user_id, ean, existing_product_id, existing_product_name, 
+                        existing_product_sku, existing_product_brand, existing_product_price,
+                        new_product_name, new_product_sku, new_product_brand, new_product_price,
+                        new_product_data, source_table, source_record_id, 
+                        conflict_reason, price_difference_percent
+                    ) VALUES (
+                        p_user_id, conflict_record.ean, existing_product.id, existing_product.name,
+                        existing_product.sku, existing_product.brand, existing_product.our_wholesale_price,
+                        conflict_record.name, conflict_record.sku, conflict_record.brand, conflict_record.supplier_price,
+                        row_to_json(conflict_record), p_source_table, conflict_record.id,
+                        conflict_reason, price_diff_percent
+                    );
+                    
+                    reviews_count := reviews_count + 1;
+                    
+                    UPDATE temp_suppliers_scraped_data 
+                    SET processed = true 
+                    WHERE id = conflict_record.id;
+                END IF;
+            END IF;
+        END LOOP;
+    END IF;
+    
+    -- Logic for temp_integrations_scraped_data - FIXED to include integration_pending status
+    IF p_source_table = 'temp_integrations_scraped_data' THEN
+        FOR conflict_record IN
+            SELECT t.id, t.user_id, t.ean, t.name, t.sku, t.brand, t.our_retail_price,
+                   (SELECT COUNT(*) FROM temp_integrations_scraped_data t2 
+                    WHERE t2.ean = t.ean AND t2.user_id = t.user_id AND t2.ean IS NOT NULL 
+                    AND (p_batch_ids IS NULL OR t2.id = ANY(p_batch_ids))) as ean_count_in_batch
+            FROM temp_integrations_scraped_data t
+            WHERE t.user_id = p_user_id 
+              AND t.ean IS NOT NULL 
+              AND t.ean != ''
+              AND (t.status = 'pending' OR t.status = 'conflict_check' OR t.status = 'integration_pending')
+              AND (p_batch_ids IS NULL OR t.id = ANY(p_batch_ids))
+        LOOP
+            conflicts_count := conflicts_count + 1;
+            
+            SELECT p.id, p.name, p.sku, p.brand, p.our_retail_price
+            INTO existing_product
+            FROM products p
+            WHERE p.user_id = p_user_id AND p.ean = conflict_record.ean
+            LIMIT 1;
+            
+            -- ALWAYS check for multiple EANs in batch, even if no existing product
+            conflict_reason := NULL;
+            price_diff_percent := NULL;
+            
+            IF conflict_record.ean_count_in_batch > 1 THEN
+                conflict_reason := 'multiple_ean_in_batch';
+            END IF;
+            
+            -- Only check price/name conflicts if there's an existing product
+            IF existing_product.id IS NOT NULL THEN
+                IF existing_product.our_retail_price IS NOT NULL AND conflict_record.our_retail_price IS NOT NULL THEN
+                    price_diff_percent := ABS(conflict_record.our_retail_price - existing_product.our_retail_price) / existing_product.our_retail_price * 100;
+                    IF price_diff_percent > 50 AND conflict_reason IS NULL THEN
+                        conflict_reason := 'large_price_difference';
+                    END IF;
+                END IF;
+                
+                IF conflict_reason IS NULL AND 
+                   similarity(LOWER(conflict_record.name), LOWER(existing_product.name)) < 0.3 THEN
+                    conflict_reason := 'name_mismatch';
+                END IF;
+            END IF;
+            
+            IF conflict_reason IS NOT NULL THEN
+                INSERT INTO product_match_reviews (
+                    user_id, ean, existing_product_id, existing_product_name, 
+                    existing_product_sku, existing_product_brand, existing_product_price,
+                    new_product_name, new_product_sku, new_product_brand, new_product_price,
+                    new_product_data, source_table, source_record_id, 
+                    conflict_reason, price_difference_percent
+                ) VALUES (
+                    p_user_id, conflict_record.ean, existing_product.id, existing_product.name,
+                    existing_product.sku, existing_product.brand, existing_product.our_retail_price,
+                    conflict_record.name, conflict_record.sku, conflict_record.brand, conflict_record.our_retail_price,
+                    row_to_json(conflict_record), p_source_table, conflict_record.id,
+                    conflict_reason, price_diff_percent
+                );
+                
+                reviews_count := reviews_count + 1;
+                
+                UPDATE temp_integrations_scraped_data 
+                SET status = 'conflict_review' 
+                WHERE id = conflict_record.id;
+            END IF;
+        END LOOP;
+    END IF;
+    
+    RETURN QUERY SELECT conflicts_count, reviews_count;
+END;
+$$;
+
+
+--
+-- Name: dismiss_product_duplicates(uuid, uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.dismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid) RETURNS jsonb
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    ordered_id_1 UUID;
+    ordered_id_2 UUID;
+    dismissal_key TEXT;
+BEGIN
+    -- Ensure consistent ordering (smaller UUID first)
+    IF p_product_id_1 < p_product_id_2 THEN
+        ordered_id_1 := p_product_id_1;
+        ordered_id_2 := p_product_id_2;
+    ELSE
+        ordered_id_1 := p_product_id_2;
+        ordered_id_2 := p_product_id_1;
+    END IF;
+    
+    -- Create dismissal key
+    dismissal_key := ordered_id_1::text || '_' || ordered_id_2::text;
+    
+    -- Insert dismissal record (ignore if already exists)
+    INSERT INTO products_dismissed_duplicates (
+        user_id, product_id_1, product_id_2, dismissal_key
+    ) VALUES (
+        p_user_id, ordered_id_1, ordered_id_2, dismissal_key
+    )
+    ON CONFLICT (user_id, product_id_1, product_id_2) DO NOTHING;
+    
+    RETURN jsonb_build_object(
+        'success', true,
+        'message', 'Product duplicate dismissed successfully',
+        'product_id_1', ordered_id_1,
+        'product_id_2', ordered_id_2,
+        'dismissal_key', dismissal_key
+    );
+    
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+        'success', false,
+        'message', 'Error dismissing product duplicate: ' || SQLERRM,
+        'product_id_1', p_product_id_1,
+        'product_id_2', p_product_id_2
+    );
+END;
+$$;
+
+
+--
+-- Name: FUNCTION dismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.dismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid) IS 'Dismisses product duplicates to prevent them from appearing in future duplicate detection';
+
+
+--
+-- Name: ensure_one_active_scraper_per_competitor(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.ensure_one_active_scraper_per_competitor() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  -- Ensure only one active scraper per competitor or supplier
+  IF NEW.is_active THEN
+    IF NEW.competitor_id IS NOT NULL THEN
+      -- Deactivate other scrapers for the same competitor
+      UPDATE scrapers
+      SET is_active = FALSE
+      WHERE competitor_id = NEW.competitor_id AND id <> NEW.id;
+    ELSIF NEW.supplier_id IS NOT NULL THEN
+      -- Deactivate other scrapers for the same supplier
+      UPDATE scrapers
+      SET is_active = FALSE
+      WHERE supplier_id = NEW.supplier_id AND id <> NEW.id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: ensure_user_exists_simple(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.ensure_user_exists_simple(p_user_id uuid) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  -- Call the existing function with minimal data
+  PERFORM create_user_for_nextauth(
+    p_user_id,
+    'user-' || p_user_id || '@example.com', -- Placeholder email
+    'User ' || p_user_id::text -- Placeholder name
+  );
+EXCEPTION WHEN OTHERS THEN
+  -- Log the error but don't fail
+  RAISE WARNING 'Error ensuring user exists: %', SQLERRM;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION ensure_user_exists_simple(p_user_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.ensure_user_exists_simple(p_user_id uuid) IS 'Ensures a user exists in all necessary tables by calling create_user_for_nextauth with minimal data.';
+
+
+--
+-- Name: find_brand_by_name_or_alias(uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.find_brand_by_name_or_alias(p_user_id uuid, p_name text) RETURNS uuid
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+  v_brand_id UUID;
+BEGIN
+  -- First try to find by exact brand name
+  SELECT id INTO v_brand_id
+  FROM brands
+  WHERE user_id = p_user_id AND name = p_name;
+
+  -- If not found, try to find by alias
+  IF v_brand_id IS NULL THEN
+    SELECT brand_id INTO v_brand_id
+    FROM brand_aliases
+    WHERE user_id = p_user_id AND alias_name = p_name;
+  END IF;
+
+  RETURN v_brand_id;
+END;
+$$;
+
+
+--
+-- Name: find_or_create_brand(uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.find_or_create_brand(p_user_id uuid, p_name text) RETURNS uuid
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+  v_brand_id UUID;
+BEGIN
+  -- First try to find by exact brand name
+  SELECT id INTO v_brand_id
+  FROM brands
+  WHERE user_id = p_user_id AND name = p_name;
+
+  -- If not found, try to find by alias
+  IF v_brand_id IS NULL THEN
+    SELECT brand_id INTO v_brand_id
+    FROM brand_aliases
+    WHERE user_id = p_user_id AND alias_name = p_name;
+  END IF;
+
+  -- If still not found, create a new brand
+  IF v_brand_id IS NULL THEN
+    INSERT INTO brands (
+      user_id,
+      name,
+      is_active,
+      needs_review
+    ) VALUES (
+      p_user_id,
+      p_name,
+      TRUE,
+      TRUE
+    )
+    RETURNING id INTO v_brand_id;
+  END IF;
+
+  RETURN v_brand_id;
+END;
+$$;
+
+
+--
+-- Name: find_potential_duplicates(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.find_potential_duplicates(p_user_id uuid) RETURNS TABLE(group_id text, product_id uuid, name text, sku text, ean text, brand text, brand_id uuid, match_reason text)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    settings JSONB;
+    similarity_threshold INTEGER;
+BEGIN
+    -- Get user matching settings
+    settings := get_user_matching_settings(p_user_id);
+    similarity_threshold := COALESCE((settings->>'min_similarity_score')::INTEGER, 80);
+    
+    -- 1. Products with same EAN (if EAN priority enabled)
+    IF (settings->>'ean_priority')::BOOLEAN = true THEN
+        RETURN QUERY
+        SELECT 
+            'ean_' || p.ean AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Same EAN: ' || p.ean AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.ean IS NOT NULL AND 
+            p.ean != '' AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.ean = p.ean AND p2.user_id = p.user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_2 AND p3.ean = p.ean))
+                  OR (pdd.product_id_2 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_1 AND p3.ean = p.ean)))
+            );
+    END IF;
+    
+    -- 2. Products with same brand+SKU (if SKU+brand fallback enabled)
+    IF (settings->>'sku_brand_fallback')::BOOLEAN = true THEN
+        RETURN QUERY
+        SELECT 
+            'brand_sku_' || p.brand_id::text || '_' || p.sku AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Same brand+SKU: ' || COALESCE(p.brand, '') || ' + ' || p.sku AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.brand_id IS NOT NULL AND 
+            p.sku IS NOT NULL AND 
+            p.sku != '' AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.brand_id = p.brand_id AND p2.sku = p.sku 
+                AND p2.user_id = p.user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_2 AND p3.brand_id = p.brand_id AND p3.sku = p.sku))
+                  OR (pdd.product_id_2 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_1 AND p3.brand_id = p.brand_id AND p3.sku = p.sku)))
+            );
+            
+        -- 3. Products with same brand+normalized SKU (fuzzy SKU matching)
+        RETURN QUERY
+        SELECT 
+            'fuzzy_sku_' || p.brand_id::text || '_' || normalize_sku(p.sku) AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Fuzzy brand+SKU: ' || COALESCE(p.brand, '') || ' + ' || p.sku || ' (normalized: ' || normalize_sku(p.sku) || ')' AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.brand_id IS NOT NULL AND 
+            p.sku IS NOT NULL AND 
+            p.sku != '' AND
+            normalize_sku(p.sku) IS NOT NULL AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.brand_id = p.brand_id 
+                AND normalize_sku(p2.sku) = normalize_sku(p.sku)
+                AND p2.sku != p.sku  -- Different original SKU but same normalized
+                AND p2.user_id = p.user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id) OR (pdd.product_id_2 = p.id))
+            );
+    END IF;
+    
+    -- 4. Products with similar names (if fuzzy name matching enabled)
+    IF (settings->>'fuzzy_name_matching')::BOOLEAN = true THEN
+        RETURN QUERY
+        SELECT 
+            'fuzzy_name_' || p.id::text AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Similar name: ' || COALESCE(p.name, '') || ' (similarity: ' || 
+            ROUND((100 - (levenshtein(LOWER(p.name), LOWER(p2.name)) * 100.0 / GREATEST(LENGTH(p.name), LENGTH(p2.name))))::numeric, 1) || '%)' AS match_reason
+        FROM 
+            products p
+        JOIN products p2 ON p2.user_id = p.user_id AND p2.id != p.id
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.name IS NOT NULL AND p.name != '' AND
+            p2.name IS NOT NULL AND p2.name != '' AND
+            -- High similarity threshold for name matching
+            (100 - (levenshtein(LOWER(p.name), LOWER(p2.name)) * 100.0 / GREATEST(LENGTH(p.name), LENGTH(p2.name)))) >= similarity_threshold
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND pdd.product_id_2 = p2.id)
+                  OR (pdd.product_id_1 = p2.id AND pdd.product_id_2 = p.id))
+            );
+    END IF;
+    
+    RETURN;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION find_potential_duplicates(p_user_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.find_potential_duplicates(p_user_id uuid) IS 'Enhanced duplicate detection with user settings support, fuzzy matching, and dismissed duplicates exclusion';
+
+
+--
+-- Name: find_potential_duplicates(uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.find_potential_duplicates(p_user_id uuid, p_limit integer DEFAULT NULL::integer) RETURNS TABLE(group_id text, product_id uuid, name text, sku text, ean text, brand text, brand_id uuid, match_reason text)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    settings JSONB;
+    similarity_threshold INTEGER;
+    result_count INTEGER := 0;
+BEGIN
+    -- Get user matching settings
+    settings := get_user_matching_settings(p_user_id);
+    similarity_threshold := COALESCE((settings->>'min_similarity_score')::INTEGER, 80);
+    
+    -- 1. Products with same EAN (if EAN priority enabled)
+    IF (settings->>'ean_priority')::BOOLEAN = true THEN
+        FOR group_id, product_id, name, sku, ean, brand, brand_id, match_reason IN
+        SELECT 
+            'ean_' || p.ean AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Same EAN: ' || p.ean AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.ean IS NOT NULL AND 
+            p.ean != '' AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.ean = p.ean AND p2.user_id = p_user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_2 AND p3.ean = p.ean))
+                  OR (pdd.product_id_2 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_1 AND p3.ean = p.ean)))
+            )
+        ORDER BY p.ean, p.id
+        LOOP
+            RETURN NEXT;
+            result_count := result_count + 1;
+            IF p_limit IS NOT NULL AND result_count >= p_limit THEN
+                RETURN;
+            END IF;
+        END LOOP;
+    END IF;
+    
+    -- 2. Products with same brand+SKU (if SKU+brand fallback enabled)
+    IF (settings->>'sku_brand_fallback')::BOOLEAN = true AND (p_limit IS NULL OR result_count < p_limit) THEN
+        FOR group_id, product_id, name, sku, ean, brand, brand_id, match_reason IN
+        SELECT 
+            'brand_sku_' || p.brand_id::text || '_' || p.sku AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Same brand+SKU: ' || COALESCE(p.brand, '') || ' + ' || p.sku AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.brand_id IS NOT NULL AND 
+            p.sku IS NOT NULL AND 
+            p.sku != '' AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.brand_id = p.brand_id AND p2.sku = p.sku 
+                AND p2.user_id = p.user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_2 AND p3.brand_id = p.brand_id AND p3.sku = p.sku))
+                  OR (pdd.product_id_2 = p.id AND EXISTS (SELECT 1 FROM products p3 WHERE p3.id = pdd.product_id_1 AND p3.brand_id = p.brand_id AND p3.sku = p.sku)))
+            )
+        ORDER BY p.brand_id, p.sku, p.id
+        LOOP
+            RETURN NEXT;
+            result_count := result_count + 1;
+            IF p_limit IS NOT NULL AND result_count >= p_limit THEN
+                RETURN;
+            END IF;
+        END LOOP;
+            
+        -- 3. Products with same brand+normalized SKU (fuzzy SKU matching)
+        FOR group_id, product_id, name, sku, ean, brand, brand_id, match_reason IN
+        SELECT 
+            'fuzzy_sku_' || p.brand_id::text || '_' || normalize_sku(p.sku) AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Fuzzy brand+SKU: ' || COALESCE(p.brand, '') || ' + ' || p.sku || ' (normalized: ' || normalize_sku(p.sku) || ')' AS match_reason
+        FROM 
+            products p
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.brand_id IS NOT NULL AND 
+            p.sku IS NOT NULL AND 
+            p.sku != '' AND
+            normalize_sku(p.sku) IS NOT NULL AND
+            EXISTS (
+                SELECT 1 FROM products p2 
+                WHERE p2.brand_id = p.brand_id 
+                AND normalize_sku(p2.sku) = normalize_sku(p.sku)
+                AND p2.sku != p.sku  -- Different original SKU but same normalized
+                AND p2.user_id = p_user_id AND p2.id != p.id
+            )
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id) OR (pdd.product_id_2 = p.id))
+            )
+        ORDER BY p.brand_id, normalize_sku(p.sku), p.id
+        LOOP
+            RETURN NEXT;
+            result_count := result_count + 1;
+            IF p_limit IS NOT NULL AND result_count >= p_limit THEN
+                RETURN;
+            END IF;
+        END LOOP;
+    END IF;
+    
+    -- 4. Products with similar names (if fuzzy name matching enabled)
+    IF (settings->>'fuzzy_name_matching')::BOOLEAN = true AND (p_limit IS NULL OR result_count < p_limit) THEN
+        FOR group_id, product_id, name, sku, ean, brand, brand_id, match_reason IN
+        SELECT 
+            'fuzzy_name_' || p.id::text AS group_id,
+            p.id AS product_id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand,
+            p.brand_id,
+            'Similar name: ' || COALESCE(p.name, '') || ' (similarity: ' || 
+            ROUND((100 - (levenshtein(LOWER(p.name), LOWER(p2.name)) * 100.0 / GREATEST(LENGTH(p.name), LENGTH(p2.name))))::numeric, 1) || '%)' AS match_reason
+        FROM 
+            products p
+        JOIN products p2 ON p2.user_id = p.user_id AND p2.id != p.id
+        WHERE 
+            p.user_id = p_user_id AND 
+            p.name IS NOT NULL AND p.name != '' AND
+            p2.name IS NOT NULL AND p2.name != '' AND
+            -- High similarity threshold for name matching
+            (100 - (levenshtein(LOWER(p.name), LOWER(p2.name)) * 100.0 / GREATEST(LENGTH(p.name), LENGTH(p2.name)))) >= similarity_threshold
+            -- Exclude dismissed duplicates
+            AND NOT EXISTS (
+                SELECT 1 FROM products_dismissed_duplicates pdd
+                WHERE pdd.user_id = p_user_id 
+                AND ((pdd.product_id_1 = p.id AND pdd.product_id_2 = p2.id)
+                  OR (pdd.product_id_1 = p2.id AND pdd.product_id_2 = p.id))
+            )
+        ORDER BY p.id, p2.id
+        LOOP
+            RETURN NEXT;
+            result_count := result_count + 1;
+            IF p_limit IS NOT NULL AND result_count >= p_limit THEN
+                RETURN;
+            END IF;
+        END LOOP;
+    END IF;
+    
+    RETURN;
+END;
+$$;
+
+
+--
+-- Name: find_product_by_url(uuid, text, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.find_product_by_url(p_user_id uuid, p_url text, p_source_type text DEFAULT 'any'::text) RETURNS uuid
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_product_id UUID;
+    normalized_url TEXT;
+BEGIN
+    IF p_url IS NULL OR p_url = '' THEN
+        RETURN NULL;
+    END IF;
+    
+    normalized_url := normalize_url(p_url);
+    
+    -- Try exact match first
+    IF p_source_type IN ('our', 'any') THEN
+        SELECT id INTO v_product_id
+        FROM products
+        WHERE user_id = p_user_id
+          AND normalize_url(our_url) = normalized_url
+        LIMIT 1;
+        
+        IF v_product_id IS NOT NULL THEN
+            RETURN v_product_id;
+        END IF;
+    END IF;
+    
+    -- Try competitor price changes
+    IF p_source_type IN ('competitor', 'any') THEN
+        SELECT DISTINCT product_id INTO v_product_id
+        FROM price_changes_competitors
+        WHERE user_id = p_user_id
+          AND (normalize_url(competitor_url) = normalized_url OR normalize_url(our_url) = normalized_url)
+        LIMIT 1;
+        
+        IF v_product_id IS NOT NULL THEN
+            RETURN v_product_id;
+        END IF;
+    END IF;
+    
+    -- Try supplier price changes
+    IF p_source_type IN ('supplier', 'any') THEN
+        SELECT DISTINCT product_id INTO v_product_id
+        FROM price_changes_suppliers
+        WHERE user_id = p_user_id
+          AND (normalize_url(supplier_url) = normalized_url OR normalize_url(our_url) = normalized_url)
+        LIMIT 1;
+        
+        IF v_product_id IS NOT NULL THEN
+            RETURN v_product_id;
+        END IF;
+    END IF;
+    
+    RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: find_product_with_fuzzy_matching(uuid, text, text, text, text, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.find_product_with_fuzzy_matching(p_user_id uuid, p_ean text, p_brand text, p_sku text, p_name text, p_brand_id uuid DEFAULT NULL::uuid) RETURNS uuid
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    settings JSONB;
+    product_id UUID;
+    normalized_sku TEXT;
+    similarity_threshold INTEGER;
+BEGIN
+    -- Get user matching settings
+    settings := get_user_matching_settings(p_user_id);
+    similarity_threshold := COALESCE((settings->>'min_similarity_score')::INTEGER, 80);
+    
+    -- 1. EAN Priority (if enabled and valid EAN provided)
+    IF (settings->>'ean_priority')::BOOLEAN = true AND p_ean IS NOT NULL AND p_ean != '' AND is_valid_ean(p_ean) THEN
+        SELECT id INTO product_id
+        FROM products
+        WHERE user_id = p_user_id AND ean = p_ean
+        ORDER BY created_at ASC
+        LIMIT 1;
+        
+        IF product_id IS NOT NULL THEN
+            RETURN product_id;
+        END IF;
+    END IF;
+    
+    -- 2. SKU + Brand Priority (if enabled)
+    IF (settings->>'sku_brand_priority')::BOOLEAN = true AND p_sku IS NOT NULL AND p_sku != '' AND p_brand IS NOT NULL AND p_brand != '' THEN
+        -- Normalize SKU for fuzzy matching
+        normalized_sku := normalize_sku_for_matching(p_sku);
+        
+        SELECT id INTO product_id
+        FROM products
+        WHERE user_id = p_user_id 
+          AND normalize_sku_for_matching(sku) = normalized_sku
+          AND (brand_id = p_brand_id OR LOWER(brand) = LOWER(p_brand))
+        ORDER BY created_at ASC
+        LIMIT 1;
+        
+        IF product_id IS NOT NULL THEN
+            RETURN product_id;
+        END IF;
+    END IF;
+    
+    -- 3. Fallback: EAN matching (if not prioritized but valid EAN available)
+    IF p_ean IS NOT NULL AND p_ean != '' AND is_valid_ean(p_ean) THEN
+        SELECT id INTO product_id
+        FROM products
+        WHERE user_id = p_user_id AND ean = p_ean
+        ORDER BY created_at ASC
+        LIMIT 1;
+        
+        IF product_id IS NOT NULL THEN
+            RETURN product_id;
+        END IF;
+    END IF;
+    
+    -- 4. Fallback: SKU + Brand matching (if not prioritized)
+    IF p_sku IS NOT NULL AND p_sku != '' AND p_brand IS NOT NULL AND p_brand != '' THEN
+        -- Normalize SKU for fuzzy matching
+        normalized_sku := normalize_sku_for_matching(p_sku);
+        
+        SELECT id INTO product_id
+        FROM products
+        WHERE user_id = p_user_id 
+          AND normalize_sku_for_matching(sku) = normalized_sku
+          AND (brand_id = p_brand_id OR LOWER(brand) = LOWER(p_brand))
+        ORDER BY created_at ASC
+        LIMIT 1;
+        
+        IF product_id IS NOT NULL THEN
+            RETURN product_id;
+        END IF;
+    END IF;
+    
+    -- 5. Fuzzy name matching (if enabled and no other matches found)
+    IF (settings->>'fuzzy_name_matching')::BOOLEAN = true AND p_name IS NOT NULL AND p_name != '' THEN
+        SELECT id INTO product_id
+        FROM products
+        WHERE user_id = p_user_id
+          AND name IS NOT NULL AND name != ''
+          AND (100 - (levenshtein(LOWER(name), LOWER(p_name)) * 100.0 / GREATEST(LENGTH(name), LENGTH(p_name)))) >= similarity_threshold
+        ORDER BY 
+            -- Prefer exact matches, then by similarity, then by creation date
+            CASE WHEN LOWER(name) = LOWER(p_name) THEN 0 ELSE 1 END,
+            levenshtein(LOWER(name), LOWER(p_name)),
+            created_at ASC
+        LIMIT 1;
+        
+        IF product_id IS NOT NULL THEN
+            RETURN product_id;
+        END IF;
+    END IF;
+    
+    -- No match found
+    RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION find_product_with_fuzzy_matching(p_user_id uuid, p_ean text, p_brand text, p_sku text, p_name text, p_brand_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.find_product_with_fuzzy_matching(p_user_id uuid, p_ean text, p_brand text, p_sku text, p_name text, p_brand_id uuid) IS 'Enhanced product matching with user settings support and fuzzy matching';
+
+
+--
+-- Name: get_admin_user_stats(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_admin_user_stats() RETURNS TABLE(total_users bigint, active_users_last_30_days bigint, new_users_last_30_days bigint, free_users bigint, premium_users bigint, enterprise_users bigint, suspended_users bigint)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        (SELECT COUNT(*) FROM public.user_profiles) as total_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE updated_at >= NOW() - INTERVAL '30 days') as active_users_last_30_days,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE created_at >= NOW() - INTERVAL '30 days') as new_users_last_30_days,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE subscription_tier = 'free') as free_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE subscription_tier = 'premium') as premium_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE subscription_tier = 'enterprise') as enterprise_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE is_suspended = true) as suspended_users;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_admin_user_stats(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_admin_user_stats() IS 'Returns overview statistics for admin dashboard including user counts by subscription tier and activity.';
+
+
+--
+-- Name: get_brand_aliases(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_aliases(p_user_id uuid) RETURNS TABLE(brand_id uuid, aliases text[])
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    ba.brand_id,
+    ARRAY_AGG(ba.alias_name) AS aliases
+  FROM
+    brand_aliases ba
+  WHERE
+    ba.user_id = p_user_id
+  GROUP BY
+    ba.brand_id;
+END;
+$$;
+
+
+--
+-- Name: get_brand_analytics(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_analytics(p_user_id uuid, p_brand_id uuid DEFAULT NULL::uuid) RETURNS TABLE(id uuid, name text, is_active boolean, needs_review boolean, created_at timestamp with time zone, updated_at timestamp with time zone, product_count bigint, our_products_count bigint, competitor_count bigint)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  RETURN QUERY
+  WITH product_counts AS (
+    SELECT
+      b.id AS brand_id,
+      COUNT(p.id) AS product_count,
+      COUNT(CASE WHEN p.our_retail_price IS NOT NULL THEN 1 END) AS our_products_count
+    FROM
+      brands b
+    LEFT JOIN
+      products p ON b.id = p.brand_id AND p.user_id = b.user_id
+    WHERE
+      b.user_id = p_user_id
+      AND (p_brand_id IS NULL OR b.id = p_brand_id)
+    GROUP BY
+      b.id
+  ),
+  competitor_counts AS (
+    SELECT
+      b.id AS brand_id,
+      COUNT(DISTINCT pc.competitor_id) AS competitor_count
+    FROM
+      brands b
+    LEFT JOIN
+      products p ON b.id = p.brand_id AND p.user_id = b.user_id
+    LEFT JOIN
+      price_changes_competitors pc ON p.id = pc.product_id AND pc.user_id = b.user_id
+    WHERE
+      b.user_id = p_user_id
+      AND (p_brand_id IS NULL OR b.id = p_brand_id)
+    GROUP BY
+      b.id
+  )
+  SELECT
+    b.id,
+    b.name,
+    b.is_active,
+    b.needs_review,
+    b.created_at,
+    b.updated_at,
+    COALESCE(pc.product_count, 0) AS product_count,
+    COALESCE(pc.our_products_count, 0) AS our_products_count,
+    COALESCE(cc.competitor_count, 0) AS competitor_count
+  FROM
+    brands b
+  LEFT JOIN
+    product_counts pc ON b.id = pc.brand_id
+  LEFT JOIN
+    competitor_counts cc ON b.id = cc.brand_id
+  WHERE
+    b.user_id = p_user_id
+    AND (p_brand_id IS NULL OR b.id = p_brand_id)
+  ORDER BY
+    b.name ASC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_brand_analytics(p_user_id uuid, p_brand_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brand_analytics(p_user_id uuid, p_brand_id uuid) IS 'Enhanced brand analytics function that includes our_products_count (products with our_retail_price IS NOT NULL)';
+
+
+--
+-- Name: get_brand_market_positioning(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_market_positioning(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid) RETURNS TABLE(brand_name text, total_products bigint, market_position_score numeric, competitive_strength text, cheapest_percentage numeric, same_price_percentage numeric, more_expensive_percentage numeric, avg_competitor_count numeric, positioning_category text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_our_prices AS (
+        SELECT DISTINCT ON (pcc.product_id)
+            pcc.product_id,
+            pcc.new_our_retail_price as our_price
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+            AND pcc.integration_id IS NOT NULL
+            AND pcc.new_our_retail_price IS NOT NULL
+        ORDER BY pcc.product_id, pcc.changed_at DESC
+    ),
+    latest_competitor_prices AS (
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price as competitor_price
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.new_competitor_price IS NOT NULL
+            AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    product_price_analysis AS (
+        SELECT 
+            p.brand,
+            lop.product_id,
+            lop.our_price,
+            MIN(lcp.competitor_price) as min_competitor_price,
+            COUNT(DISTINCT lcp.competitor_id) as competitor_count,
+            CASE 
+                WHEN lop.our_price < MIN(lcp.competitor_price) THEN 'cheaper'
+                WHEN lop.our_price = MIN(lcp.competitor_price) THEN 'same'
+                ELSE 'more_expensive'
+            END as price_comparison
+        FROM latest_our_prices lop
+        JOIN latest_competitor_prices lcp ON lop.product_id = lcp.product_id
+        JOIN products p ON lop.product_id = p.id
+        WHERE p.brand IS NOT NULL
+            AND lop.our_price > 0
+            AND lcp.competitor_price > 0
+        GROUP BY p.brand, lop.product_id, lop.our_price
+    ),
+    brand_stats AS (
+        SELECT 
+            ppa.brand,
+            COUNT(*) as total_products,
+            COUNT(CASE WHEN ppa.price_comparison = 'cheaper' THEN 1 END) as products_we_are_cheapest,
+            COUNT(CASE WHEN ppa.price_comparison = 'same' THEN 1 END) as products_we_are_same_price,
+            COUNT(CASE WHEN ppa.price_comparison = 'more_expensive' THEN 1 END) as products_we_are_more_expensive,
+            AVG(ppa.competitor_count) as avg_competitor_count
+        FROM product_price_analysis ppa
+        GROUP BY ppa.brand
+    )
+    SELECT 
+        bs.brand::TEXT as brand_name,
+        bs.total_products,
+        ROUND(
+            (bs.products_we_are_cheapest::NUMERIC * 3 + bs.products_we_are_same_price::NUMERIC * 2) / 
+            (bs.total_products::NUMERIC * 3) * 100, 2
+        ) as market_position_score,
+        CASE 
+            WHEN (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.7 THEN 'Dominant'
+            WHEN (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.5 THEN 'Strong'
+            WHEN (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.3 THEN 'Competitive'
+            ELSE 'Weak'
+        END as competitive_strength,
+        ROUND((bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) * 100, 2) as cheapest_percentage,
+        ROUND((bs.products_we_are_same_price::NUMERIC / bs.total_products::NUMERIC) * 100, 2) as same_price_percentage,
+        ROUND((bs.products_we_are_more_expensive::NUMERIC / bs.total_products::NUMERIC) * 100, 2) as more_expensive_percentage,
+        ROUND(COALESCE(bs.avg_competitor_count, 0), 1) as avg_competitor_count,
+        CASE 
+            WHEN bs.total_products >= 100 AND (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.6 THEN 'Market Leader'
+            WHEN bs.total_products >= 50 AND (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.4 THEN 'Strong Player'
+            WHEN bs.total_products >= 20 AND (bs.products_we_are_cheapest::NUMERIC / bs.total_products::NUMERIC) >= 0.3 THEN 'Niche Player'
+            ELSE 'Emerging'
+        END as positioning_category
+    FROM brand_stats bs
+    WHERE bs.total_products > 0
+    ORDER BY market_position_score DESC, bs.total_products DESC;
+END;
+$$;
+
+
+--
+-- Name: get_brand_performance_data(uuid, uuid, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_performance_data(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS TABLE(brand text, products_tracked bigint, total_sold bigint, total_revenue numeric, avg_sales_per_product numeric, active_days bigint, revenue_percentage numeric, avg_daily_sales numeric, avg_daily_revenue numeric)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+    date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+BEGIN
+    RETURN QUERY
+    WITH brand_sales AS (
+        SELECT 
+            p.brand,
+            COUNT(DISTINCT p.id) as products_tracked,
+            SUM(ABS(sc.stock_change_quantity)) as total_sold,
+            SUM(ABS(sc.stock_change_quantity) * COALESCE(pc.new_competitor_price, 0)) as total_revenue,
+            AVG(ABS(sc.stock_change_quantity)) as avg_sales_per_product,
+            COUNT(DISTINCT DATE(sc.changed_at)) as active_days
+        FROM stock_changes_competitors sc
+        JOIN products p ON sc.product_id = p.id
+        LEFT JOIN LATERAL (
+            SELECT new_competitor_price
+            FROM price_changes_competitors pc2
+            WHERE pc2.product_id = p.id 
+              AND pc2.user_id = p_user_id
+              AND pc2.changed_at <= sc.changed_at
+              AND (p_competitor_id IS NULL OR pc2.competitor_id = p_competitor_id)
+            ORDER BY pc2.changed_at DESC
+            LIMIT 1
+        ) pc ON true
+        WHERE sc.user_id = p_user_id
+          AND sc.stock_change_quantity < 0
+          AND sc.changed_at >= date_filter_start
+          AND sc.changed_at <= date_filter_end
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+        GROUP BY p.brand
+    ),
+    totals AS (
+        SELECT SUM(brand_sales.total_revenue) as grand_total_revenue FROM brand_sales
+    )
+    SELECT 
+        bs.brand,
+        bs.products_tracked,
+        bs.total_sold,
+        bs.total_revenue,
+        bs.avg_sales_per_product,
+        bs.active_days,
+        CASE 
+            WHEN t.grand_total_revenue > 0 THEN (bs.total_revenue / t.grand_total_revenue * 100)
+            ELSE 0 
+        END as revenue_percentage,
+        CASE 
+            WHEN bs.active_days > 0 THEN (bs.total_sold::NUMERIC / bs.active_days)
+            ELSE 0 
+        END as avg_daily_sales,
+        CASE 
+            WHEN bs.active_days > 0 THEN (bs.total_revenue / bs.active_days)
+            ELSE 0 
+        END as avg_daily_revenue
+    FROM brand_sales bs
+    CROSS JOIN totals t
+    ORDER BY bs.total_revenue DESC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_brand_performance_data(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brand_performance_data(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone) IS 'Returns brand-level sales performance metrics including revenue percentages and daily averages';
+
+
+--
+-- Name: get_brand_price_competitiveness(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_price_competitiveness(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid) RETURNS TABLE(brand_name text, total_products_with_prices bigint, products_we_are_cheapest bigint, products_we_are_same_price bigint, products_we_are_more_expensive bigint, cheapest_percentage numeric, same_price_percentage numeric, more_expensive_percentage numeric, avg_price_difference_when_higher numeric, avg_price_difference_percentage_when_higher numeric, market_dominance_percentage numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_our_prices AS (
+        SELECT DISTINCT ON (pcc.product_id)
+            pcc.product_id,
+            pcc.new_our_retail_price as our_price
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+            AND pcc.integration_id IS NOT NULL
+            AND pcc.new_our_retail_price IS NOT NULL
+        ORDER BY pcc.product_id, pcc.changed_at DESC
+    ),
+    latest_competitor_prices AS (
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price as competitor_price
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.new_competitor_price IS NOT NULL
+            AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    product_price_analysis AS (
+        -- For each product, determine if we are cheapest, same, or more expensive
+        SELECT 
+            p.brand,
+            lop.product_id,
+            lop.our_price,
+            MIN(lcp.competitor_price) as min_competitor_price,
+            MAX(lcp.competitor_price) as max_competitor_price,
+            AVG(lcp.competitor_price) as avg_competitor_price,
+            CASE 
+                WHEN lop.our_price < MIN(lcp.competitor_price) THEN 'cheaper'
+                WHEN lop.our_price = MIN(lcp.competitor_price) THEN 'same'
+                ELSE 'more_expensive'
+            END as price_comparison,
+            CASE 
+                WHEN lop.our_price > MIN(lcp.competitor_price) 
+                THEN lop.our_price - MIN(lcp.competitor_price)
+                ELSE 0 
+            END as price_difference,
+            CASE 
+                WHEN lop.our_price > MIN(lcp.competitor_price) AND MIN(lcp.competitor_price) > 0
+                THEN ((lop.our_price - MIN(lcp.competitor_price)) / MIN(lcp.competitor_price)) * 100
+                ELSE 0 
+            END as price_difference_percentage
+        FROM latest_our_prices lop
+        JOIN latest_competitor_prices lcp ON lop.product_id = lcp.product_id
+        JOIN products p ON lop.product_id = p.id
+        WHERE p.brand IS NOT NULL
+            AND lop.our_price > 0
+            AND lcp.competitor_price > 0
+        GROUP BY p.brand, lop.product_id, lop.our_price
+    ),
+    brand_stats AS (
+        SELECT 
+            ppa.brand,
+            COUNT(*) as total_products_with_prices,
+            COUNT(CASE WHEN ppa.price_comparison = 'cheaper' THEN 1 END) as products_we_are_cheapest,
+            COUNT(CASE WHEN ppa.price_comparison = 'same' THEN 1 END) as products_we_are_same_price,
+            COUNT(CASE WHEN ppa.price_comparison = 'more_expensive' THEN 1 END) as products_we_are_more_expensive,
+            AVG(CASE WHEN ppa.price_comparison = 'more_expensive' THEN ppa.price_difference END) as avg_price_difference_when_higher,
+            AVG(CASE WHEN ppa.price_comparison = 'more_expensive' THEN ppa.price_difference_percentage END) as avg_price_difference_percentage_when_higher
+        FROM product_price_analysis ppa
+        GROUP BY ppa.brand
+    )
+    SELECT 
+        bs.brand::TEXT as brand_name,
+        bs.total_products_with_prices,
+        bs.products_we_are_cheapest,
+        bs.products_we_are_same_price,
+        bs.products_we_are_more_expensive,
+        ROUND((bs.products_we_are_cheapest::NUMERIC / bs.total_products_with_prices::NUMERIC) * 100, 2) as cheapest_percentage,
+        ROUND((bs.products_we_are_same_price::NUMERIC / bs.total_products_with_prices::NUMERIC) * 100, 2) as same_price_percentage,
+        ROUND((bs.products_we_are_more_expensive::NUMERIC / bs.total_products_with_prices::NUMERIC) * 100, 2) as more_expensive_percentage,
+        ROUND(COALESCE(bs.avg_price_difference_when_higher, 0), 2) as avg_price_difference_when_higher,
+        ROUND(COALESCE(bs.avg_price_difference_percentage_when_higher, 0), 2) as avg_price_difference_percentage_when_higher,
+        ROUND((bs.products_we_are_cheapest::NUMERIC / bs.total_products_with_prices::NUMERIC) * 100, 2) as market_dominance_percentage
+    FROM brand_stats bs
+    ORDER BY bs.total_products_with_prices DESC, bs.products_we_are_cheapest DESC;
+END;
+$$;
+
+
+--
+-- Name: get_brand_price_pressure_analysis(uuid, uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_price_pressure_analysis(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_days_back integer DEFAULT 30) RETURNS TABLE(brand_name text, total_products integer, total_price_changes integer, avg_price_changes_per_product numeric, price_change_frequency_score numeric, avg_price_change_percentage numeric, price_increases integer, price_decreases integer, net_price_direction text, most_volatile_product_name text, most_volatile_product_changes integer, pressure_level text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_start_date DATE := CURRENT_DATE - (p_days_back || ' days')::INTERVAL;
+BEGIN
+    RETURN QUERY
+    WITH price_changes_analysis AS (
+        SELECT 
+            p.brand,
+            pcc.product_id,
+            p.name as product_name,
+            COUNT(*) as change_count,
+            AVG(ABS(pcc.price_change_percentage)) as avg_abs_change_pct,
+            SUM(CASE WHEN pcc.price_change_percentage > 0 THEN 1 ELSE 0 END) as increases,
+            SUM(CASE WHEN pcc.price_change_percentage < 0 THEN 1 ELSE 0 END) as decreases,
+            AVG(pcc.price_change_percentage) as avg_change_pct
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+            AND p.brand IS NOT NULL
+            AND pcc.changed_at >= v_start_date
+            AND pcc.price_change_percentage IS NOT NULL
+            AND ABS(pcc.price_change_percentage) > 0.1  -- Filter out tiny changes
+        GROUP BY p.brand, pcc.product_id, p.name
+    ),
+    brand_pressure_metrics AS (
+        SELECT 
+            pca.brand,
+            COUNT(DISTINCT pca.product_id) as total_products,
+            SUM(pca.change_count) as total_changes,
+            AVG(pca.change_count) as avg_changes_per_product,
+            AVG(pca.avg_abs_change_pct) as avg_price_change_percentage,
+            SUM(pca.increases) as total_increases,
+            SUM(pca.decreases) as total_decreases,
+            AVG(pca.avg_change_pct) as net_avg_change_pct,
+            -- Find most volatile product
+            (SELECT pca2.product_name 
+             FROM price_changes_analysis pca2 
+             WHERE pca2.brand = pca.brand 
+             ORDER BY pca2.change_count DESC, pca2.avg_abs_change_pct DESC 
+             LIMIT 1) as most_volatile_product,
+            (SELECT MAX(pca2.change_count) 
+             FROM price_changes_analysis pca2 
+             WHERE pca2.brand = pca.brand) as max_product_changes
+        FROM price_changes_analysis pca
+        GROUP BY pca.brand
+    )
+    SELECT 
+        bpm.brand::TEXT,
+        bpm.total_products::INTEGER,
+        bpm.total_changes::INTEGER,
+        ROUND(COALESCE(bpm.avg_changes_per_product, 0), 2) as avg_price_changes_per_product,
+        -- Frequency score: changes per product per day, normalized to 0-100 scale
+        ROUND(LEAST(100, (bpm.avg_changes_per_product / p_days_back * 30 * 10)), 2) as price_change_frequency_score,
+        ROUND(COALESCE(bpm.avg_price_change_percentage, 0), 2) as avg_price_change_percentage,
+        bpm.total_increases::INTEGER,
+        bpm.total_decreases::INTEGER,
+        
+        -- Net price direction
+        CASE 
+            WHEN bpm.total_increases > bpm.total_decreases * 1.2 THEN 'Increasing'
+            WHEN bpm.total_decreases > bpm.total_increases * 1.2 THEN 'Decreasing'
+            ELSE 'Mixed'
+        END::TEXT as net_price_direction,
+        
+        COALESCE(bpm.most_volatile_product, 'N/A')::TEXT as most_volatile_product_name,
+        COALESCE(bpm.max_product_changes, 0)::INTEGER as most_volatile_product_changes,
+        
+        -- Pressure level assessment
+        CASE 
+            WHEN bpm.avg_changes_per_product >= 3 AND bpm.avg_price_change_percentage >= 5 THEN 'Very High'
+            WHEN bpm.avg_changes_per_product >= 2 AND bpm.avg_price_change_percentage >= 3 THEN 'High'
+            WHEN bpm.avg_changes_per_product >= 1 AND bpm.avg_price_change_percentage >= 2 THEN 'Moderate'
+            WHEN bpm.avg_changes_per_product >= 0.5 THEN 'Low'
+            ELSE 'Very Low'
+        END::TEXT as pressure_level
+        
+    FROM brand_pressure_metrics bpm
+    WHERE bpm.total_products >= 3  -- Only include brands with meaningful product count
+    ORDER BY bpm.avg_changes_per_product DESC, bpm.avg_price_change_percentage DESC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_brand_price_pressure_analysis(p_user_id uuid, p_competitor_id uuid, p_days_back integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brand_price_pressure_analysis(p_user_id uuid, p_competitor_id uuid, p_days_back integer) IS 'Analyzes price pressure and volatility per brand, identifying brands under competitive pressure';
+
+
+--
+-- Name: get_brand_price_spread_analysis(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_price_spread_analysis(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid) RETURNS TABLE(brand_name text, total_products integer, avg_price_spread_amount numeric, avg_price_spread_percentage numeric, max_price_spread_amount numeric, max_price_spread_percentage numeric, min_competitor_price numeric, max_competitor_price numeric, avg_our_price numeric, avg_competitor_price numeric, price_volatility_score numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_prices AS (
+        -- Get latest competitor prices per product
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price,
+            pcc.new_our_retail_price,
+            p.brand
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+            AND pcc.new_competitor_price IS NOT NULL
+            AND pcc.new_our_retail_price IS NOT NULL
+            AND p.brand IS NOT NULL
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    price_spreads AS (
+        SELECT 
+            lp.brand,
+            lp.product_id,
+            lp.new_our_retail_price as our_price,
+            MIN(lp.new_competitor_price) as min_competitor_price,
+            MAX(lp.new_competitor_price) as max_competitor_price,
+            AVG(lp.new_competitor_price) as avg_competitor_price,
+            COUNT(DISTINCT lp.competitor_id) as competitor_count,
+            -- Price spread calculations
+            (MAX(lp.new_competitor_price) - MIN(lp.new_competitor_price)) as price_spread_amount,
+            CASE 
+                WHEN MIN(lp.new_competitor_price) > 0 THEN
+                    ((MAX(lp.new_competitor_price) - MIN(lp.new_competitor_price)) / MIN(lp.new_competitor_price) * 100)
+                ELSE 0
+            END as price_spread_percentage
+        FROM latest_prices lp
+        GROUP BY lp.brand, lp.product_id, lp.new_our_retail_price
+        HAVING COUNT(DISTINCT lp.competitor_id) >= 2  -- Need at least 2 competitors for meaningful spread
+    ),
+    price_volatility AS (
+        -- Calculate price change frequency for volatility score
+        SELECT 
+            p.brand,
+            COUNT(*) as total_price_changes,
+            COUNT(DISTINCT pcc.product_id) as products_with_changes,
+            AVG(ABS(pcc.price_change_percentage)) as avg_price_change_percentage
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+            AND p.brand IS NOT NULL
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+            AND pcc.price_change_percentage IS NOT NULL
+        GROUP BY p.brand
+    ),
+    brand_spreads AS (
+        SELECT 
+            ps.brand,
+            COUNT(*) as total_products,
+            AVG(ps.price_spread_amount) as avg_spread_amount,
+            AVG(ps.price_spread_percentage) as avg_spread_percentage,
+            MAX(ps.price_spread_amount) as max_spread_amount,
+            MAX(ps.price_spread_percentage) as max_spread_percentage,
+            MIN(ps.min_competitor_price) as overall_min_competitor_price,
+            MAX(ps.max_competitor_price) as overall_max_competitor_price,
+            AVG(ps.our_price) as avg_our_price,
+            AVG(ps.avg_competitor_price) as avg_competitor_price
+        FROM price_spreads ps
+        GROUP BY ps.brand
+    )
+    SELECT 
+        bs.brand::TEXT,
+        bs.total_products::INTEGER,
+        ROUND(COALESCE(bs.avg_spread_amount, 0), 2) as avg_price_spread_amount,
+        ROUND(COALESCE(bs.avg_spread_percentage, 0), 2) as avg_price_spread_percentage,
+        ROUND(COALESCE(bs.max_spread_amount, 0), 2) as max_price_spread_amount,
+        ROUND(COALESCE(bs.max_spread_percentage, 0), 2) as max_price_spread_percentage,
+        ROUND(COALESCE(bs.overall_min_competitor_price, 0), 2) as min_competitor_price,
+        ROUND(COALESCE(bs.overall_max_competitor_price, 0), 2) as max_competitor_price,
+        ROUND(COALESCE(bs.avg_our_price, 0), 2) as avg_our_price,
+        ROUND(COALESCE(bs.avg_competitor_price, 0), 2) as avg_competitor_price,
+        -- Volatility score: combination of price change frequency and average change percentage
+        ROUND(COALESCE(
+            (pv.total_price_changes::NUMERIC / GREATEST(pv.products_with_changes, 1)) * 
+            (pv.avg_price_change_percentage / 100) * 100, 0
+        ), 2) as price_volatility_score
+    FROM brand_spreads bs
+    LEFT JOIN price_volatility pv ON bs.brand = pv.brand
+    WHERE bs.total_products >= 3  -- Only include brands with meaningful product count
+    ORDER BY bs.avg_spread_percentage DESC, bs.total_products DESC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_brand_price_spread_analysis(p_user_id uuid, p_competitor_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brand_price_spread_analysis(p_user_id uuid, p_competitor_id uuid) IS 'Analyzes price spreads and volatility per brand, showing market price ranges and competitive dynamics';
+
+
+--
+-- Name: get_brand_products_detail(uuid, text, uuid, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_products_detail(p_user_id uuid, p_brand_name text, p_competitor_id uuid DEFAULT NULL::uuid, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS TABLE(product_id uuid, product_name text, brand text, sku text, total_sold bigint, total_revenue numeric, avg_daily_sales numeric, avg_daily_revenue numeric, current_price numeric, image_url text, competitor_url text, last_sale_date timestamp with time zone)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+    date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+BEGIN
+    RETURN QUERY
+    WITH product_sales AS (
+        SELECT 
+            p.id,
+            p.name,
+            p.brand,
+            p.sku,
+            p.image_url,
+            SUM(ABS(sc.stock_change_quantity)) as total_sold,
+            MAX(sc.changed_at) as last_sale_date,
+            COUNT(DISTINCT DATE(sc.changed_at)) as active_days,
+            -- Get the most recent competitor URL
+            (SELECT sc2.competitor_url 
+             FROM stock_changes_competitors sc2 
+             WHERE sc2.product_id = p.id 
+               AND sc2.user_id = p_user_id
+               AND (p_competitor_id IS NULL OR sc2.competitor_id = p_competitor_id)
+               AND sc2.competitor_url IS NOT NULL
+             ORDER BY sc2.changed_at DESC 
+             LIMIT 1) as competitor_url
+        FROM stock_changes_competitors sc
+        JOIN products p ON sc.product_id = p.id
+        WHERE sc.user_id = p_user_id
+          AND p.brand = p_brand_name
+          AND sc.stock_change_quantity < 0
+          AND sc.changed_at >= date_filter_start
+          AND sc.changed_at <= date_filter_end
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+        GROUP BY p.id, p.name, p.brand, p.sku, p.image_url
+    ),
+    products_with_prices AS (
+        SELECT 
+            ps.*,
+            -- Get the most recent price for revenue calculation
+            COALESCE((
+                SELECT pc.new_competitor_price
+                FROM price_changes_competitors pc
+                WHERE pc.product_id = ps.id 
+                  AND pc.user_id = p_user_id
+                  AND pc.changed_at <= date_filter_end
+                  AND (p_competitor_id IS NULL OR pc.competitor_id = p_competitor_id)
+                  AND pc.new_competitor_price IS NOT NULL
+                  AND pc.new_competitor_price > 0
+                ORDER BY pc.changed_at DESC
+                LIMIT 1
+            ), 0) as current_price
+        FROM product_sales ps
+    )
+    SELECT 
+        pwp.id as product_id,
+        pwp.name as product_name,
+        pwp.brand,
+        pwp.sku,
+        pwp.total_sold,
+        pwp.total_sold * pwp.current_price as total_revenue,
+        pwp.total_sold::NUMERIC / NULLIF(pwp.active_days, 0) as avg_daily_sales,
+        (pwp.total_sold * pwp.current_price) / NULLIF(pwp.active_days, 0) as avg_daily_revenue,
+        pwp.current_price,
+        pwp.image_url,
+        COALESCE(pwp.competitor_url, '') as competitor_url,
+        pwp.last_sale_date
+    FROM products_with_prices pwp
+    WHERE pwp.total_sold > 0
+    ORDER BY pwp.total_sold DESC;
+END;
+$$;
+
+
+--
+-- Name: get_brand_products_with_stock(uuid, text, uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_products_with_stock(p_user_id uuid, p_brand text, p_competitor_id uuid DEFAULT NULL::uuid, p_stock_status text DEFAULT 'all'::text) RETURNS TABLE(product_id uuid, product_name text, brand text, sku text, current_stock integer, current_price numeric, competitor_name text, in_stock_flag boolean, last_updated timestamp with time zone)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_stock AS (
+        SELECT DISTINCT ON (sc.product_id, sc.competitor_id)
+            sc.product_id,
+            sc.competitor_id,
+            sc.new_stock_quantity,
+            sc.new_stock_status,
+            sc.changed_at
+        FROM stock_changes_competitors sc
+        WHERE sc.user_id = p_user_id
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+        ORDER BY sc.product_id, sc.competitor_id, sc.changed_at DESC
+    ),
+    latest_prices AS (
+        SELECT DISTINCT ON (pc.product_id, pc.competitor_id)
+            pc.product_id,
+            pc.competitor_id,
+            pc.new_competitor_price,
+            pc.changed_at
+        FROM price_changes_competitors pc
+        WHERE pc.user_id = p_user_id
+          AND (p_competitor_id IS NULL OR pc.competitor_id = p_competitor_id)
+        ORDER BY pc.product_id, pc.competitor_id, pc.changed_at DESC
+    )
+    SELECT 
+        p.id,
+        p.name,
+        p.brand,
+        p.sku,
+        COALESCE(ls.new_stock_quantity, 0)::integer,
+        lp.new_competitor_price,
+        c.name,
+        CASE 
+            WHEN ls.new_stock_quantity > 0 THEN true 
+            ELSE false 
+        END,
+        GREATEST(ls.changed_at, lp.changed_at)
+    FROM products p
+    LEFT JOIN latest_stock ls ON p.id = ls.product_id
+    LEFT JOIN latest_prices lp ON p.id = lp.product_id AND ls.competitor_id = lp.competitor_id
+    LEFT JOIN competitors c ON ls.competitor_id = c.id
+    WHERE p.user_id = p_user_id
+      AND p.brand = p_brand
+      AND (
+          p_stock_status = 'all' OR
+          (p_stock_status = 'in_stock' AND ls.new_stock_quantity > 0) OR
+          (p_stock_status = 'out_of_stock' AND (ls.new_stock_quantity = 0 OR ls.new_stock_quantity IS NULL))
+      )
+    ORDER BY ls.new_stock_quantity DESC NULLS LAST, p.name ASC;
+END;
+$$;
+
+
+--
+-- Name: get_brand_stock_availability(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brand_stock_availability(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid) RETURNS TABLE(brand text, total_products bigint, in_stock_products bigint, out_of_stock_products bigint, in_stock_percentage numeric, out_of_stock_percentage numeric)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH current_stock AS (
+        SELECT DISTINCT ON (product_id, competitor_id)
+            product_id, 
+            competitor_id, 
+            new_stock_quantity, 
+            new_stock_status
+        FROM stock_changes_competitors
+        WHERE user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+        ORDER BY product_id, competitor_id, changed_at DESC
+    ),
+    brand_availability AS (
+        SELECT 
+            p.brand,
+            COUNT(*) as total_products,
+            COUNT(CASE WHEN cs.new_stock_quantity > 0 THEN 1 END) as in_stock_products,
+            COUNT(CASE WHEN cs.new_stock_quantity = 0 OR cs.new_stock_quantity IS NULL THEN 1 END) as out_of_stock_products
+        FROM current_stock cs
+        JOIN products p ON cs.product_id = p.id
+        GROUP BY p.brand
+    )
+    SELECT 
+        ba.brand,
+        ba.total_products,
+        ba.in_stock_products,
+        ba.out_of_stock_products,
+        CASE 
+            WHEN ba.total_products > 0 THEN (ba.in_stock_products::NUMERIC / ba.total_products * 100)
+            ELSE 0 
+        END as in_stock_percentage,
+        CASE 
+            WHEN ba.total_products > 0 THEN (ba.out_of_stock_products::NUMERIC / ba.total_products * 100)
+            ELSE 0 
+        END as out_of_stock_percentage
+    FROM brand_availability ba
+    ORDER BY 
+        CASE 
+            WHEN ba.total_products > 0 THEN (ba.in_stock_products::NUMERIC / ba.total_products * 100)
+            ELSE 0 
+        END DESC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_brand_stock_availability(p_user_id uuid, p_competitor_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brand_stock_availability(p_user_id uuid, p_competitor_id uuid) IS 'Returns stock availability percentages by brand for inventory strategy analysis';
+
+
+--
+-- Name: get_brands_for_competitor(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brands_for_competitor(p_user_id uuid, p_competitor_id uuid) RETURNS TABLE(brand_id uuid)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  RETURN QUERY
+  SELECT DISTINCT
+    p.brand_id
+  FROM
+    price_changes_competitors pc
+  JOIN
+    products p ON pc.product_id = p.id
+  WHERE
+    pc.user_id = p_user_id
+    AND pc.competitor_id = p_competitor_id
+    AND p.brand_id IS NOT NULL;
+END;
+$$;
+
+
+--
+-- Name: get_brands_without_our_prices(uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_brands_without_our_prices(p_user_id uuid, p_min_products integer DEFAULT 100) RETURNS TABLE(brand_name text, competitor_product_count integer, competitor_count integer, avg_competitor_price numeric, min_competitor_price numeric, max_competitor_price numeric, avg_stock_level numeric, products_in_stock integer, products_out_of_stock integer, opportunity_score numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH brands_with_our_prices AS (
+        -- Brands where we have prices (from price_changes_competitors with our integration_id)
+        SELECT DISTINCT p.brand
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND pcc.integration_id IS NOT NULL  -- This indicates our prices
+            AND pcc.new_our_retail_price IS NOT NULL
+            AND p.brand IS NOT NULL
+    ),
+    competitor_brand_data AS (
+        -- Get competitor data for brands we don't have prices for
+        SELECT 
+            p.brand,
+            COUNT(DISTINCT pcc.product_id) as product_count,
+            COUNT(DISTINCT pcc.competitor_id) as competitor_count,
+            AVG(pcc.new_competitor_price) as avg_price,
+            MIN(pcc.new_competitor_price) as min_price,
+            MAX(pcc.new_competitor_price) as max_price
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND pcc.competitor_id IS NOT NULL  -- Only competitor prices
+            AND pcc.new_competitor_price IS NOT NULL
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM brands_with_our_prices)
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '60 days'  -- Recent data
+        GROUP BY p.brand
+        HAVING COUNT(DISTINCT pcc.product_id) >= p_min_products
+    ),
+    stock_data AS (
+        -- Get stock information for these brands
+        SELECT 
+            p.brand,
+            AVG(CASE WHEN scc.new_stock_quantity IS NOT NULL THEN scc.new_stock_quantity ELSE 0 END) as avg_stock,
+            SUM(CASE WHEN scc.new_stock_status = 'in_stock' OR scc.new_stock_quantity > 0 THEN 1 ELSE 0 END) as in_stock_count,
+            SUM(CASE WHEN scc.new_stock_status = 'out_of_stock' OR scc.new_stock_quantity = 0 THEN 1 ELSE 0 END) as out_of_stock_count
+        FROM stock_changes_competitors scc
+        JOIN products p ON scc.product_id = p.id
+        WHERE scc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM brands_with_our_prices)
+            AND scc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+        GROUP BY p.brand
+    )
+    SELECT 
+        cbd.brand::TEXT,
+        cbd.product_count::INTEGER,
+        cbd.competitor_count::INTEGER,
+        ROUND(COALESCE(cbd.avg_price, 0), 2) as avg_competitor_price,
+        ROUND(COALESCE(cbd.min_price, 0), 2) as min_competitor_price,
+        ROUND(COALESCE(cbd.max_price, 0), 2) as max_competitor_price,
+        ROUND(COALESCE(sd.avg_stock, 0), 2) as avg_stock_level,
+        COALESCE(sd.in_stock_count, 0)::INTEGER as products_in_stock,
+        COALESCE(sd.out_of_stock_count, 0)::INTEGER as products_out_of_stock,
+        
+        -- Opportunity score: weighted by product count, competitor count, and reasonable stock levels
+        ROUND(
+            (LEAST(cbd.product_count / 100.0, 5) * 20) +  -- Product count factor (max 100 points)
+            (LEAST(cbd.competitor_count, 5) * 10) +        -- Competitor count factor (max 50 points)
+            (CASE WHEN COALESCE(sd.avg_stock, 0) BETWEEN 1 AND 50 THEN 30 ELSE 0 END) -- Stock level factor
+        , 2) as opportunity_score
+        
+    FROM competitor_brand_data cbd
+    LEFT JOIN stock_data sd ON cbd.brand = sd.brand
+    ORDER BY opportunity_score DESC, cbd.product_count DESC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_brands_without_our_prices(p_user_id uuid, p_min_products integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_brands_without_our_prices(p_user_id uuid, p_min_products integer) IS 'Finds brands that competitors sell but we do not have prices for, with opportunity scoring';
+
+
+--
+-- Name: get_competitor_names_for_brand(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_competitor_names_for_brand(p_user_id uuid, p_brand_id uuid) RETURNS TABLE(competitor_names text[])
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    ARRAY_AGG(DISTINCT c.name) AS competitor_names
+  FROM
+    price_changes_competitors pc
+  JOIN
+    products p ON pc.product_id = p.id
+  JOIN
+    competitors c ON pc.competitor_id = c.id
+  WHERE
+    p.user_id = p_user_id
+    AND p.brand_id = p_brand_id
+    AND c.user_id = p_user_id;
+END;
+$$;
+
+
+--
+-- Name: get_competitor_pressure_analysis(uuid, text, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_competitor_pressure_analysis(p_user_id uuid, p_brand_filter text DEFAULT NULL::text, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS TABLE(competitor_id uuid, competitor_name text, products_where_lowest integer, total_products_tracked integer, lowest_price_percentage numeric, avg_price_when_lowest numeric, is_integration boolean)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+    date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+BEGIN
+    RETURN QUERY
+    WITH latest_competitor_prices AS (
+        -- Get the latest price for each product-competitor combination
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price,
+            pcc.changed_at
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.changed_at BETWEEN date_filter_start AND date_filter_end
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    latest_our_prices AS (
+        -- Get the latest price for each product from our price changes (integration_id)
+        SELECT DISTINCT ON (pcc.product_id)
+            pcc.product_id,
+            pcc.integration_id,
+            pcc.new_our_retail_price,
+            pcc.changed_at
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_our_retail_price IS NOT NULL
+        AND pcc.integration_id IS NOT NULL
+        AND pcc.changed_at BETWEEN date_filter_start AND date_filter_end
+        ORDER BY pcc.product_id, pcc.changed_at DESC
+    ),
+    all_prices AS (
+        -- Combine competitor prices with our own prices
+        SELECT 
+            lcp.product_id,
+            lcp.competitor_id::text as entity_id,
+            lcp.new_competitor_price as price,
+            'competitor' as price_source
+        FROM latest_competitor_prices lcp
+        JOIN products p ON lcp.product_id = p.id
+        WHERE p.user_id = p_user_id
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+        
+        UNION ALL
+        
+        -- Add our own prices using integration_id
+        SELECT 
+            lop.product_id,
+            lop.integration_id::text as entity_id,
+            lop.new_our_retail_price as price,
+            'integration' as price_source
+        FROM latest_our_prices lop
+        JOIN products p ON lop.product_id = p.id
+        WHERE p.user_id = p_user_id
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+    ),
+    products_with_competition AS (
+        -- Only include products where there are at least 2 price sources (actual competition)
+        SELECT 
+            ap.product_id
+        FROM all_prices ap
+        GROUP BY ap.product_id
+        HAVING COUNT(DISTINCT ap.entity_id) >= 2
+    ),
+    product_min_prices AS (
+        -- Find the minimum price for each product across all competitors AND us (only for products with competition)
+        SELECT 
+            ap.product_id,
+            MIN(ap.price) as min_price
+        FROM all_prices ap
+        JOIN products_with_competition pwc ON ap.product_id = pwc.product_id
+        GROUP BY ap.product_id
+    ),
+    lowest_price_competitors AS (
+        -- Identify which competitors (including us) have the lowest price for each product
+        SELECT 
+            ap.entity_id,
+            ap.product_id,
+            ap.price,
+            ap.price_source
+        FROM all_prices ap
+        JOIN product_min_prices pmp ON ap.product_id = pmp.product_id 
+            AND ap.price = pmp.min_price
+    ),
+    competitor_totals AS (
+        -- Count total products tracked per competitor (only products with actual competition)
+        SELECT 
+            ap.entity_id,
+            ap.price_source,
+            COUNT(DISTINCT ap.product_id) as total_products_tracked
+        FROM all_prices ap
+        JOIN products_with_competition pwc ON ap.product_id = pwc.product_id
+        GROUP BY ap.entity_id, ap.price_source
+    )
+    SELECT 
+        CASE 
+            WHEN ct.price_source = 'integration' THEN NULL
+            ELSE ct.entity_id::uuid
+        END as competitor_id,
+        CASE 
+            WHEN ct.price_source = 'integration' THEN COALESCE(i.name, 'Our Company')
+            ELSE c.name 
+        END as competitor_name,
+        COALESCE(lpc_stats.products_where_lowest, 0)::INTEGER as products_where_lowest,
+        ct.total_products_tracked::INTEGER,
+        ROUND(
+            COALESCE(lpc_stats.products_where_lowest, 0)::NUMERIC / ct.total_products_tracked * 100, 
+            2
+        ) as lowest_price_percentage,
+        ROUND(COALESCE(lpc_stats.avg_price_when_lowest, 0), 2) as avg_price_when_lowest,
+        (ct.price_source = 'integration') as is_integration
+    FROM competitor_totals ct
+    LEFT JOIN competitors c ON ct.entity_id = c.id::text AND ct.price_source = 'competitor'
+    LEFT JOIN integrations i ON ct.entity_id = i.id::text AND ct.price_source = 'integration'
+    LEFT JOIN (
+        SELECT 
+            lpc.entity_id,
+            lpc.price_source,
+            COUNT(*) as products_where_lowest,
+            AVG(lpc.price) as avg_price_when_lowest
+        FROM lowest_price_competitors lpc
+        GROUP BY lpc.entity_id, lpc.price_source
+    ) lpc_stats ON ct.entity_id = lpc_stats.entity_id AND ct.price_source = lpc_stats.price_source
+    WHERE (c.user_id = p_user_id OR i.user_id = p_user_id)
+    ORDER BY lowest_price_percentage DESC, products_where_lowest DESC;
+END;
+$$;
+
+
+--
+-- Name: get_competitor_price_analysis(uuid, uuid[], text, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_competitor_price_analysis(p_user_id uuid, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_brand_filter text DEFAULT NULL::text, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS TABLE(competitor_id uuid, competitor_name text, competitor_website text, total_matching_products integer, our_products_cheaper integer, our_products_more_expensive integer, our_products_same_price integer, avg_price_difference_percentage numeric, avg_our_price numeric, avg_competitor_price numeric, market_coverage_percentage numeric)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+    date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+    total_our_products INTEGER;
+BEGIN
+    -- Get total count of our products for market coverage calculation
+    SELECT COUNT(*)
+    INTO total_our_products
+    FROM products p
+    WHERE p.user_id = p_user_id
+    AND p.our_retail_price IS NOT NULL
+    AND p.is_active = true
+    AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%');
+
+    RETURN QUERY
+    WITH latest_competitor_prices AS (
+        -- Get the latest price for each product-competitor combination
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price,
+            pcc.changed_at
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.changed_at BETWEEN date_filter_start AND date_filter_end
+        AND (p_competitor_ids IS NULL OR pcc.competitor_id = ANY(p_competitor_ids))
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    product_comparisons AS (
+        -- Compare our prices with competitor prices
+        SELECT 
+            lcp.competitor_id,
+            lcp.product_id,
+            p.our_retail_price,
+            lcp.new_competitor_price,
+            CASE 
+                WHEN p.our_retail_price < lcp.new_competitor_price THEN 'cheaper'
+                WHEN p.our_retail_price > lcp.new_competitor_price THEN 'more_expensive'
+                ELSE 'same_price'
+            END as price_comparison,
+            ((lcp.new_competitor_price - p.our_retail_price) / p.our_retail_price * 100) as price_diff_percentage
+        FROM latest_competitor_prices lcp
+        JOIN products p ON lcp.product_id = p.id
+        WHERE p.user_id = p_user_id
+        AND p.our_retail_price IS NOT NULL
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+    ),
+    competitor_stats AS (
+        -- Aggregate statistics per competitor
+        SELECT 
+            pc.competitor_id,
+            COUNT(*) as total_matching_products,
+            COUNT(*) FILTER (WHERE pc.price_comparison = 'cheaper') as our_products_cheaper,
+            COUNT(*) FILTER (WHERE pc.price_comparison = 'more_expensive') as our_products_more_expensive,
+            COUNT(*) FILTER (WHERE pc.price_comparison = 'same_price') as our_products_same_price,
+            AVG(pc.price_diff_percentage) as avg_price_difference_percentage,
+            AVG(pc.our_retail_price) as avg_our_price,
+            AVG(pc.new_competitor_price) as avg_competitor_price,
+            (COUNT(*)::NUMERIC / total_our_products * 100) as market_coverage_percentage
+        FROM product_comparisons pc
+        GROUP BY pc.competitor_id
+    )
+    SELECT 
+        cs.competitor_id,
+        c.name as competitor_name,
+        c.website as competitor_website,
+        cs.total_matching_products::INTEGER,
+        cs.our_products_cheaper::INTEGER,
+        cs.our_products_more_expensive::INTEGER,
+        cs.our_products_same_price::INTEGER,
+        ROUND(cs.avg_price_difference_percentage, 2) as avg_price_difference_percentage,
+        ROUND(cs.avg_our_price, 2) as avg_our_price,
+        ROUND(cs.avg_competitor_price, 2) as avg_competitor_price,
+        ROUND(cs.market_coverage_percentage, 2) as market_coverage_percentage
+    FROM competitor_stats cs
+    JOIN competitors c ON cs.competitor_id = c.id
+    WHERE c.user_id = p_user_id
+    ORDER BY cs.total_matching_products DESC;
+END;
+$$;
+
+
+--
+-- Name: get_competitor_price_change_frequency(uuid, integer, uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_competitor_price_change_frequency(p_user_id uuid, p_days integer DEFAULT 30, p_competitor_ids uuid[] DEFAULT NULL::uuid[]) RETURNS TABLE(competitor_id uuid, competitor_name text, total_price_changes integer, products_with_changes integer, avg_changes_per_product numeric, price_increases integer, price_decreases integer, avg_change_percentage numeric, most_active_day text, is_integration boolean)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH competitor_price_changes AS (
+        SELECT
+            pcc.competitor_id,
+            pcc.product_id,
+            pcc.old_competitor_price as old_price,
+            pcc.new_competitor_price as new_price,
+            pcc.price_change_percentage,
+            pcc.changed_at,
+            EXTRACT(DOW FROM pcc.changed_at) as day_of_week,
+            'competitor' as price_source
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.changed_at >= NOW() - (p_days || ' days')::INTERVAL
+        AND (p_competitor_ids IS NULL OR pcc.competitor_id = ANY(p_competitor_ids))
+        AND pcc.old_competitor_price IS NOT NULL
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.old_competitor_price != pcc.new_competitor_price
+        
+        UNION ALL
+        
+        -- Add our own price changes
+        SELECT
+            pcc.integration_id as competitor_id,
+            pcc.product_id,
+            pcc.old_our_retail_price as old_price,
+            pcc.new_our_retail_price as new_price,
+            ((pcc.new_our_retail_price - pcc.old_our_retail_price) / pcc.old_our_retail_price * 100) as price_change_percentage,
+            pcc.changed_at,
+            EXTRACT(DOW FROM pcc.changed_at) as day_of_week,
+            'integration' as price_source
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.integration_id IS NOT NULL
+        AND pcc.changed_at >= NOW() - (p_days || ' days')::INTERVAL
+        AND pcc.old_our_retail_price IS NOT NULL
+        AND pcc.new_our_retail_price IS NOT NULL
+        AND pcc.old_our_retail_price != pcc.new_our_retail_price
+    ),
+    day_counts AS (
+        -- Count price changes by entity and day of week
+        SELECT
+            cpc.competitor_id,
+            cpc.price_source,
+            cpc.day_of_week,
+            COUNT(*) as changes_count
+        FROM competitor_price_changes cpc
+        GROUP BY cpc.competitor_id, cpc.price_source, cpc.day_of_week
+    ),
+    most_active_days AS (
+        -- Find the day with most changes for each entity
+        SELECT DISTINCT ON (dc.competitor_id, dc.price_source)
+            dc.competitor_id,
+            dc.price_source,
+            dc.day_of_week as most_active_day_num
+        FROM day_counts dc
+        ORDER BY dc.competitor_id, dc.price_source, dc.changes_count DESC, dc.day_of_week
+    ),
+    entity_stats AS (
+        SELECT
+            cpc.competitor_id,
+            cpc.price_source,
+            COUNT(*) as total_price_changes,
+            COUNT(DISTINCT cpc.product_id) as products_with_changes,
+            COUNT(*)::NUMERIC / COUNT(DISTINCT cpc.product_id) as avg_changes_per_product,
+            COUNT(*) FILTER (WHERE cpc.new_price > cpc.old_price) as price_increases,
+            COUNT(*) FILTER (WHERE cpc.new_price < cpc.old_price) as price_decreases,
+            AVG(ABS(cpc.price_change_percentage)) as avg_change_percentage
+        FROM competitor_price_changes cpc
+        GROUP BY cpc.competitor_id, cpc.price_source
+    )
+    SELECT
+        CASE 
+            WHEN es.price_source = 'integration' THEN NULL
+            ELSE es.competitor_id
+        END as competitor_id,
+        CASE 
+            WHEN es.price_source = 'integration' THEN COALESCE(i.name, 'Our Company')
+            ELSE c.name 
+        END as competitor_name,
+        es.total_price_changes::INTEGER,
+        es.products_with_changes::INTEGER,
+        ROUND(es.avg_changes_per_product, 2) as avg_changes_per_product,
+        es.price_increases::INTEGER,
+        es.price_decreases::INTEGER,
+        ROUND(es.avg_change_percentage, 2) as avg_change_percentage,
+        CASE COALESCE(mad.most_active_day_num, -1)
+            WHEN 1 THEN 'Monday'
+            WHEN 2 THEN 'Tuesday'
+            WHEN 3 THEN 'Wednesday'
+            WHEN 4 THEN 'Thursday'
+            WHEN 5 THEN 'Friday'
+            WHEN 6 THEN 'Saturday'
+            WHEN 0 THEN 'Sunday'
+            ELSE 'Unknown'
+        END as most_active_day,
+        (es.price_source = 'integration') as is_integration
+    FROM entity_stats es
+    LEFT JOIN competitors c ON es.competitor_id = c.id AND es.price_source = 'competitor'
+    LEFT JOIN integrations i ON es.competitor_id = i.id AND es.price_source = 'integration'
+    LEFT JOIN most_active_days mad ON es.competitor_id = mad.competitor_id AND es.price_source = mad.price_source
+    WHERE (c.user_id = p_user_id OR i.user_id = p_user_id)
+    ORDER BY es.total_price_changes DESC;
+END;
+$$;
+
+
+--
+-- Name: get_competitor_statistics(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_competitor_statistics(p_user_id uuid) RETURNS TABLE(competitor_id uuid, product_count bigint, brand_count bigint)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  RETURN QUERY
+  WITH competitor_products AS (
+    -- Get distinct product IDs for each competitor
+    SELECT DISTINCT
+      pc.competitor_id,
+      pc.product_id
+    FROM
+      price_changes_competitors pc
+    WHERE
+      pc.user_id = p_user_id
+  ),
+  product_counts AS (
+    -- Count products per competitor
+    SELECT
+      cp.competitor_id,
+      COUNT(cp.product_id) AS product_count
+    FROM
+      competitor_products cp
+    GROUP BY
+      cp.competitor_id
+  ),
+  brand_counts AS (
+    -- Count distinct brands per competitor
+    SELECT
+      cp.competitor_id,
+      COUNT(DISTINCT p.brand_id) AS brand_count
+    FROM
+      competitor_products cp
+    JOIN
+      products p ON cp.product_id = p.id
+    WHERE
+      p.user_id = p_user_id
+      AND p.brand_id IS NOT NULL
+    GROUP BY
+      cp.competitor_id
+  )
+  SELECT
+    c.id AS competitor_id,
+    COALESCE(pc.product_count, 0) AS product_count,
+    COALESCE(bc.brand_count, 0) AS brand_count
+  FROM
+    competitors c
+  LEFT JOIN
+    product_counts pc ON c.id = pc.competitor_id
+  LEFT JOIN
+    brand_counts bc ON c.id = bc.competitor_id
+  WHERE
+    c.user_id = p_user_id;
+END;
+$$;
+
+
+--
+-- Name: get_comprehensive_analysis_summary(uuid, uuid, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_comprehensive_analysis_summary(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS json
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    result JSON;
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+    date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+BEGIN
+    SELECT json_build_object(
+        'total_sales', (
+            SELECT COALESCE(SUM(ABS(stock_change_quantity)), 0)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+              AND stock_change_quantity < 0
+              AND changed_at >= date_filter_start
+              AND changed_at <= date_filter_end
+              AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+        ),
+        'total_revenue', (
+            SELECT COALESCE(SUM(ABS(sc.stock_change_quantity) * pc_latest.new_competitor_price), 0)
+            FROM stock_changes_competitors sc
+            LEFT JOIN LATERAL (
+                SELECT new_competitor_price
+                FROM price_changes_competitors pc2
+                WHERE pc2.product_id = sc.product_id
+                  AND pc2.user_id = p_user_id
+                  AND pc2.changed_at <= sc.changed_at
+                  AND (p_competitor_id IS NULL OR pc2.competitor_id = p_competitor_id)
+                ORDER BY pc2.changed_at DESC
+                LIMIT 1
+            ) pc_latest ON true
+            WHERE sc.user_id = p_user_id
+              AND sc.stock_change_quantity < 0
+              AND sc.changed_at >= date_filter_start
+              AND sc.changed_at <= date_filter_end
+              AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+        ),
+        'unique_products_sold', (
+            SELECT COUNT(DISTINCT product_id)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+              AND stock_change_quantity < 0
+              AND changed_at >= date_filter_start
+              AND changed_at <= date_filter_end
+              AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+        ),
+        'unique_brands_sold', (
+            SELECT COUNT(DISTINCT p.brand)
+            FROM stock_changes_competitors sc
+            JOIN products p ON sc.product_id = p.id
+            WHERE sc.user_id = p_user_id
+              AND sc.stock_change_quantity < 0
+              AND sc.changed_at >= date_filter_start
+              AND sc.changed_at <= date_filter_end
+              AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+        ),
+        'total_inventory_value', (
+            WITH current_stock AS (
+                SELECT DISTINCT ON (product_id, competitor_id)
+                    product_id, new_stock_quantity
+                FROM stock_changes_competitors
+                WHERE user_id = p_user_id 
+                  AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+                ORDER BY product_id, competitor_id, changed_at DESC
+            )
+            SELECT COALESCE(SUM(cs.new_stock_quantity * pc_latest.new_competitor_price), 0)
+            FROM current_stock cs
+            LEFT JOIN LATERAL (
+                SELECT new_competitor_price
+                FROM price_changes_competitors pc2
+                WHERE pc2.product_id = cs.product_id 
+                  AND pc2.user_id = p_user_id
+                  AND (p_competitor_id IS NULL OR pc2.competitor_id = p_competitor_id)
+                ORDER BY pc2.changed_at DESC
+                LIMIT 1
+            ) pc_latest ON true
+            WHERE cs.new_stock_quantity > 0
+        ),
+        'dead_stock_count', (
+            SELECT COUNT(DISTINCT p.id)
+            FROM products p
+            LEFT JOIN stock_changes_competitors sc ON p.id = sc.product_id 
+              AND sc.user_id = p_user_id
+              AND sc.stock_change_quantity < 0
+              AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+            WHERE p.user_id = p_user_id
+              AND (sc.changed_at IS NULL OR sc.changed_at < NOW() - INTERVAL '30 days')
+        ),
+        'avg_daily_sales', (
+            WITH daily_sales AS (
+                SELECT DATE(changed_at) as sale_date, SUM(ABS(stock_change_quantity)) as daily_total
+                FROM stock_changes_competitors
+                WHERE user_id = p_user_id
+                  AND stock_change_quantity < 0
+                  AND changed_at >= date_filter_start
+                  AND changed_at <= date_filter_end
+                  AND (p_competitor_id IS NULL OR competitor_id = p_competitor_id)
+                GROUP BY DATE(changed_at)
+            )
+            SELECT COALESCE(AVG(daily_total), 0) FROM daily_sales
+        )
+    ) INTO result;
+    
+    RETURN result;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_comprehensive_analysis_summary(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_comprehensive_analysis_summary(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone) IS 'Returns comprehensive summary statistics for all stock analysis modules';
+
+
+--
+-- Name: get_conversation_summary(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_conversation_summary(user_uuid uuid) RETURNS TABLE(conversation_id uuid, subject text, status text, category text, priority text, created_at timestamp with time zone, updated_at timestamp with time zone, total_messages bigint, unread_messages bigint, last_message_content text, last_message_sender text, last_message_time timestamp with time zone)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  RETURN QUERY
+  SELECT 
+    sc.id as conversation_id,
+    sc.subject,
+    sc.status,
+    sc.category,
+    sc.priority,
+    sc.created_at,
+    sc.updated_at,
+    COUNT(sm.id) as total_messages,
+    COUNT(CASE WHEN sm.sender_type = 'admin' AND sm.read_by_recipient = FALSE THEN 1 END) as unread_messages,
+    (
+      SELECT sm2.message_content 
+      FROM support_messages sm2 
+      WHERE sm2.conversation_id = sc.id 
+      ORDER BY sm2.created_at DESC 
+      LIMIT 1
+    ) as last_message_content,
+    (
+      SELECT sm2.sender_type 
+      FROM support_messages sm2 
+      WHERE sm2.conversation_id = sc.id 
+      ORDER BY sm2.created_at DESC 
+      LIMIT 1
+    ) as last_message_sender,
+    (
+      SELECT sm2.created_at 
+      FROM support_messages sm2 
+      WHERE sm2.conversation_id = sc.id 
+      ORDER BY sm2.created_at DESC 
+      LIMIT 1
+    ) as last_message_time
+  FROM support_conversations sc
+  LEFT JOIN support_messages sm ON sc.id = sm.conversation_id
+  WHERE sc.user_id = user_uuid
+  GROUP BY sc.id, sc.subject, sc.status, sc.category, sc.priority, sc.created_at, sc.updated_at
+  ORDER BY sc.updated_at DESC;
+END;
+$$;
+
+
+--
+-- Name: get_cron_jobs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_cron_jobs() RETURNS TABLE(jobid bigint, schedule text, command text, nodename text, nodeport integer, database text, username text, active boolean, jobname text)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    -- Return cron jobs data
+    RETURN QUERY
+    SELECT 
+        j.jobid,
+        j.schedule,
+        j.command,
+        j.nodename,
+        j.nodeport,
+        j.database,
+        j.username,
+        j.active,
+        j.jobname
+    FROM cron.job j
+    ORDER BY j.jobname;
+EXCEPTION
+    WHEN OTHERS THEN
+        -- If any error occurs, return empty result
+        RETURN;
+END;
+$$;
+
+
+--
+-- Name: get_cross_docking_friendly_brands(uuid, integer, numeric); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_cross_docking_friendly_brands(p_user_id uuid, p_min_products integer DEFAULT 100, p_max_avg_stock numeric DEFAULT 50.0) RETURNS TABLE(brand_name text, total_products integer, competitor_count integer, avg_stock_level numeric, products_with_low_stock integer, low_stock_percentage numeric, avg_competitor_price numeric, stock_turnover_indicator text, cross_docking_suitability_score numeric, suitability_reason text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH our_brands AS (
+        -- Brands we already have products for
+        SELECT DISTINCT brand
+        FROM products 
+        WHERE user_id = p_user_id
+            AND brand IS NOT NULL
+            AND (our_wholesale_price IS NOT NULL OR our_retail_price IS NOT NULL)
+    ),
+    recent_stock_data AS (
+        -- Get recent stock data per brand (excluding brands we already have)
+        SELECT DISTINCT ON (scc.product_id, scc.competitor_id)
+            p.brand,
+            scc.product_id,
+            scc.competitor_id,
+            scc.new_stock_quantity,
+            scc.new_stock_status
+        FROM stock_changes_competitors scc
+        JOIN products p ON scc.product_id = p.id
+        WHERE scc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND scc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+        ORDER BY scc.product_id, scc.competitor_id, scc.changed_at DESC
+    ),
+    recent_price_data AS (
+        -- Get recent price data for the same brands (excluding brands we already have)
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            p.brand,
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND pcc.new_competitor_price IS NOT NULL
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    brand_stock_analysis AS (
+        SELECT 
+            rsd.brand,
+            COUNT(DISTINCT rsd.product_id) as total_products,
+            COUNT(DISTINCT rsd.competitor_id) as competitor_count,
+            AVG(COALESCE(rsd.new_stock_quantity, 0)) as avg_stock_level,
+            SUM(CASE WHEN COALESCE(rsd.new_stock_quantity, 0) <= 10 THEN 1 ELSE 0 END) as low_stock_products,
+            AVG(rpd.new_competitor_price) as avg_price
+        FROM recent_stock_data rsd
+        LEFT JOIN recent_price_data rpd ON rsd.brand = rpd.brand AND rsd.product_id = rpd.product_id AND rsd.competitor_id = rpd.competitor_id
+        GROUP BY rsd.brand
+        HAVING COUNT(DISTINCT rsd.product_id) >= p_min_products
+    ),
+    stock_turnover_analysis AS (
+        -- Analyze stock changes to estimate turnover (excluding brands we already have)
+        SELECT 
+            p.brand,
+            COUNT(*) as stock_change_events,
+            COUNT(DISTINCT scc.product_id) as products_with_changes,
+            AVG(ABS(COALESCE(scc.stock_change_quantity, 0))) as avg_stock_change
+        FROM stock_changes_competitors scc
+        JOIN products p ON scc.product_id = p.id
+        WHERE scc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND scc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+            AND scc.stock_change_quantity IS NOT NULL
+            AND ABS(scc.stock_change_quantity) > 0
+        GROUP BY p.brand
+    )
+    SELECT 
+        bsa.brand::TEXT,
+        bsa.total_products::INTEGER,
+        bsa.competitor_count::INTEGER,
+        ROUND(bsa.avg_stock_level, 2) as avg_stock_level,
+        bsa.low_stock_products::INTEGER,
+        ROUND((bsa.low_stock_products::NUMERIC / bsa.total_products * 100), 2) as low_stock_percentage,
+        ROUND(COALESCE(bsa.avg_price, 0), 2) as avg_competitor_price,
+        
+        -- Stock turnover indicator
+        CASE 
+            WHEN COALESCE(sta.stock_change_events, 0) >= bsa.total_products * 0.5 THEN 'High Turnover'
+            WHEN COALESCE(sta.stock_change_events, 0) >= bsa.total_products * 0.2 THEN 'Medium Turnover'
+            ELSE 'Low Turnover'
+        END::TEXT as stock_turnover_indicator,
+        
+        -- Cross-docking suitability score (0-100)
+        ROUND(
+            -- Low average stock (40 points max)
+            (CASE WHEN bsa.avg_stock_level <= p_max_avg_stock THEN 
+                40 * (1 - (bsa.avg_stock_level / p_max_avg_stock))
+            ELSE 0 END) +
+            
+            -- High percentage of low stock products (30 points max)
+            (LEAST(30, (bsa.low_stock_products::NUMERIC / bsa.total_products * 100) * 0.3)) +
+            
+            -- Multiple competitors (indicates market demand) (20 points max)
+            (LEAST(20, bsa.competitor_count * 4)) +
+            
+            -- Stock turnover activity (10 points max)
+            (CASE WHEN COALESCE(sta.stock_change_events, 0) > 0 THEN
+                LEAST(10, (sta.stock_change_events::NUMERIC / bsa.total_products * 10))
+            ELSE 0 END)
+        , 2) as cross_docking_suitability_score,
+        
+        -- Suitability reason
+        CASE 
+            WHEN bsa.avg_stock_level <= p_max_avg_stock AND (bsa.low_stock_products::NUMERIC / bsa.total_products) >= 0.6 THEN
+                'Low stock levels indicate JIT/cross-docking model - NEW BRAND OPPORTUNITY'
+            WHEN bsa.avg_stock_level <= p_max_avg_stock AND bsa.competitor_count >= 3 THEN
+                'Low stock with multiple competitors suggests fast-moving products - NEW BRAND OPPORTUNITY'
+            WHEN (bsa.low_stock_products::NUMERIC / bsa.total_products) >= 0.5 THEN
+                'High percentage of low-stock products - NEW BRAND OPPORTUNITY'
+            WHEN COALESCE(sta.stock_change_events, 0) >= bsa.total_products * 0.3 THEN
+                'High stock turnover activity - NEW BRAND OPPORTUNITY'
+            ELSE
+                'Moderate suitability for cross-docking - NEW BRAND OPPORTUNITY'
+        END::TEXT as suitability_reason
+        
+    FROM brand_stock_analysis bsa
+    LEFT JOIN stock_turnover_analysis sta ON bsa.brand = sta.brand
+    WHERE bsa.avg_stock_level <= p_max_avg_stock  -- Filter by max average stock
+    ORDER BY cross_docking_suitability_score DESC, bsa.total_products DESC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_cross_docking_friendly_brands(p_user_id uuid, p_min_products integer, p_max_avg_stock numeric); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_cross_docking_friendly_brands(p_user_id uuid, p_min_products integer, p_max_avg_stock numeric) IS 'Finds brands suitable for cross-docking model based on low stock levels and turnover patterns';
+
+
+--
+-- Name: get_current_stock_analysis(uuid, uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_brand_filter text DEFAULT NULL::text) RETURNS TABLE(product_id uuid, product_name text, brand text, sku text, current_stock integer, current_price numeric, inventory_value numeric, in_stock_flag integer, total_products bigint, products_in_stock bigint, in_stock_percentage numeric, total_inventory_value numeric)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH current_stock AS (
+        SELECT DISTINCT ON (scc.product_id, scc.competitor_id)
+            scc.product_id, 
+            scc.competitor_id, 
+            scc.new_stock_quantity, 
+            scc.new_stock_status
+        FROM stock_changes_competitors scc
+        WHERE scc.user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR scc.competitor_id = p_competitor_id)
+        ORDER BY scc.product_id, scc.competitor_id, scc.changed_at DESC
+    ),
+    stock_analysis AS (
+        SELECT 
+            p.id as product_id,
+            p.name as product_name,
+            p.brand,
+            p.sku,
+            cs.new_stock_quantity as current_stock,
+            pc.new_competitor_price as current_price,
+            (COALESCE(cs.new_stock_quantity, 0) * COALESCE(pc.new_competitor_price, 0)) as inventory_value,
+            CASE WHEN cs.new_stock_quantity > 0 THEN 1 ELSE 0 END as in_stock_flag
+        FROM current_stock cs
+        JOIN products p ON cs.product_id = p.id
+        LEFT JOIN LATERAL (
+            SELECT pcc.new_competitor_price
+            FROM price_changes_competitors pcc
+            WHERE pcc.product_id = cs.product_id 
+              AND pcc.user_id = p_user_id
+              AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+            ORDER BY pcc.changed_at DESC
+            LIMIT 1
+        ) pc ON true
+        WHERE (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+    ),
+    totals AS (
+        SELECT 
+            COUNT(*) as total_products,
+            SUM(sa.in_stock_flag) as products_in_stock,
+            SUM(sa.inventory_value) as total_inventory_value
+        FROM stock_analysis sa
+    )
+    SELECT 
+        sa.product_id,
+        sa.product_name,
+        sa.brand,
+        sa.sku,
+        sa.current_stock,
+        sa.current_price,
+        sa.inventory_value,
+        sa.in_stock_flag,
+        t.total_products,
+        t.products_in_stock,
+        CASE 
+            WHEN t.total_products > 0 THEN (t.products_in_stock::NUMERIC / t.total_products * 100)
+            ELSE 0 
+        END as in_stock_percentage,
+        t.total_inventory_value
+    FROM stock_analysis sa
+    CROSS JOIN totals t
+    ORDER BY sa.current_stock DESC NULLS LAST;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid, p_brand_filter text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_current_stock_analysis(p_user_id uuid, p_competitor_id uuid, p_brand_filter text) IS 'Returns current stock levels, inventory values, and stock distribution analysis - Fixed ambiguous column reference';
+
+
+--
+-- Name: get_dismissed_product_duplicates(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_dismissed_product_duplicates(p_user_id uuid) RETURNS TABLE(id uuid, product_id_1 uuid, product_id_2 uuid, product_name_1 text, product_name_2 text, dismissal_key text, dismissed_at timestamp without time zone)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        pdd.id,
+        pdd.product_id_1,
+        pdd.product_id_2,
+        p1.name AS product_name_1,
+        p2.name AS product_name_2,
+        pdd.dismissal_key,
+        pdd.dismissed_at
+    FROM products_dismissed_duplicates pdd
+    LEFT JOIN products p1 ON pdd.product_id_1 = p1.id
+    LEFT JOIN products p2 ON pdd.product_id_2 = p2.id
+    WHERE pdd.user_id = p_user_id
+    ORDER BY pdd.dismissed_at DESC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_dismissed_product_duplicates(p_user_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_dismissed_product_duplicates(p_user_id uuid) IS 'Gets all dismissed product duplicates for a user';
+
+
+--
+-- Name: get_integration_run_stats(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_integration_run_stats(run_id uuid) RETURNS jsonb
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    stats JSONB;
+    processed_count INTEGER;
+    error_count INTEGER;
+    pending_count INTEGER;
+    price_changes_count INTEGER;
+BEGIN
+    -- Get counts from temp table
+    SELECT 
+        COUNT(*) FILTER (WHERE status = 'processed'),
+        COUNT(*) FILTER (WHERE status = 'error'),
+        COUNT(*) FILTER (WHERE status = 'pending')
+    INTO processed_count, error_count, pending_count
+    FROM temp_integrations_scraped_data
+    WHERE integration_run_id = run_id;
+    
+    -- Get count of price changes created for this integration run
+    SELECT COUNT(*)
+    INTO price_changes_count
+    FROM price_changes_competitors pc
+    JOIN integration_runs ir ON pc.integration_id = ir.integration_id
+    WHERE ir.id = run_id
+    AND pc.changed_at >= ir.started_at;
+    
+    -- Build stats object
+    SELECT jsonb_build_object(
+        'processed', COALESCE(processed_count, 0),
+        'created', COALESCE(price_changes_count, 0),
+        'updated', 0, -- We'll count all as created for simplicity
+        'errors', COALESCE(error_count, 0),
+        'pending', COALESCE(pending_count, 0)
+    ) INTO stats;
+
+    RETURN stats;
+END;
+$$;
+
+
+--
+-- Name: get_latest_competitor_prices(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_competitor_prices(p_user_id uuid, p_product_id uuid) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_competitor_price numeric, new_competitor_price numeric, old_our_retail_price numeric, new_our_retail_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH AllPrices AS (
+        SELECT 
+            pc.id,
+            pc.product_id,
+            pc.competitor_id,
+            pc.integration_id,
+            pc.old_competitor_price,
+            pc.new_competitor_price,
+            pc.old_our_retail_price,
+            pc.new_our_retail_price,
+            pc.price_change_percentage,
+            pc.currency_code,
+            pc.changed_at,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN 'competitor'::TEXT 
+                ELSE 'integration'::TEXT 
+            END AS source_type,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN c.name 
+                ELSE i.name 
+            END AS source_name,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN c.website 
+                ELSE NULL::TEXT 
+            END AS source_website,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN NULL::TEXT 
+                ELSE i.platform 
+            END AS source_platform,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN pc.competitor_id 
+                ELSE pc.integration_id 
+            END AS source_id,
+            COALESCE(pc.competitor_url, pc.our_url, p.our_url) AS url, -- Updated to use new field names
+            ROW_NUMBER() OVER(
+                PARTITION BY 
+                COALESCE(pc.competitor_id, pc.integration_id), 
+                CASE WHEN pc.competitor_id IS NOT NULL THEN 'competitor' ELSE 'integration' END 
+                ORDER BY pc.changed_at DESC
+            ) as rn
+        FROM price_changes_competitors pc
+        LEFT JOIN competitors c ON pc.competitor_id = c.id
+        LEFT JOIN integrations i ON pc.integration_id = i.id
+        LEFT JOIN products p ON pc.product_id = p.id
+        WHERE pc.user_id = p_user_id
+          AND pc.product_id = p_product_id
+    )
+    SELECT 
+        ap.id,
+        ap.product_id,
+        ap.competitor_id,
+        ap.integration_id,
+        ap.old_competitor_price,
+        ap.new_competitor_price,
+        ap.old_our_retail_price,
+        ap.new_our_retail_price,
+        ap.price_change_percentage,
+        ap.currency_code,
+        ap.changed_at,
+        ap.source_type,
+        ap.source_name,
+        ap.source_website,
+        ap.source_platform,
+        ap.source_id,
+        ap.url
+    FROM AllPrices ap
+    WHERE ap.rn = 1
+    ORDER BY COALESCE(ap.new_competitor_price, ap.new_our_retail_price) ASC;
+END;
+$$;
+
+
+--
+-- Name: get_latest_competitor_prices_batch(uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_competitor_prices_batch(p_user_id uuid, p_product_ids uuid[]) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_competitor_price numeric, new_competitor_price numeric, old_our_retail_price numeric, new_our_retail_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH AllPrices AS (
+        SELECT 
+            pc.id,
+            pc.product_id,
+            pc.competitor_id,
+            pc.integration_id,
+            pc.old_competitor_price,
+            pc.new_competitor_price,
+            pc.old_our_retail_price,
+            pc.new_our_retail_price,
+            pc.price_change_percentage,
+            pc.currency_code,
+            pc.changed_at,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN 'competitor'::TEXT 
+                ELSE 'integration'::TEXT 
+            END AS source_type,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN c.name 
+                ELSE i.name 
+            END AS source_name,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN c.website 
+                ELSE NULL::TEXT 
+            END AS source_website,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN NULL::TEXT 
+                ELSE i.platform 
+            END AS source_platform,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN pc.competitor_id 
+                ELSE pc.integration_id 
+            END AS source_id,
+            COALESCE(pc.competitor_url, pc.our_url, p.our_url) AS url, -- Updated to use new field names
+            ROW_NUMBER() OVER(
+                PARTITION BY pc.product_id, 
+                COALESCE(pc.competitor_id, pc.integration_id), 
+                CASE WHEN pc.competitor_id IS NOT NULL THEN 'competitor' ELSE 'integration' END 
+                ORDER BY pc.changed_at DESC
+            ) as rn
+        FROM price_changes_competitors pc
+        LEFT JOIN competitors c ON pc.competitor_id = c.id
+        LEFT JOIN integrations i ON pc.integration_id = i.id
+        LEFT JOIN products p ON pc.product_id = p.id
+        WHERE pc.user_id = p_user_id
+          AND pc.product_id = ANY(p_product_ids)
+    )
+    SELECT 
+        ap.id,
+        ap.product_id,
+        ap.competitor_id,
+        ap.integration_id,
+        ap.old_competitor_price,
+        ap.new_competitor_price,
+        ap.old_our_retail_price,
+        ap.new_our_retail_price,
+        ap.price_change_percentage,
+        ap.currency_code,
+        ap.changed_at,
+        ap.source_type,
+        ap.source_name,
+        ap.source_website,
+        ap.source_platform,
+        ap.source_id,
+        ap.url
+    FROM AllPrices ap
+    WHERE ap.rn = 1
+    ORDER BY COALESCE(ap.new_competitor_price, ap.new_our_retail_price) ASC;
+END;
+$$;
+
+
+--
+-- Name: get_latest_competitor_prices_batch_filtered(uuid, uuid[], uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_competitor_prices_batch_filtered(p_user_id uuid, p_product_ids uuid[], p_competitor_ids uuid[] DEFAULT NULL::uuid[]) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_competitor_price numeric, new_competitor_price numeric, old_our_retail_price numeric, new_our_retail_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH AllPrices AS (
+        SELECT 
+            pc.id,
+            pc.product_id,
+            pc.competitor_id,
+            pc.integration_id,
+            pc.old_competitor_price,
+            pc.new_competitor_price,
+            pc.old_our_retail_price,
+            pc.new_our_retail_price,
+            pc.price_change_percentage,
+            pc.currency_code,
+            pc.changed_at,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN 'competitor'::TEXT 
+                ELSE 'integration'::TEXT 
+            END AS source_type,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN c.name 
+                ELSE i.name 
+            END AS source_name,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN c.website 
+                ELSE NULL::TEXT 
+            END AS source_website,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN NULL::TEXT 
+                ELSE i.platform 
+            END AS source_platform,
+            CASE 
+                WHEN pc.competitor_id IS NOT NULL THEN pc.competitor_id 
+                ELSE pc.integration_id 
+            END AS source_id,
+            COALESCE(pc.competitor_url, pc.our_url, p.our_url) AS url,
+            ROW_NUMBER() OVER(
+                PARTITION BY pc.product_id, 
+                COALESCE(pc.competitor_id, pc.integration_id), 
+                CASE WHEN pc.competitor_id IS NOT NULL THEN 'competitor' ELSE 'integration' END 
+                ORDER BY pc.changed_at DESC
+            ) as rn
+        FROM price_changes_competitors pc
+        LEFT JOIN competitors c ON pc.competitor_id = c.id
+        LEFT JOIN integrations i ON pc.integration_id = i.id
+        LEFT JOIN products p ON pc.product_id = p.id
+        WHERE pc.user_id = p_user_id
+          AND pc.product_id = ANY(p_product_ids)
+          AND (
+            p_competitor_ids IS NULL OR 
+            pc.competitor_id = ANY(p_competitor_ids) OR 
+            pc.integration_id = ANY(p_competitor_ids)
+          )
+    )
+    SELECT 
+        ap.id,
+        ap.product_id,
+        ap.competitor_id,
+        ap.integration_id,
+        ap.old_competitor_price,
+        ap.new_competitor_price,
+        ap.old_our_retail_price,
+        ap.new_our_retail_price,
+        ap.price_change_percentage,
+        ap.currency_code,
+        ap.changed_at,
+        ap.source_type,
+        ap.source_name,
+        ap.source_website,
+        ap.source_platform,
+        ap.source_id,
+        ap.url
+    FROM AllPrices ap
+    WHERE ap.rn = 1
+    ORDER BY COALESCE(ap.new_competitor_price, ap.new_our_retail_price) ASC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_latest_competitor_prices_batch_filtered(p_user_id uuid, p_product_ids uuid[], p_competitor_ids uuid[]); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_latest_competitor_prices_batch_filtered(p_user_id uuid, p_product_ids uuid[], p_competitor_ids uuid[]) IS 'Gets the latest competitor prices for multiple products with optional competitor filtering';
+
+
+--
+-- Name: get_latest_competitor_stock(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_competitor_stock(p_user_id uuid, p_product_id uuid) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, current_stock_quantity integer, current_stock_status text, current_availability_date date, last_stock_change integer, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        sc.id,
+        sc.product_id,
+        sc.competitor_id,
+        sc.integration_id,
+        sc.new_stock_quantity as current_stock_quantity,
+        sc.new_stock_status as current_stock_status,
+        sc.new_availability_date as current_availability_date,
+        sc.stock_change_quantity as last_stock_change,
+        sc.changed_at,
+        CASE 
+            WHEN sc.competitor_id IS NOT NULL THEN 'competitor'
+            WHEN sc.integration_id IS NOT NULL THEN 'integration'
+            ELSE 'unknown'
+        END as source_type,
+        COALESCE(c.name, i.name, 'Unknown') as source_name,
+        COALESCE(c.website, '') as source_website,
+        COALESCE(sc.competitor_id, sc.integration_id) as source_id,
+        COALESCE(pc.competitor_url, pc.our_url, '') as url  -- Updated to use new field names
+    FROM stock_changes_competitors sc
+    LEFT JOIN competitors c ON sc.competitor_id = c.id
+    LEFT JOIN integrations i ON sc.integration_id = i.id
+    LEFT JOIN LATERAL (
+        SELECT pc.competitor_url, pc.our_url
+        FROM price_changes_competitors pc
+        WHERE pc.user_id = p_user_id
+          AND pc.product_id = p_product_id
+          AND COALESCE(pc.competitor_id, pc.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
+        ORDER BY pc.changed_at DESC
+        LIMIT 1
+    ) pc ON true
+    WHERE sc.user_id = p_user_id
+      AND sc.product_id = p_product_id
+      AND sc.id IN (
+          -- Get the latest stock record for each competitor/integration
+          SELECT DISTINCT ON (sc2.competitor_id, sc2.integration_id) sc2.id
+          FROM stock_changes_competitors sc2
+          WHERE sc2.user_id = p_user_id
+            AND sc2.product_id = p_product_id
+          ORDER BY sc2.competitor_id, sc2.integration_id, sc2.changed_at DESC
+      )
+    ORDER BY sc.changed_at DESC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_latest_competitor_stock(p_user_id uuid, p_product_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_latest_competitor_stock(p_user_id uuid, p_product_id uuid) IS 'Gets the latest stock levels for a product from all competitors and integrations';
+
+
+--
+-- Name: get_latest_competitor_stock_batch(uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_competitor_stock_batch(p_user_id uuid, p_product_ids uuid[]) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, current_stock_quantity integer, current_stock_status text, current_availability_date date, last_stock_change integer, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        sc.id,
+        sc.product_id,
+        sc.competitor_id,
+        sc.integration_id,
+        sc.new_stock_quantity as current_stock_quantity,
+        sc.new_stock_status as current_stock_status,
+        sc.new_availability_date as current_availability_date,
+        sc.stock_change_quantity as last_stock_change,
+        sc.changed_at,
+        CASE 
+            WHEN sc.competitor_id IS NOT NULL THEN 'competitor'
+            WHEN sc.integration_id IS NOT NULL THEN 'integration'
+            ELSE 'unknown'
+        END as source_type,
+        COALESCE(c.name, i.name, 'Unknown') as source_name,
+        COALESCE(c.website, '') as source_website,
+        COALESCE(sc.competitor_id, sc.integration_id) as source_id,
+        COALESCE(pc.competitor_url, pc.our_url, '') as url  -- Updated to use new field names
+    FROM stock_changes_competitors sc
+    LEFT JOIN competitors c ON sc.competitor_id = c.id
+    LEFT JOIN integrations i ON sc.integration_id = i.id
+    LEFT JOIN LATERAL (
+        SELECT pc.competitor_url, pc.our_url
+        FROM price_changes_competitors pc
+        WHERE pc.user_id = p_user_id
+          AND pc.product_id = sc.product_id
+          AND COALESCE(pc.competitor_id, pc.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
+        ORDER BY pc.changed_at DESC
+        LIMIT 1
+    ) pc ON true
+    WHERE sc.user_id = p_user_id
+      AND sc.product_id = ANY(p_product_ids)
+      AND sc.id IN (
+          -- Get the latest stock record for each product/competitor/integration combination
+          SELECT DISTINCT ON (sc2.product_id, sc2.competitor_id, sc2.integration_id) sc2.id
+          FROM stock_changes_competitors sc2
+          WHERE sc2.user_id = p_user_id
+            AND sc2.product_id = ANY(p_product_ids)
+          ORDER BY sc2.product_id, sc2.competitor_id, sc2.integration_id, sc2.changed_at DESC
+      )
+    ORDER BY sc.product_id, sc.changed_at DESC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_latest_competitor_stock_batch(p_user_id uuid, p_product_ids uuid[]); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_latest_competitor_stock_batch(p_user_id uuid, p_product_ids uuid[]) IS 'Gets the latest stock levels for multiple products from all competitors and integrations in a single query';
+
+
+--
+-- Name: get_latest_supplier_prices_batch(uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_supplier_prices_batch(p_user_id uuid, p_product_ids uuid[]) RETURNS TABLE(id uuid, product_id uuid, supplier_id uuid, integration_id uuid, old_supplier_price numeric, new_supplier_price numeric, old_our_wholesale_price numeric, new_our_wholesale_price numeric, old_supplier_recommended_price numeric, new_supplier_recommended_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH AllPrices AS (
+        SELECT 
+            ps.id,
+            ps.product_id,
+            ps.supplier_id,
+            ps.integration_id,
+            ps.old_supplier_price,
+            ps.new_supplier_price,
+            ps.old_our_wholesale_price,
+            ps.new_our_wholesale_price,
+            ps.old_supplier_recommended_price,
+            ps.new_supplier_recommended_price,
+            ps.price_change_percentage,
+            ps.currency_code,
+            ps.changed_at,
+            CASE 
+                WHEN ps.supplier_id IS NOT NULL THEN 'supplier'::TEXT 
+                ELSE 'integration'::TEXT 
+            END AS source_type,
+            CASE 
+                WHEN ps.supplier_id IS NOT NULL THEN s.name 
+                ELSE i.name 
+            END AS source_name,
+            CASE 
+                WHEN ps.supplier_id IS NOT NULL THEN s.website 
+                ELSE NULL::TEXT 
+            END AS source_website,
+            CASE 
+                WHEN ps.supplier_id IS NOT NULL THEN NULL::TEXT 
+                ELSE i.platform 
+            END AS source_platform,
+            CASE 
+                WHEN ps.supplier_id IS NOT NULL THEN ps.supplier_id 
+                ELSE ps.integration_id 
+            END AS source_id,
+            COALESCE(ps.supplier_url, ps.our_url, p.our_url) AS url,
+            ROW_NUMBER() OVER(
+                PARTITION BY ps.product_id, 
+                COALESCE(ps.supplier_id, ps.integration_id), 
+                CASE WHEN ps.supplier_id IS NOT NULL THEN 'supplier' ELSE 'integration' END 
+                ORDER BY ps.changed_at DESC
+            ) as rn
+        FROM price_changes_suppliers ps
+        LEFT JOIN suppliers s ON ps.supplier_id = s.id
+        LEFT JOIN integrations i ON ps.integration_id = i.id
+        LEFT JOIN products p ON ps.product_id = p.id
+        WHERE ps.user_id = p_user_id
+          AND ps.product_id = ANY(p_product_ids)
+    )
+    SELECT 
+        ap.id,
+        ap.product_id,
+        ap.supplier_id,
+        ap.integration_id,
+        ap.old_supplier_price,
+        ap.new_supplier_price,
+        ap.old_our_wholesale_price,
+        ap.new_our_wholesale_price,
+        ap.old_supplier_recommended_price,
+        ap.new_supplier_recommended_price,
+        ap.price_change_percentage,
+        ap.currency_code,
+        ap.changed_at,
+        ap.source_type,
+        ap.source_name,
+        ap.source_website,
+        ap.source_platform,
+        ap.source_id,
+        ap.url
+    FROM AllPrices ap
+    WHERE ap.rn = 1
+    ORDER BY COALESCE(ap.new_supplier_price, ap.new_our_wholesale_price) ASC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_latest_supplier_prices_batch(p_user_id uuid, p_product_ids uuid[]); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_latest_supplier_prices_batch(p_user_id uuid, p_product_ids uuid[]) IS 'Gets the latest supplier prices for multiple products from all suppliers and integrations in a single query';
+
+
+--
+-- Name: get_latest_supplier_stock_batch(uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_latest_supplier_stock_batch(p_user_id uuid, p_product_ids uuid[]) RETURNS TABLE(product_id uuid, supplier_id uuid, integration_id uuid, new_stock_quantity integer, new_stock_status text, new_availability_date date, changed_at timestamp with time zone, supplier_name text, integration_name text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_stock AS (
+        SELECT DISTINCT ON (scs.product_id, COALESCE(scs.supplier_id, scs.integration_id))
+            scs.product_id,
+            scs.supplier_id,
+            scs.integration_id,
+            scs.new_stock_quantity,
+            scs.new_stock_status,
+            scs.new_availability_date,
+            scs.changed_at,
+            s.name as supplier_name,
+            i.name as integration_name
+        FROM stock_changes_suppliers scs
+        LEFT JOIN suppliers s ON scs.supplier_id = s.id
+        LEFT JOIN integrations i ON scs.integration_id = i.id
+        WHERE scs.user_id = p_user_id
+        AND scs.product_id = ANY(p_product_ids)
+        AND scs.new_stock_quantity IS NOT NULL
+        ORDER BY scs.product_id, COALESCE(scs.supplier_id, scs.integration_id), scs.changed_at DESC
+    )
+    SELECT 
+        ls.product_id,
+        ls.supplier_id,
+        ls.integration_id,
+        ls.new_stock_quantity,
+        ls.new_stock_status,
+        ls.new_availability_date,
+        ls.changed_at,
+        ls.supplier_name,
+        ls.integration_name
+    FROM latest_stock ls
+    ORDER BY ls.product_id, ls.changed_at DESC;
+END;
+$$;
+
+
+--
+-- Name: get_market_positioning_overview(uuid, text, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_market_positioning_overview(p_user_id uuid, p_brand_filter text DEFAULT NULL::text, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS TABLE(total_our_products integer, products_with_competitor_data integer, market_coverage_percentage numeric, competitive_products integer, overpriced_products integer, competitive_percentage numeric, avg_price_premium_percentage numeric, total_competitors integer, most_competitive_against text, least_competitive_against text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+    date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+BEGIN
+    RETURN QUERY
+    WITH our_products AS (
+        SELECT p.id, p.name, p.brand, p.our_retail_price
+        FROM products p
+        WHERE p.user_id = p_user_id
+        AND p.our_retail_price IS NOT NULL
+        AND p.is_active = true
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+    ),
+    latest_competitor_prices AS (
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.competitor_id IS NOT NULL
+        AND pcc.changed_at BETWEEN date_filter_start AND date_filter_end
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    product_min_prices AS (
+        SELECT
+            lcp.product_id,
+            MIN(lcp.new_competitor_price) as min_competitor_price,
+            COUNT(DISTINCT lcp.competitor_id) as competitor_count
+        FROM latest_competitor_prices lcp
+        GROUP BY lcp.product_id
+    ),
+    price_analysis AS (
+        SELECT
+            op.id,
+            op.our_retail_price,
+            pmp.min_competitor_price,
+            CASE
+                WHEN op.our_retail_price <= pmp.min_competitor_price THEN 'competitive'
+                ELSE 'overpriced'
+            END as price_status,
+            ((op.our_retail_price - pmp.min_competitor_price) / op.our_retail_price * 100) as price_premium_percentage
+        FROM our_products op
+        LEFT JOIN product_min_prices pmp ON op.id = pmp.product_id
+    ),
+    competitor_performance AS (
+        SELECT
+            c.name as competitor_name,
+            COUNT(*) FILTER (WHERE op.our_retail_price <= lcp.new_competitor_price) as products_we_beat,
+            COUNT(*) as total_comparisons
+        FROM our_products op
+        JOIN latest_competitor_prices lcp ON op.id = lcp.product_id
+        JOIN competitors c ON lcp.competitor_id = c.id
+        WHERE c.user_id = p_user_id
+        GROUP BY c.id, c.name
+    )
+    SELECT
+        (SELECT COUNT(*) FROM our_products)::INTEGER as total_our_products,
+        (SELECT COUNT(*) FROM price_analysis WHERE min_competitor_price IS NOT NULL)::INTEGER as products_with_competitor_data,
+        ROUND(
+            (SELECT COUNT(*) FROM price_analysis WHERE min_competitor_price IS NOT NULL)::NUMERIC /
+            (SELECT COUNT(*) FROM our_products) * 100,
+            2
+        ) as market_coverage_percentage,
+        (SELECT COUNT(*) FROM price_analysis WHERE price_status = 'competitive')::INTEGER as competitive_products,
+        (SELECT COUNT(*) FROM price_analysis WHERE price_status = 'overpriced')::INTEGER as overpriced_products,
+        ROUND(
+            (SELECT COUNT(*) FROM price_analysis WHERE price_status = 'competitive')::NUMERIC /
+            NULLIF((SELECT COUNT(*) FROM price_analysis WHERE min_competitor_price IS NOT NULL), 0) * 100,
+            2
+        ) as competitive_percentage,
+        ROUND(
+            (SELECT AVG(price_premium_percentage) FROM price_analysis WHERE price_premium_percentage > 0),
+            2
+        ) as avg_price_premium_percentage,
+        (SELECT COUNT(DISTINCT competitor_id) FROM latest_competitor_prices)::INTEGER as total_competitors,
+        (SELECT competitor_name FROM competitor_performance ORDER BY (products_we_beat::NUMERIC / total_comparisons) DESC LIMIT 1) as most_competitive_against,
+        (SELECT competitor_name FROM competitor_performance ORDER BY (products_we_beat::NUMERIC / total_comparisons) ASC LIMIT 1) as least_competitive_against;
+END;
+$$;
+
+
+--
+-- Name: get_or_create_unknown_brand(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_or_create_unknown_brand(user_id_param uuid) RETURNS uuid
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    brand_id_result UUID;
+BEGIN
+    -- Try to find existing 'Unknown' brand
+    SELECT id INTO brand_id_result
+    FROM public.brands
+    WHERE name = 'Unknown' AND user_id = user_id_param
+    LIMIT 1;
+
+    -- If not found, create it
+    IF brand_id_result IS NULL THEN
+        INSERT INTO public.brands (name, user_id, needs_review, is_active)
+        VALUES ('Unknown', user_id_param, TRUE, TRUE)
+        RETURNING id INTO brand_id_result;
+    END IF;
+
+    RETURN brand_id_result;
+END;
+$$;
+
+
+--
+-- Name: get_or_create_user_settings(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_or_create_user_settings(p_user_id uuid) RETURNS uuid
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+  v_settings_id UUID;
+BEGIN
+  -- Check if the user already has settings
+  SELECT id INTO v_settings_id
+  FROM public.user_settings
+  WHERE user_id = p_user_id
+  LIMIT 1;
+  
+  -- If not, create new user settings
+  IF v_settings_id IS NULL THEN
+    INSERT INTO public.user_settings (
+      user_id,
+      primary_currency,
+      currency_format,
+      matching_rules,
+      price_thresholds
+    ) VALUES (
+      p_user_id,
+      'SEK',
+      '#,##0.00',
+      '{"ean_priority": true, "sku_brand_fallback": true}'::jsonb,
+      '{"significant_increase": 10.0, "significant_decrease": 5.0}'::jsonb
+    )
+    RETURNING id INTO v_settings_id;
+  END IF;
+  
+  RETURN v_settings_id;
+END;
+$$;
+
+
+--
+-- Name: get_price_competitiveness_trends(uuid, date, date, uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_price_competitiveness_trends(p_user_id uuid, p_start_date date DEFAULT (CURRENT_DATE - '30 days'::interval), p_end_date date DEFAULT CURRENT_DATE, p_competitor_id uuid DEFAULT NULL::uuid, p_brand_filter text DEFAULT NULL::text) RETURNS TABLE(snapshot_date date, competitor_id uuid, competitor_name text, brand_filter text, total_products integer, products_we_are_cheapest integer, products_we_are_same_price integer, products_we_are_more_expensive integer, cheapest_percentage numeric, same_price_percentage numeric, more_expensive_percentage numeric, avg_price_difference_when_higher numeric, total_potential_savings numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        s.snapshot_date,
+        s.competitor_id,
+        COALESCE(c.name, 'All Competitors') as competitor_name,
+        s.brand_filter,
+        s.total_products_analyzed,
+        s.products_we_are_cheapest,
+        s.products_we_are_same_price,
+        s.products_we_are_more_expensive,
+        s.cheapest_percentage,
+        s.same_price_percentage,
+        s.more_expensive_percentage,
+        s.avg_price_difference_when_higher,
+        s.total_potential_savings
+    FROM daily_price_competitiveness_snapshots s
+    LEFT JOIN competitors c ON s.competitor_id = c.id
+    WHERE s.user_id = p_user_id
+        AND s.snapshot_date BETWEEN p_start_date AND p_end_date
+        AND (
+            (p_competitor_id IS NULL AND s.competitor_id IS NULL) OR
+            (p_competitor_id IS NOT NULL AND s.competitor_id = p_competitor_id)
+        )
+        AND (
+            (p_brand_filter IS NULL AND s.brand_filter IS NULL) OR
+            (p_brand_filter IS NOT NULL AND s.brand_filter = p_brand_filter)
+        )
+    ORDER BY s.snapshot_date ASC, COALESCE(c.name, 'All Competitors');
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_price_competitiveness_trends(p_user_id uuid, p_start_date date, p_end_date date, p_competitor_id uuid, p_brand_filter text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_price_competitiveness_trends(p_user_id uuid, p_start_date date, p_end_date date, p_competitor_id uuid, p_brand_filter text) IS 'Retrieves historical price competitiveness trends from stored snapshots.
+Parameters:
+- p_user_id: The user ID to retrieve data for
+- p_start_date: Start date for the trend period (default: 30 days ago)
+- p_end_date: End date for the trend period (default: today)
+- p_competitor_id: Filter by specific competitor (NULL for all competitors)
+- p_brand_filter: Filter by specific brand (NULL for all brands)';
+
+
+--
+-- Name: get_price_range_analysis(uuid, uuid, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_price_range_analysis(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone) RETURNS TABLE(price_range text, unique_products bigint, total_units_sold bigint, total_revenue numeric, avg_price_in_range numeric, revenue_percentage numeric, range_order integer)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+    date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+BEGIN
+    RETURN QUERY
+    WITH price_ranges AS (
+        SELECT 
+            CASE 
+                WHEN pc.new_competitor_price <= 500 THEN '1-500'
+                WHEN pc.new_competitor_price <= 1000 THEN '501-1000'
+                WHEN pc.new_competitor_price <= 1500 THEN '1001-1500'
+                WHEN pc.new_competitor_price <= 2000 THEN '1501-2000'
+                WHEN pc.new_competitor_price <= 3000 THEN '2001-3000'
+                ELSE '3000+'
+            END as price_range,
+            CASE 
+                WHEN pc.new_competitor_price <= 500 THEN 1
+                WHEN pc.new_competitor_price <= 1000 THEN 2
+                WHEN pc.new_competitor_price <= 1500 THEN 3
+                WHEN pc.new_competitor_price <= 2000 THEN 4
+                WHEN pc.new_competitor_price <= 3000 THEN 5
+                ELSE 6
+            END as range_order,
+            pc.new_competitor_price,
+            p.name,
+            p.brand,
+            ABS(sc.stock_change_quantity) as units_sold,
+            ABS(sc.stock_change_quantity) * pc.new_competitor_price as revenue
+        FROM stock_changes_competitors sc
+        JOIN products p ON sc.product_id = p.id
+        JOIN price_changes_competitors pc ON pc.product_id = p.id
+        WHERE sc.stock_change_quantity < 0 
+          AND sc.user_id = p_user_id
+          AND pc.user_id = p_user_id
+          AND sc.changed_at >= date_filter_start
+          AND sc.changed_at <= date_filter_end
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+          AND (p_competitor_id IS NULL OR pc.competitor_id = p_competitor_id)
+          -- Match price change to stock change timing
+          AND pc.changed_at <= sc.changed_at
+          AND pc.changed_at = (
+              SELECT MAX(pc2.changed_at)
+              FROM price_changes_competitors pc2
+              WHERE pc2.product_id = pc.product_id
+                AND pc2.user_id = pc.user_id
+                AND pc2.changed_at <= sc.changed_at
+                AND (p_competitor_id IS NULL OR pc2.competitor_id = p_competitor_id)
+          )
+    ),
+    range_analysis AS (
+        SELECT 
+            pr.price_range,
+            pr.range_order,
+            COUNT(DISTINCT pr.name) as unique_products,
+            SUM(pr.units_sold) as total_units_sold,
+            SUM(pr.revenue) as total_revenue,
+            AVG(pr.new_competitor_price) as avg_price_in_range
+        FROM price_ranges pr
+        GROUP BY pr.price_range, pr.range_order
+    ),
+    totals AS (
+        SELECT SUM(ra.total_revenue) as grand_total_revenue FROM range_analysis ra
+    )
+    SELECT 
+        ra.price_range,
+        ra.unique_products,
+        ra.total_units_sold,
+        ra.total_revenue,
+        ra.avg_price_in_range,
+        CASE 
+            WHEN t.grand_total_revenue > 0 THEN (ra.total_revenue / t.grand_total_revenue * 100)
+            ELSE 0 
+        END as revenue_percentage,
+        ra.range_order
+    FROM range_analysis ra
+    CROSS JOIN totals t
+    ORDER BY ra.range_order;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_price_range_analysis(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_price_range_analysis(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone) IS 'Returns sales distribution analysis across different price segments';
+
+
+--
+-- Name: get_priority_products_for_repricing(uuid, uuid, text, integer, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_priority_products_for_repricing(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_brand_filter text DEFAULT NULL::text, p_limit integer DEFAULT 50, p_offset integer DEFAULT 0) RETURNS TABLE(product_id uuid, product_name text, product_sku text, product_brand text, product_ean text, our_price numeric, lowest_competitor_price numeric, price_difference numeric, price_difference_percentage numeric, potential_savings numeric, competitor_count integer, most_competitive_competitor_name text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH latest_competitor_prices AS (
+        -- Get latest price per competitor (CORRECT LOGIC)
+        SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
+            pcc.product_id,
+            pcc.competitor_id,
+            pcc.new_competitor_price,
+            pcc.changed_at
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND pcc.competitor_id IS NOT NULL
+        AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
+        ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
+    ),
+    competitor_prices_with_names AS (
+        -- Add competitor names and rank by current price
+        SELECT 
+            lcp.product_id,
+            lcp.competitor_id,
+            lcp.new_competitor_price,
+            c.name as competitor_name,
+            ROW_NUMBER() OVER (PARTITION BY lcp.product_id ORDER BY lcp.new_competitor_price ASC) as price_rank
+        FROM latest_competitor_prices lcp
+        JOIN competitors c ON lcp.competitor_id = c.id
+        WHERE c.user_id = p_user_id
+    ),
+    product_analysis AS (
+        -- Analyze each product against current competitor prices
+        SELECT 
+            p.id as product_id,
+            p.name as product_name,
+            p.sku as product_sku,
+            p.brand as product_brand,
+            p.ean as product_ean,
+            p.our_retail_price,
+            MIN(cpn.new_competitor_price) as min_current_competitor_price,
+            COUNT(DISTINCT cpn.competitor_id) as competitor_count,
+            -- Get the competitor name with the lowest current price (rank 1)
+            MAX(CASE WHEN cpn.price_rank = 1 THEN cpn.competitor_name END) as lowest_price_competitor
+        FROM products p
+        JOIN competitor_prices_with_names cpn ON p.id = cpn.product_id
+        WHERE p.user_id = p_user_id
+        AND p.is_active = true
+        AND p.our_retail_price IS NOT NULL
+        AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+        GROUP BY p.id, p.name, p.sku, p.brand, p.ean, p.our_retail_price
+        HAVING p.our_retail_price > MIN(cpn.new_competitor_price) -- Only where we're more expensive than current prices
+    )
+    SELECT 
+        pa.product_id,
+        pa.product_name,
+        pa.product_sku,
+        pa.product_brand,
+        pa.product_ean,
+        ROUND(pa.our_retail_price, 2) as our_price,
+        ROUND(pa.min_current_competitor_price, 2) as lowest_competitor_price,
+        ROUND(pa.our_retail_price - pa.min_current_competitor_price, 2) as price_difference,
+        ROUND(((pa.our_retail_price - pa.min_current_competitor_price) / pa.our_retail_price * 100), 2) as price_difference_percentage,
+        ROUND(pa.our_retail_price - pa.min_current_competitor_price, 2) as potential_savings,
+        pa.competitor_count::INTEGER,
+        COALESCE(pa.lowest_price_competitor, 'Unknown') as most_competitive_competitor_name
+    FROM product_analysis pa
+    ORDER BY (pa.our_retail_price - pa.min_current_competitor_price) DESC
+    LIMIT p_limit
+    OFFSET p_offset;
+END;
+$$;
+
+
+--
+-- Name: get_processing_stats(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_processing_stats() RETURNS TABLE(table_name text, record_count bigint, avg_processing_time_ms numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 'temp_competitors_scraped_data'::TEXT, COUNT(*)::BIGINT, 0::NUMERIC
+    FROM temp_competitors_scraped_data
+    UNION ALL
+    SELECT 'temp_suppliers_scraped_data'::TEXT, COUNT(*)::BIGINT, 0::NUMERIC
+    FROM temp_suppliers_scraped_data
+    UNION ALL
+    SELECT 'temp_integrations_scraped_data'::TEXT, COUNT(*)::BIGINT, 0::NUMERIC
+    FROM temp_integrations_scraped_data
+    UNION ALL
+    SELECT 'products'::TEXT, COUNT(*)::BIGINT, 0::NUMERIC
+    FROM products
+    UNION ALL
+    SELECT 'custom_field_values'::TEXT, COUNT(*)::BIGINT, 0::NUMERIC
+    FROM custom_field_values;
+END;
+$$;
+
+
+--
+-- Name: get_product_price_history(uuid, uuid, uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_product_price_history(p_user_id uuid, p_product_id uuid, p_source_id uuid DEFAULT NULL::uuid, p_limit integer DEFAULT 100) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_competitor_price numeric, new_competitor_price numeric, old_our_retail_price numeric, new_our_retail_price numeric, price_change_percentage numeric, currency_code text, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_platform text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        pc.id,
+        pc.product_id,
+        pc.competitor_id,
+        pc.integration_id,
+        pc.old_competitor_price,
+        pc.new_competitor_price,
+        pc.old_our_retail_price,
+        pc.new_our_retail_price,
+        pc.price_change_percentage,
+        pc.currency_code,
+        pc.changed_at,
+        CASE 
+            WHEN pc.competitor_id IS NOT NULL THEN 'competitor'::TEXT 
+            ELSE 'integration'::TEXT 
+        END AS source_type,
+        CASE 
+            WHEN pc.competitor_id IS NOT NULL THEN c.name 
+            ELSE i.name 
+        END AS source_name,
+        CASE 
+            WHEN pc.competitor_id IS NOT NULL THEN c.website 
+            ELSE NULL::TEXT 
+        END AS source_website,
+        CASE 
+            WHEN pc.competitor_id IS NOT NULL THEN NULL::TEXT 
+            ELSE i.platform 
+        END AS source_platform,
+        CASE 
+            WHEN pc.competitor_id IS NOT NULL THEN pc.competitor_id 
+            ELSE pc.integration_id 
+        END AS source_id,
+        COALESCE(pc.competitor_url, pc.our_url, p.our_url) AS url -- Updated to use new field names
+    FROM price_changes_competitors pc
+    LEFT JOIN competitors c ON pc.competitor_id = c.id
+    LEFT JOIN integrations i ON pc.integration_id = i.id
+    LEFT JOIN products p ON pc.product_id = p.id
+    WHERE pc.user_id = p_user_id
+      AND pc.product_id = p_product_id
+      AND (p_source_id IS NULL OR pc.competitor_id = p_source_id OR pc.integration_id = p_source_id)
+    ORDER BY pc.changed_at DESC
+    LIMIT p_limit;
+END;
+$$;
+
+
+--
+-- Name: get_product_stock_history(uuid, uuid, uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_product_stock_history(p_user_id uuid, p_product_id uuid, p_source_id uuid DEFAULT NULL::uuid, p_limit integer DEFAULT 50) RETURNS TABLE(id uuid, product_id uuid, competitor_id uuid, integration_id uuid, old_stock_quantity integer, new_stock_quantity integer, old_stock_status text, new_stock_status text, old_availability_date date, new_availability_date date, stock_change_quantity integer, changed_at timestamp with time zone, source_type text, source_name text, source_website text, source_id uuid, url text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        sc.id,
+        sc.product_id,
+        sc.competitor_id,
+        sc.integration_id,
+        sc.old_stock_quantity,
+        sc.new_stock_quantity,
+        sc.old_stock_status,
+        sc.new_stock_status,
+        sc.old_availability_date,
+        sc.new_availability_date,
+        sc.stock_change_quantity,
+        sc.changed_at,
+        CASE 
+            WHEN sc.competitor_id IS NOT NULL THEN 'competitor'::TEXT 
+            ELSE 'integration'::TEXT 
+        END AS source_type,
+        CASE 
+            WHEN sc.competitor_id IS NOT NULL THEN c.name 
+            ELSE i.name 
+        END AS source_name,
+        CASE 
+            WHEN sc.competitor_id IS NOT NULL THEN c.website 
+            ELSE NULL::TEXT 
+        END AS source_website,
+        CASE 
+            WHEN sc.competitor_id IS NOT NULL THEN sc.competitor_id 
+            ELSE sc.integration_id 
+        END AS source_id,
+        COALESCE(sc.competitor_url, sc.our_url) AS url
+    FROM stock_changes_competitors sc
+    LEFT JOIN competitors c ON sc.competitor_id = c.id
+    LEFT JOIN integrations i ON sc.integration_id = i.id
+    WHERE sc.user_id = p_user_id
+      AND sc.product_id = p_product_id
+      AND (p_source_id IS NULL OR COALESCE(sc.competitor_id, sc.integration_id) = p_source_id)
+    ORDER BY sc.changed_at DESC
+    LIMIT p_limit;
+END;
+$$;
+
+
+--
+-- Name: get_products_filtered(uuid, integer, integer, text, text, text, text, text, boolean, uuid[], boolean, boolean, boolean, boolean, boolean, uuid[], boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_in_stock_only boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean, p_not_our_products boolean DEFAULT NULL::boolean, p_supplier_ids uuid[] DEFAULT NULL::uuid[], p_our_products_with_competitor_prices boolean DEFAULT NULL::boolean, p_our_products_with_supplier_prices boolean DEFAULT NULL::boolean) RETURNS json
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    _offset integer;
+    _limit integer;
+    _sort_direction text;
+    _total_count integer;
+    _result json;
+    _safe_sort_by text;
+    _order_clause text;
+    _products_data json;
+    _brand_uuid uuid;
+BEGIN
+    -- Calculate offset and limit
+    _offset := (p_page - 1) * p_page_size;
+    _limit := p_page_size;
+    
+    -- Validate and set sort direction
+    _sort_direction := CASE 
+        WHEN LOWER(p_sort_order) = 'asc' THEN 'ASC'
+        ELSE 'DESC'
+    END;
+    
+    -- Validate sort column and set safe sort by
+    _safe_sort_by := CASE 
+        WHEN p_sort_by IN ('name', 'sku', 'ean', 'created_at', 'updated_at', 'our_retail_price', 'our_wholesale_price', 'stock_quantity', 'competitor_count') THEN p_sort_by
+        ELSE 'created_at'
+    END;
+    
+    -- Try to convert brand to UUID if it looks like one, otherwise keep as text for name search
+    BEGIN
+        _brand_uuid := p_brand::uuid;
+    EXCEPTION WHEN invalid_text_representation THEN
+        _brand_uuid := NULL;
+    END;
+
+    -- Get total count using CORRECTED price comparison logic
+    WITH 
+    -- CORRECTED: Get latest prices per competitor/integration
+    latest_competitor_prices AS (
+        SELECT 
+            pcc.product_id,
+            pcc.new_competitor_price,
+            ROW_NUMBER() OVER(
+                PARTITION BY pcc.product_id, 
+                COALESCE(pcc.competitor_id, pcc.integration_id), 
+                CASE WHEN pcc.competitor_id IS NOT NULL THEN 'competitor' ELSE 'integration' END 
+                ORDER BY pcc.changed_at DESC
+            ) as rn
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND (pcc.competitor_id IS NOT NULL OR pcc.integration_id IS NOT NULL)
+    ),
+    -- Get minimum current price per product
+    product_min_current_prices AS (
+        SELECT 
+            lcp.product_id,
+            MIN(lcp.new_competitor_price) as min_current_competitor_price
+        FROM latest_competitor_prices lcp
+        WHERE lcp.rn = 1
+        GROUP BY lcp.product_id
+    ),
+    filtered_products AS (
+        SELECT p.id
+        FROM products p 
+        LEFT JOIN brands b ON p.brand_id = b.id
+        LEFT JOIN product_min_current_prices pmcp ON p.id = pmcp.product_id
+        WHERE p.user_id = p_user_id
+        AND (
+            p_brand IS NULL OR 
+            (_brand_uuid IS NOT NULL AND p.brand_id = _brand_uuid) OR
+            (_brand_uuid IS NULL AND b.name ILIKE '%' || p_brand || '%')
+        )
+        AND (p_category IS NULL OR p.category ILIKE '%' || p_category || '%')
+        AND (p_search IS NULL OR p.name ILIKE '%' || p_search || '%' OR p.sku ILIKE '%' || p_search || '%' OR p.ean ILIKE '%' || p_search || '%')
+        AND (p_is_active IS NULL OR p.is_active = p_is_active)
+        -- Simplified competitor filter
+        AND (
+            p_competitor_ids IS NULL OR 
+            EXISTS (
+                SELECT 1 FROM price_changes_competitors pcc
+                WHERE pcc.user_id = p_user_id
+                AND pcc.product_id = p.id
+                AND (pcc.competitor_id = ANY(p_competitor_ids) OR pcc.integration_id = ANY(p_competitor_ids))
+            )
+        )
+        -- Simplified supplier filter
+        AND (
+            p_supplier_ids IS NULL OR 
+            EXISTS (
+                SELECT 1 FROM price_changes_suppliers pcs
+                WHERE pcs.user_id = p_user_id
+                AND pcs.product_id = p.id
+                AND (pcs.supplier_id = ANY(p_supplier_ids) OR pcs.integration_id = ANY(p_supplier_ids))
+            )
+        )
+        -- Price filter logic
+        AND (
+            (p_has_price IS NULL AND p_not_our_products IS NULL AND p_our_products_with_competitor_prices IS NULL AND p_our_products_with_supplier_prices IS NULL) OR
+            (p_has_price = true AND p.our_retail_price IS NOT NULL) OR
+            (p_not_our_products = true AND p.our_retail_price IS NULL) OR
+            (p_our_products_with_competitor_prices = true AND p.our_retail_price IS NOT NULL AND EXISTS (
+                SELECT 1 FROM price_changes_competitors pcc
+                WHERE pcc.user_id = p_user_id
+                AND pcc.product_id = p.id
+                AND pcc.new_competitor_price IS NOT NULL
+                AND pcc.competitor_id IS NOT NULL
+            )) OR
+            (p_our_products_with_supplier_prices = true AND p.our_retail_price IS NOT NULL AND EXISTS (
+                SELECT 1 FROM price_changes_suppliers pcs
+                WHERE pcs.user_id = p_user_id
+                AND pcs.product_id = p.id
+                AND pcs.new_supplier_price IS NOT NULL
+                AND pcs.supplier_id IS NOT NULL
+            ))
+        )
+        -- CORRECTED: Price comparison filters using CURRENT prices only
+        AND (
+            (p_price_lower_than_competitors IS NULL OR p_price_lower_than_competitors = false) AND
+            (p_price_higher_than_competitors IS NULL OR p_price_higher_than_competitors = false)
+            OR
+            (p_price_lower_than_competitors = true AND p.our_retail_price IS NOT NULL AND pmcp.min_current_competitor_price IS NOT NULL AND p.our_retail_price <= pmcp.min_current_competitor_price)
+            OR
+            (p_price_higher_than_competitors = true AND p.our_retail_price IS NOT NULL AND pmcp.min_current_competitor_price IS NOT NULL AND p.our_retail_price > pmcp.min_current_competitor_price)
+        )
+    )
+    SELECT COUNT(*) INTO _total_count FROM filtered_products;
+
+    -- Get the actual products data with CORRECTED ORDER BY including proper NULL handling
+    WITH 
+    -- Same CTEs as above
+    latest_competitor_prices AS (
+        SELECT 
+            pcc.product_id,
+            pcc.new_competitor_price,
+            pcc.competitor_id,
+            pcc.integration_id,
+            pcc.competitor_url,
+            pcc.changed_at,
+            ROW_NUMBER() OVER(
+                PARTITION BY pcc.product_id, 
+                COALESCE(pcc.competitor_id, pcc.integration_id), 
+                CASE WHEN pcc.competitor_id IS NOT NULL THEN 'competitor' ELSE 'integration' END 
+                ORDER BY pcc.changed_at DESC
+            ) as rn
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND (pcc.competitor_id IS NOT NULL OR pcc.integration_id IS NOT NULL)
+    ),
+    product_min_current_prices AS (
+        SELECT 
+            lcp.product_id,
+            MIN(lcp.new_competitor_price) as min_current_competitor_price
+        FROM latest_competitor_prices lcp
+        WHERE lcp.rn = 1
+        GROUP BY lcp.product_id
+    ),
+    -- Add stock data
+    product_stock AS (
+        SELECT 
+            p.id as product_id,
+            COALESCE(MAX(sc.new_stock_quantity), 0) as max_stock_quantity,
+            BOOL_OR(sc.new_stock_status = 'in_stock' OR sc.new_stock_quantity > 0) as has_stock
+        FROM products p
+        LEFT JOIN stock_changes_competitors sc ON sc.product_id = p.id 
+            AND sc.user_id = p_user_id
+            AND sc.new_stock_quantity IS NOT NULL
+            AND sc.changed_at = (
+                SELECT MAX(sc2.changed_at) 
+                FROM stock_changes_competitors sc2 
+                WHERE sc2.product_id = p.id 
+                AND sc2.user_id = p_user_id
+                AND sc2.new_stock_quantity IS NOT NULL
+                AND COALESCE(sc2.competitor_id, sc2.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
+            )
+        WHERE p.user_id = p_user_id
+        GROUP BY p.id
+    ),
+    -- Add competitor count with proper NULL handling
+    product_competitor_count AS (
+        SELECT 
+            lcp.product_id,
+            COUNT(DISTINCT COALESCE(lcp.competitor_id, lcp.integration_id)) as competitor_count
+        FROM latest_competitor_prices lcp
+        WHERE lcp.rn = 1
+        GROUP BY lcp.product_id
+    ),
+    products_with_prices AS (
+        SELECT 
+            p.id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand_id,
+            p.category,
+            p.our_retail_price,
+            p.our_wholesale_price,
+            p.image_url,
+            p.our_url,
+            p.is_active,
+            p.created_at,
+            p.updated_at,
+            b.name as brand_name,
+            COALESCE(ps.has_stock, false) as has_stock,
+            COALESCE(ps.max_stock_quantity, 0) as stock_quantity,
+            COALESCE(pcc.competitor_count, 0) as competitor_count,
+            COALESCE(
+                json_agg(
+                    DISTINCT jsonb_build_object(
+                        'competitor_id', lcp.competitor_id,
+                        'integration_id', lcp.integration_id,
+                        'competitor_name', COALESCE(c.name, i.name),
+                        'competitor_price', lcp.new_competitor_price,
+                        'competitor_url', lcp.competitor_url,
+                        'changed_at', lcp.changed_at
+                    )
+                ) FILTER (WHERE lcp.rn = 1), 
+                '[]'::json
+            ) as competitor_prices
+        FROM products p
+        LEFT JOIN brands b ON p.brand_id = b.id
+        LEFT JOIN product_min_current_prices pmcp ON p.id = pmcp.product_id
+        LEFT JOIN product_stock ps ON p.id = ps.product_id
+        LEFT JOIN product_competitor_count pcc ON p.id = pcc.product_id
+        LEFT JOIN latest_competitor_prices lcp ON p.id = lcp.product_id AND lcp.rn = 1
+        LEFT JOIN competitors c ON lcp.competitor_id = c.id
+        LEFT JOIN integrations i ON lcp.integration_id = i.id
+        WHERE p.user_id = p_user_id
+        AND (
+            p_brand IS NULL OR 
+            (_brand_uuid IS NOT NULL AND p.brand_id = _brand_uuid) OR
+            (_brand_uuid IS NULL AND b.name ILIKE '%' || p_brand || '%')
+        )
+        AND (p_category IS NULL OR p.category ILIKE '%' || p_category || '%')
+        AND (p_search IS NULL OR p.name ILIKE '%' || p_search || '%' OR p.sku ILIKE '%' || p_search || '%' OR p.ean ILIKE '%' || p_search || '%')
+        AND (p_is_active IS NULL OR p.is_active = p_is_active)
+        AND (
+            p_competitor_ids IS NULL OR 
+            EXISTS (
+                SELECT 1 FROM price_changes_competitors pcc
+                WHERE pcc.user_id = p_user_id
+                AND pcc.product_id = p.id
+                AND (pcc.competitor_id = ANY(p_competitor_ids) OR pcc.integration_id = ANY(p_competitor_ids))
+            )
+        )
+        AND (
+            p_supplier_ids IS NULL OR 
+            EXISTS (
+                SELECT 1 FROM price_changes_suppliers pcs
+                WHERE pcs.user_id = p_user_id
+                AND pcs.product_id = p.id
+                AND (pcs.supplier_id = ANY(p_supplier_ids) OR pcs.integration_id = ANY(p_supplier_ids))
+            )
+        )
+        AND (
+            (p_has_price IS NULL AND p_not_our_products IS NULL AND p_our_products_with_competitor_prices IS NULL AND p_our_products_with_supplier_prices IS NULL) OR
+            (p_has_price = true AND p.our_retail_price IS NOT NULL) OR
+            (p_not_our_products = true AND p.our_retail_price IS NULL) OR
+            (p_our_products_with_competitor_prices = true AND p.our_retail_price IS NOT NULL AND EXISTS (
+                SELECT 1 FROM price_changes_competitors pcc
+                WHERE pcc.user_id = p_user_id
+                AND pcc.product_id = p.id
+                AND pcc.new_competitor_price IS NOT NULL
+                AND pcc.competitor_id IS NOT NULL
+            )) OR
+            (p_our_products_with_supplier_prices = true AND p.our_retail_price IS NOT NULL AND EXISTS (
+                SELECT 1 FROM price_changes_suppliers pcs
+                WHERE pcs.user_id = p_user_id
+                AND pcs.product_id = p.id
+                AND pcs.new_supplier_price IS NOT NULL
+                AND pcs.supplier_id IS NOT NULL
+            ))
+        )
+        AND (
+            (p_price_lower_than_competitors IS NULL OR p_price_lower_than_competitors = false) AND
+            (p_price_higher_than_competitors IS NULL OR p_price_higher_than_competitors = false)
+            OR
+            (p_price_lower_than_competitors = true AND p.our_retail_price IS NOT NULL AND pmcp.min_current_competitor_price IS NOT NULL AND p.our_retail_price <= pmcp.min_current_competitor_price)
+            OR
+            (p_price_higher_than_competitors = true AND p.our_retail_price IS NOT NULL AND pmcp.min_current_competitor_price IS NOT NULL AND p.our_retail_price > pmcp.min_current_competitor_price)
+        )
+        GROUP BY p.id, p.name, p.sku, p.ean, p.brand_id, p.category, p.our_retail_price, p.our_wholesale_price, p.image_url, p.our_url, p.is_active, p.created_at, p.updated_at, b.name, ps.has_stock, ps.max_stock_quantity, pcc.competitor_count
+        ORDER BY 
+            CASE 
+                WHEN _safe_sort_by = 'name' AND _sort_direction = 'ASC' THEN p.name
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'name' AND _sort_direction = 'DESC' THEN p.name
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'sku' AND _sort_direction = 'ASC' THEN p.sku
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'sku' AND _sort_direction = 'DESC' THEN p.sku
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'ean' AND _sort_direction = 'ASC' THEN p.ean
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'ean' AND _sort_direction = 'DESC' THEN p.ean
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'created_at' AND _sort_direction = 'ASC' THEN p.created_at
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'created_at' AND _sort_direction = 'DESC' THEN p.created_at
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'updated_at' AND _sort_direction = 'ASC' THEN p.updated_at
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'updated_at' AND _sort_direction = 'DESC' THEN p.updated_at
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'our_retail_price' AND _sort_direction = 'ASC' THEN p.our_retail_price
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'our_retail_price' AND _sort_direction = 'DESC' THEN p.our_retail_price
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'our_wholesale_price' AND _sort_direction = 'ASC' THEN p.our_wholesale_price
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'our_wholesale_price' AND _sort_direction = 'DESC' THEN p.our_wholesale_price
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'stock_quantity' AND _sort_direction = 'ASC' THEN ps.max_stock_quantity
+            END ASC NULLS LAST,
+            CASE 
+                WHEN _safe_sort_by = 'stock_quantity' AND _sort_direction = 'DESC' THEN ps.max_stock_quantity
+            END DESC NULLS LAST,
+            -- FIXED: Proper handling of competitor_count with NULLS LAST for DESC
+            CASE 
+                WHEN _safe_sort_by = 'competitor_count' AND _sort_direction = 'ASC' THEN NULLIF(pcc.competitor_count, 0)
+            END ASC NULLS LAST,
+            CASE 
+                WHEN _safe_sort_by = 'competitor_count' AND _sort_direction = 'DESC' THEN NULLIF(pcc.competitor_count, 0)
+            END DESC NULLS LAST
+        LIMIT _limit OFFSET _offset
+    )
+    SELECT COALESCE(json_agg(
+        json_build_object(
+            'id', pwp.id,
+            'name', pwp.name,
+            'sku', pwp.sku,
+            'ean', pwp.ean,
+            'brand_id', pwp.brand_id,
+            'brand_name', pwp.brand_name,
+            'category', pwp.category,
+            'our_retail_price', pwp.our_retail_price,
+            'our_wholesale_price', pwp.our_wholesale_price,
+            'image_url', pwp.image_url,
+            'our_url', pwp.our_url,
+            'is_active', pwp.is_active,
+            'created_at', pwp.created_at,
+            'updated_at', pwp.updated_at,
+            'competitor_prices', pwp.competitor_prices,
+            'has_stock', pwp.has_stock,
+            'stock_quantity', pwp.stock_quantity
+        )
+    ), '[]'::json) INTO _products_data FROM products_with_prices pwp;
+
+    -- Build the final result
+    _result := json_build_object(
+        'data', COALESCE(_products_data, '[]'::json),
+        'totalCount', _total_count
+    );
+
+    RETURN _result;
+END;
+$$;
+
+
+--
+-- Name: get_sales_analysis_data(uuid, uuid, timestamp without time zone, timestamp without time zone, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_sales_analysis_data(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_brand_filter text DEFAULT NULL::text) RETURNS TABLE(product_id uuid, product_name text, brand text, sku text, total_sold numeric, avg_price numeric, total_revenue numeric, active_days bigint, revenue_percentage numeric, avg_daily_sales numeric, avg_daily_revenue numeric, current_price numeric, days_tracked bigint)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '30 days');
+    date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+BEGIN
+    RETURN QUERY
+    WITH sales_data AS (
+        SELECT 
+            p.id,
+            p.name,
+            p.brand,
+            p.sku,
+            SUM(ABS(sc.stock_change_quantity))::NUMERIC as total_sold,
+            COUNT(DISTINCT DATE(sc.changed_at)) as active_days
+        FROM stock_changes_competitors sc
+        JOIN products p ON sc.product_id = p.id
+        WHERE sc.user_id = p_user_id
+          AND sc.stock_change_quantity < 0  -- Only sales (decreases)
+          AND sc.changed_at >= date_filter_start
+          AND sc.changed_at <= date_filter_end
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+          AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
+        GROUP BY p.id, p.name, p.brand, p.sku
+    ),
+    sales_with_prices AS (
+        SELECT 
+            sd.*,
+            -- Get the most recent price available at or before the end of the sales period
+            COALESCE((
+                SELECT pc.new_competitor_price
+                FROM price_changes_competitors pc
+                WHERE pc.product_id = sd.id 
+                  AND pc.user_id = p_user_id
+                  AND pc.changed_at <= date_filter_end
+                  AND (p_competitor_id IS NULL OR pc.competitor_id = p_competitor_id)
+                  AND pc.new_competitor_price IS NOT NULL
+                  AND pc.new_competitor_price > 0
+                ORDER BY pc.changed_at DESC
+                LIMIT 1
+            ), 0) as avg_price,
+            -- Get current price (most recent price for this product)
+            COALESCE((
+                SELECT pc_current.new_competitor_price
+                FROM price_changes_competitors pc_current
+                WHERE pc_current.product_id = sd.id 
+                  AND pc_current.user_id = p_user_id
+                  AND (p_competitor_id IS NULL OR pc_current.competitor_id = p_competitor_id)
+                  AND pc_current.new_competitor_price IS NOT NULL
+                  AND pc_current.new_competitor_price > 0
+                ORDER BY pc_current.changed_at DESC
+                LIMIT 1
+            ), 0) as current_price
+        FROM sales_data sd
+    ),
+    sales_with_revenue AS (
+        SELECT 
+            swp.*,
+            swp.total_sold * swp.avg_price as total_revenue
+        FROM sales_with_prices swp
+    ),
+    totals AS (
+        SELECT 
+            SUM(swr.total_revenue) as grand_total_revenue
+        FROM sales_with_revenue swr
+    )
+    SELECT 
+        swr.id as product_id,
+        swr.name as product_name,
+        swr.brand,
+        swr.sku,
+        swr.total_sold,
+        swr.avg_price,
+        swr.total_revenue,
+        swr.active_days,
+        CASE 
+            WHEN t.grand_total_revenue > 0 THEN (swr.total_revenue / t.grand_total_revenue * 100)
+            ELSE 0 
+        END as revenue_percentage,
+        CASE 
+            WHEN swr.active_days > 0 THEN (swr.total_sold / swr.active_days)
+            ELSE 0 
+        END as avg_daily_sales,
+        CASE 
+            WHEN swr.active_days > 0 THEN (swr.total_revenue / swr.active_days)
+            ELSE 0 
+        END as avg_daily_revenue,
+        swr.current_price,
+        swr.active_days as days_tracked
+    FROM sales_with_revenue swr
+    CROSS JOIN totals t
+    WHERE swr.total_sold > 0  -- Only include products with actual sales
+    ORDER BY swr.total_sold DESC;
+END;
+$$;
+
+
+--
+-- Name: get_scheduling_stats(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_scheduling_stats() RETURNS TABLE(metric_name text, metric_value bigint, description text)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        'active_scrapers'::text,
+        COUNT(*)::bigint,
+        'Number of active scrapers'::text
+    FROM public.scrapers 
+    WHERE is_active = true
+    
+    UNION ALL
+    
+    SELECT 
+        'active_integrations'::text,
+        COUNT(*)::bigint,
+        'Number of active integrations'::text
+    FROM public.integrations 
+    WHERE status = 'active'
+    
+    UNION ALL
+    
+    SELECT 
+        'pending_scraper_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of pending scraper jobs'::text
+    FROM public.scraper_runs 
+    WHERE status = 'pending'
+    
+    UNION ALL
+    
+    SELECT 
+        'running_scraper_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of running scraper jobs'::text
+    FROM public.scraper_runs 
+    WHERE status = 'running'
+    
+    UNION ALL
+    
+    SELECT 
+        'pending_integration_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of pending integration jobs'::text
+    FROM public.integration_runs 
+    WHERE status = 'pending'
+    
+    UNION ALL
+    
+    SELECT 
+        'processing_integration_jobs'::text,
+        COUNT(*)::bigint,
+        'Number of processing integration jobs'::text
+    FROM public.integration_runs 
+    WHERE status = 'processing'
+    
+    UNION ALL
+    
+    SELECT 
+        'jobs_completed_today'::text,
+        COUNT(*)::bigint,
+        'Number of jobs completed today'::text
+    FROM (
+        SELECT completed_at FROM public.scraper_runs 
+        WHERE status = 'completed' AND completed_at >= date_trunc('day', now())
+        UNION ALL
+        SELECT completed_at FROM public.integration_runs 
+        WHERE status = 'completed' AND completed_at >= date_trunc('day', now())
+    ) completed_jobs;
+END;
+$$;
+
+
+--
+-- Name: get_snapshot_statistics(integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_snapshot_statistics(days_back integer DEFAULT 30) RETURNS TABLE(metric text, value text)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH stats AS (
+        SELECT 
+            COUNT(DISTINCT snapshot_date) as unique_dates,
+            COUNT(DISTINCT user_id) as unique_users,
+            COUNT(*) as total_snapshots,
+            MIN(snapshot_date) as earliest_date,
+            MAX(snapshot_date) as latest_date,
+            AVG(total_products_analyzed) as avg_products_per_snapshot
+        FROM daily_price_competitiveness_snapshots
+        WHERE snapshot_date >= CURRENT_DATE - (days_back || ' days')::INTERVAL
+    )
+    SELECT 'Unique Dates'::TEXT, unique_dates::TEXT FROM stats
+    UNION ALL
+    SELECT 'Unique Users'::TEXT, unique_users::TEXT FROM stats
+    UNION ALL
+    SELECT 'Total Snapshots'::TEXT, total_snapshots::TEXT FROM stats
+    UNION ALL
+    SELECT 'Earliest Date'::TEXT, earliest_date::TEXT FROM stats
+    UNION ALL
+    SELECT 'Latest Date'::TEXT, latest_date::TEXT FROM stats
+    UNION ALL
+    SELECT 'Avg Products/Snapshot'::TEXT, ROUND(avg_products_per_snapshot, 1)::TEXT FROM stats;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_snapshot_statistics(days_back integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_snapshot_statistics(days_back integer) IS 'Get summary statistics about snapshot data for monitoring and verification purposes.';
+
+
+--
+-- Name: get_stock_summary_stats(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_stock_summary_stats(p_user_id uuid) RETURNS json
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    result JSON;
+BEGIN
+    SELECT json_build_object(
+        'total_products_tracked', (
+            SELECT COUNT(DISTINCT product_id)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+        ),
+        'total_competitors', (
+            SELECT COUNT(DISTINCT competitor_id)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+              AND competitor_id IS NOT NULL
+        ),
+        'products_in_stock', (
+            SELECT COUNT(DISTINCT product_id)
+            FROM stock_changes_competitors sc1
+            WHERE user_id = p_user_id
+              AND new_stock_quantity > 0
+              AND id IN (
+                  SELECT DISTINCT ON (product_id, competitor_id) id
+                  FROM stock_changes_competitors sc2
+                  WHERE sc2.user_id = p_user_id
+                    AND sc2.product_id = sc1.product_id
+                    AND sc2.competitor_id = sc1.competitor_id
+                  ORDER BY product_id, competitor_id, changed_at DESC
+              )
+        ),
+        'products_out_of_stock', (
+            SELECT COUNT(DISTINCT product_id)
+            FROM stock_changes_competitors sc1
+            WHERE user_id = p_user_id
+              AND new_stock_quantity = 0
+              AND id IN (
+                  SELECT DISTINCT ON (product_id, competitor_id) id
+                  FROM stock_changes_competitors sc2
+                  WHERE sc2.user_id = p_user_id
+                    AND sc2.product_id = sc1.product_id
+                    AND sc2.competitor_id = sc1.competitor_id
+                  ORDER BY product_id, competitor_id, changed_at DESC
+              )
+        ),
+        'total_stock_changes', (
+            SELECT COUNT(*)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+              AND changed_at >= NOW() - INTERVAL '30 days'
+        ),
+        'avg_daily_sales', (
+            SELECT COALESCE(AVG(ABS(stock_change_quantity)), 0)
+            FROM stock_changes_competitors
+            WHERE user_id = p_user_id
+              AND stock_change_quantity < 0
+              AND changed_at >= NOW() - INTERVAL '30 days'
+        )
+    ) INTO result;
+    
+    RETURN result;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_stock_summary_stats(p_user_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_stock_summary_stats(p_user_id uuid) IS 'Returns summary statistics for stock tracking including product counts, stock levels, and sales velocity';
+
+
+--
+-- Name: get_stock_turnover_analysis(uuid, uuid, timestamp without time zone, timestamp without time zone, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_stock_turnover_analysis(p_user_id uuid, p_competitor_id uuid DEFAULT NULL::uuid, p_start_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_end_date timestamp without time zone DEFAULT NULL::timestamp without time zone, p_dead_stock_days integer DEFAULT 30) RETURNS TABLE(product_id uuid, product_name text, brand text, sku text, total_sales bigint, avg_stock_level numeric, current_stock integer, stock_turnover_ratio numeric, stock_status text, days_since_last_sale integer, velocity_category text, last_sale_date timestamp without time zone)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    date_filter_start TIMESTAMP := COALESCE(p_start_date, NOW() - INTERVAL '90 days');
+    date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
+BEGIN
+    RETURN QUERY
+    WITH current_stock AS (
+        SELECT DISTINCT ON (scc.product_id, scc.competitor_id)
+            scc.product_id, 
+            scc.competitor_id, 
+            scc.new_stock_quantity, 
+            scc.changed_at
+        FROM stock_changes_competitors scc
+        WHERE scc.user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR scc.competitor_id = p_competitor_id)
+        ORDER BY scc.product_id, scc.competitor_id, scc.changed_at DESC
+    ),
+    sales_data AS (
+        SELECT 
+            sc.product_id,
+            SUM(ABS(sc.stock_change_quantity)) as total_sales,
+            COUNT(DISTINCT DATE(sc.changed_at)) as active_sales_days,
+            MIN(sc.changed_at) as first_sale,
+            MAX(sc.changed_at) as last_sale
+        FROM stock_changes_competitors sc
+        WHERE sc.user_id = p_user_id
+          AND sc.stock_change_quantity < 0
+          AND sc.changed_at >= date_filter_start
+          AND sc.changed_at <= date_filter_end
+          AND (p_competitor_id IS NULL OR sc.competitor_id = p_competitor_id)
+        GROUP BY sc.product_id
+    ),
+    stock_history AS (
+        SELECT 
+            sch.product_id,
+            AVG(sch.new_stock_quantity) as avg_stock_level
+        FROM stock_changes_competitors sch
+        WHERE sch.user_id = p_user_id 
+          AND (p_competitor_id IS NULL OR sch.competitor_id = p_competitor_id)
+          AND sch.changed_at >= date_filter_start
+          AND sch.changed_at <= date_filter_end
+        GROUP BY sch.product_id
+    ),
+    turnover_analysis AS (
+        SELECT 
+            p.id,
+            p.name,
+            p.brand,
+            p.sku,
+            COALESCE(sd.total_sales, 0) as total_sales,
+            COALESCE(sh.avg_stock_level, 0) as avg_stock_level,
+            COALESCE(cs.new_stock_quantity, 0) as current_stock,
+            -- Stock Turnover Ratio = Total Sales / Average Stock
+            CASE 
+                WHEN sh.avg_stock_level > 0 THEN sd.total_sales / sh.avg_stock_level 
+                ELSE 0 
+            END as stock_turnover_ratio,
+            -- Dead Stock Indicator: Only for products with current stock > 0
+            CASE 
+                WHEN cs.new_stock_quantity > 0 AND (sd.last_sale < NOW() - INTERVAL '1 day' * p_dead_stock_days OR sd.last_sale IS NULL)
+                THEN 'Dead Stock'
+                WHEN cs.new_stock_quantity > 0
+                THEN 'Active'
+                ELSE 'Out of Stock'
+            END as stock_status,
+            COALESCE(EXTRACT(DAYS FROM (NOW() - sd.last_sale))::INTEGER, 999) as days_since_last_sale,
+            -- Velocity categories: Only for products with sales data
+            CASE 
+                WHEN sd.total_sales IS NULL OR sd.active_sales_days IS NULL THEN 'No Sales Data'
+                WHEN COALESCE(sd.total_sales, 0) / NULLIF(sd.active_sales_days, 0) > 10 THEN 'Fast Mover'
+                WHEN COALESCE(sd.total_sales, 0) / NULLIF(sd.active_sales_days, 0) > 3 THEN 'Medium Mover'
+                ELSE 'Slow Mover'
+            END as velocity_category,
+            sd.last_sale::timestamp without time zone
+        FROM products p
+        LEFT JOIN sales_data sd ON p.id = sd.product_id
+        LEFT JOIN stock_history sh ON p.id = sh.product_id
+        LEFT JOIN current_stock cs ON p.id = cs.product_id
+        WHERE p.user_id = p_user_id
+          AND cs.product_id IS NOT NULL  -- Only include products we have stock data for
+    )
+    SELECT 
+        ta.id,
+        ta.name,
+        ta.brand,
+        ta.sku,
+        ta.total_sales,
+        ta.avg_stock_level,
+        ta.current_stock,
+        ta.stock_turnover_ratio,
+        ta.stock_status,
+        ta.days_since_last_sale,
+        ta.velocity_category,
+        ta.last_sale
+    FROM turnover_analysis ta
+    ORDER BY ta.stock_turnover_ratio DESC NULLS LAST;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_stock_turnover_analysis(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone, p_dead_stock_days integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_stock_turnover_analysis(p_user_id uuid, p_competitor_id uuid, p_start_date timestamp without time zone, p_end_date timestamp without time zone, p_dead_stock_days integer) IS 'Returns stock turnover ratios, dead stock detection, and velocity categorization';
+
+
+--
+-- Name: get_trending_new_brands(uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_trending_new_brands(p_user_id uuid, p_days_back integer DEFAULT 90) RETURNS TABLE(brand_name text, first_seen_date date, days_since_first_seen integer, current_product_count integer, competitor_count integer, product_growth_rate numeric, avg_competitor_price numeric, price_trend text, avg_stock_level numeric, trending_score numeric, trend_category text)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_start_date DATE := CURRENT_DATE - (p_days_back || ' days')::INTERVAL;
+    v_mid_date DATE := CURRENT_DATE - ((p_days_back / 2)::INTEGER || ' days')::INTERVAL;
+BEGIN
+    RETURN QUERY
+    WITH our_brands AS (
+        -- Brands we already have products for
+        SELECT DISTINCT brand
+        FROM products 
+        WHERE user_id = p_user_id
+            AND brand IS NOT NULL
+            AND (our_wholesale_price IS NOT NULL OR our_retail_price IS NOT NULL)
+    ),
+    brand_first_appearance AS (
+        -- Find when each brand first appeared in our competitor data (excluding brands we already have)
+        SELECT 
+            p.brand,
+            MIN(pcc.changed_at)::DATE as first_seen_date
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.changed_at >= v_start_date
+        GROUP BY p.brand
+    ),
+    current_brand_metrics AS (
+        -- Current metrics for these brands (excluding brands we already have)
+        SELECT 
+            p.brand,
+            COUNT(DISTINCT pcc.product_id) as current_products,
+            COUNT(DISTINCT pcc.competitor_id) as competitor_count,
+            AVG(pcc.new_competitor_price) as avg_price
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.new_competitor_price IS NOT NULL
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '7 days'  -- Recent data
+        GROUP BY p.brand
+    ),
+    historical_brand_metrics AS (
+        -- Historical metrics for growth calculation (excluding brands we already have)
+        SELECT 
+            p.brand,
+            COUNT(DISTINCT pcc.product_id) as historical_products
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.changed_at BETWEEN v_start_date AND v_mid_date
+        GROUP BY p.brand
+    ),
+    price_trend_analysis AS (
+        -- Analyze price trends for these brands (excluding brands we already have)
+        SELECT 
+            p.brand,
+            AVG(CASE WHEN pcc.changed_at >= v_mid_date THEN pcc.new_competitor_price END) as recent_avg_price,
+            AVG(CASE WHEN pcc.changed_at < v_mid_date THEN pcc.new_competitor_price END) as historical_avg_price
+        FROM price_changes_competitors pcc
+        JOIN products p ON pcc.product_id = p.id
+        WHERE pcc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND pcc.competitor_id IS NOT NULL
+            AND pcc.new_competitor_price IS NOT NULL
+            AND pcc.changed_at >= v_start_date
+        GROUP BY p.brand
+    ),
+    stock_metrics AS (
+        -- Get stock information (excluding brands we already have)
+        SELECT 
+            p.brand,
+            AVG(COALESCE(scc.new_stock_quantity, 0)) as avg_stock
+        FROM stock_changes_competitors scc
+        JOIN products p ON scc.product_id = p.id
+        WHERE scc.user_id = p_user_id
+            AND p.brand IS NOT NULL
+            AND p.brand NOT IN (SELECT brand FROM our_brands)  -- EXCLUDE brands we have
+            AND scc.changed_at >= CURRENT_DATE - INTERVAL '30 days'
+        GROUP BY p.brand
+    )
+    SELECT 
+        bfa.brand::TEXT,
+        bfa.first_seen_date,
+        (CURRENT_DATE - bfa.first_seen_date)::INTEGER as days_since_first_seen,
+        COALESCE(cbm.current_products, 0)::INTEGER as current_product_count,
+        COALESCE(cbm.competitor_count, 0)::INTEGER as competitor_count,
+        
+        -- Product growth rate (percentage increase from historical to current)
+        ROUND(CASE 
+            WHEN COALESCE(hbm.historical_products, 0) > 0 THEN
+                ((cbm.current_products - hbm.historical_products)::NUMERIC / hbm.historical_products * 100)
+            WHEN cbm.current_products > 0 THEN 100.0  -- New brand, 100% growth
+            ELSE 0.0
+        END, 2) as product_growth_rate,
+        
+        ROUND(COALESCE(cbm.avg_price, 0), 2) as avg_competitor_price,
+        
+        -- Price trend
+        CASE 
+            WHEN pta.recent_avg_price IS NULL OR pta.historical_avg_price IS NULL THEN 'Insufficient Data'
+            WHEN pta.recent_avg_price > pta.historical_avg_price * 1.05 THEN 'Increasing'
+            WHEN pta.recent_avg_price < pta.historical_avg_price * 0.95 THEN 'Decreasing'
+            ELSE 'Stable'
+        END::TEXT as price_trend,
+        
+        ROUND(COALESCE(sm.avg_stock, 0), 2) as avg_stock_level,
+        
+        -- Trending score (0-100)
+        ROUND(
+            -- Recency factor (newer = higher score, max 30 points)
+            (CASE WHEN (CURRENT_DATE - bfa.first_seen_date) <= 30 THEN 30
+                  WHEN (CURRENT_DATE - bfa.first_seen_date) <= 60 THEN 20
+                  ELSE 10 END) +
+            
+            -- Product count factor (max 25 points)
+            (LEAST(25, cbm.current_products * 0.25)) +
+            
+            -- Growth rate factor (max 25 points)
+            (LEAST(25, CASE 
+                WHEN COALESCE(hbm.historical_products, 0) > 0 THEN
+                    ((cbm.current_products - hbm.historical_products)::NUMERIC / hbm.historical_products * 25)
+                WHEN cbm.current_products > 0 THEN 25.0
+                ELSE 0.0
+            END)) +
+            
+            -- Competitor interest factor (max 20 points)
+            (LEAST(20, cbm.competitor_count * 5))
+        , 2) as trending_score,
+        
+        -- Trend category
+        CASE 
+            WHEN (CURRENT_DATE - bfa.first_seen_date) <= 30 AND cbm.current_products >= 50 THEN 'Hot New Brand - EXPANSION OPPORTUNITY'
+            WHEN (CURRENT_DATE - bfa.first_seen_date) <= 60 AND cbm.current_products >= 100 THEN 'Rapidly Growing - EXPANSION OPPORTUNITY'
+            WHEN cbm.current_products >= 200 AND cbm.competitor_count >= 3 THEN 'Established Trending - EXPANSION OPPORTUNITY'
+            WHEN COALESCE(hbm.historical_products, 0) > 0 AND 
+                 ((cbm.current_products - hbm.historical_products)::NUMERIC / hbm.historical_products) >= 0.5 THEN 'Fast Growing - EXPANSION OPPORTUNITY'
+            ELSE 'Emerging - EXPANSION OPPORTUNITY'
+        END::TEXT as trend_category
+        
+    FROM brand_first_appearance bfa
+    LEFT JOIN current_brand_metrics cbm ON bfa.brand = cbm.brand
+    LEFT JOIN historical_brand_metrics hbm ON bfa.brand = hbm.brand
+    LEFT JOIN price_trend_analysis pta ON bfa.brand = pta.brand
+    LEFT JOIN stock_metrics sm ON bfa.brand = sm.brand
+    WHERE COALESCE(cbm.current_products, 0) >= 10  -- Minimum threshold for trending
+    ORDER BY trending_score DESC, cbm.current_products DESC;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_trending_new_brands(p_user_id uuid, p_days_back integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_trending_new_brands(p_user_id uuid, p_days_back integer) IS 'Finds new and trending brands based on recent appearance and growth patterns in competitor data';
+
+
+--
+-- Name: get_unique_competitor_products(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_unique_competitor_products(p_user_id uuid, p_competitor_id uuid) RETURNS integer
+    LANGUAGE sql
+    SET search_path TO 'public'
+    AS $$
+  SELECT COUNT(DISTINCT pc1.product_id)
+  FROM price_changes_competitors pc1
+  WHERE pc1.user_id = p_user_id
+    AND pc1.competitor_id = p_competitor_id
+    AND NOT EXISTS (
+      SELECT 1
+      FROM price_changes_competitors pc2
+      WHERE pc2.user_id = p_user_id
+        AND pc2.product_id = pc1.product_id
+        AND (
+          (pc2.competitor_id IS NOT NULL AND pc2.competitor_id != p_competitor_id)
+          OR pc2.integration_id IS NOT NULL
+        )
+    );
+$$;
+
+
+--
+-- Name: get_unique_integration_products(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_unique_integration_products(p_user_id uuid, p_integration_id uuid) RETURNS integer
+    LANGUAGE sql
+    SET search_path TO 'public'
+    AS $$
+  SELECT COUNT(DISTINCT pc1.product_id)
+  FROM price_changes_competitors pc1
+  WHERE pc1.user_id = p_user_id
+    AND pc1.integration_id = p_integration_id
+    AND NOT EXISTS (
+      SELECT 1
+      FROM price_changes_competitors pc2
+      WHERE pc2.user_id = p_user_id
+        AND pc2.product_id = pc1.product_id
+        AND (
+          (pc2.integration_id IS NOT NULL AND pc2.integration_id != p_integration_id)
+          OR pc2.competitor_id IS NOT NULL
+        )
+    );
+$$;
+
+
+--
+-- Name: get_unread_message_count(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_unread_message_count(user_uuid uuid) RETURNS integer
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  RETURN (
+    SELECT COUNT(*)
+    FROM support_messages sm
+    JOIN support_conversations sc ON sm.conversation_id = sc.id
+    WHERE sc.user_id = user_uuid
+    AND sm.sender_type = 'admin'
+    AND sm.read_by_recipient = FALSE
+  );
+END;
+$$;
+
+
+--
+-- Name: get_user_growth_stats(integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_growth_stats(period_days integer DEFAULT 30) RETURNS TABLE(date date, new_users bigint, cumulative_users bigint)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN QUERY
+    WITH date_series AS (
+        SELECT generate_series(
+            CURRENT_DATE - INTERVAL '1 day' * period_days,
+            CURRENT_DATE,
+            INTERVAL '1 day'
+        )::DATE as date
+    ),
+    daily_signups AS (
+        SELECT 
+            created_at::DATE as signup_date,
+            COUNT(*) as new_users
+        FROM public.user_profiles
+        WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' * period_days
+        GROUP BY created_at::DATE
+    )
+    SELECT 
+        ds.date,
+        COALESCE(daily_signups.new_users, 0) as new_users,
+        (SELECT COUNT(*) FROM public.user_profiles WHERE created_at::DATE <= ds.date) as cumulative_users
+    FROM date_series ds
+    LEFT JOIN daily_signups ON ds.date = daily_signups.signup_date
+    ORDER BY ds.date;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_user_growth_stats(period_days integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_user_growth_stats(period_days integer) IS 'Returns user growth statistics over a specified period in days.';
+
+
+--
+-- Name: get_user_matching_settings(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_matching_settings(p_user_id uuid) RETURNS jsonb
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    settings JSONB;
+BEGIN
+    SELECT matching_rules INTO settings
+    FROM user_settings
+    WHERE user_id = p_user_id;
+    
+    -- Return default settings if none found
+    RETURN COALESCE(settings, '{"ean_priority": true, "sku_brand_fallback": true, "fuzzy_name_matching": false, "min_similarity_score": 80}'::jsonb);
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_user_matching_settings(p_user_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_user_matching_settings(p_user_id uuid) IS 'Gets user matching settings with defaults';
+
+
+--
+-- Name: get_user_primary_currency(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_primary_currency(p_user_id uuid) RETURNS text
+    LANGUAGE plpgsql STABLE
+    AS $$
+DECLARE
+    user_currency TEXT;
+BEGIN
+    -- Get user's primary currency from user_settings
+    SELECT primary_currency INTO user_currency
+    FROM user_settings
+    WHERE user_id = p_user_id;
+    
+    -- Return user's currency or default to SEK if not set
+    RETURN COALESCE(user_currency, 'SEK');
+END;
+$$;
+
+
+--
+-- Name: get_user_workload(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_workload() RETURNS TABLE(user_id uuid, user_name text, user_email text, active_scrapers bigint, active_integrations bigint, jobs_today bigint, avg_execution_time_ms numeric)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        u.id as user_id,
+        u.name as user_name,
+        u.email as user_email,
+        COALESCE(s.scraper_count, 0) as active_scrapers,
+        COALESCE(i.integration_count, 0) as active_integrations,
+        COALESCE(j.jobs_today, 0) as jobs_today,
+        COALESCE(j.avg_execution_time, 0) as avg_execution_time_ms
+    FROM public.user_profiles u
+    LEFT JOIN (
+        SELECT scrapers.user_id, COUNT(*) as scraper_count
+        FROM public.scrapers
+        WHERE is_active = true
+        GROUP BY scrapers.user_id
+    ) s ON u.id = s.user_id
+    LEFT JOIN (
+        SELECT integrations.user_id, COUNT(*) as integration_count
+        FROM public.integrations
+        WHERE status = 'active'
+        GROUP BY integrations.user_id
+    ) i ON u.id = i.user_id
+    LEFT JOIN (
+        SELECT
+            scraper_runs.user_id,
+            COUNT(*) as jobs_today,
+            AVG(scraper_runs.execution_time_ms) as avg_execution_time  -- Fixed: changed from execution_time to execution_time_ms
+        FROM public.scraper_runs
+        WHERE scraper_runs.created_at >= CURRENT_DATE
+        GROUP BY scraper_runs.user_id
+    ) j ON u.id = j.user_id
+    ORDER BY u.name;
+END;
+$$;
+
+
+--
+-- Name: get_user_workload_stats(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_user_workload_stats() RETURNS TABLE(user_id uuid, user_name text, user_email text, active_scrapers bigint, active_integrations bigint, jobs_today bigint, jobs_this_week bigint, jobs_this_month bigint, avg_execution_time_ms numeric)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        u.id as user_id,
+        u.name as user_name,
+        u.email as user_email,
+        COALESCE(s.scraper_count, 0) as active_scrapers,
+        COALESCE(i.integration_count, 0) as active_integrations,
+        COALESCE(j.jobs_today, 0) as jobs_today,
+        COALESCE(j.jobs_this_week, 0) as jobs_this_week,
+        COALESCE(j.jobs_this_month, 0) as jobs_this_month,
+        COALESCE(j.avg_execution_time, 0) as avg_execution_time_ms
+    FROM public.user_profiles u
+    LEFT JOIN (
+        SELECT scrapers.user_id, COUNT(*) as scraper_count
+        FROM public.scrapers
+        WHERE is_active = true
+        GROUP BY scrapers.user_id
+    ) s ON u.id = s.user_id
+    LEFT JOIN (
+        SELECT integrations.user_id, COUNT(*) as integration_count
+        FROM public.integrations
+        WHERE status = 'active'
+        GROUP BY integrations.user_id
+    ) i ON u.id = i.user_id
+    LEFT JOIN (
+        SELECT
+            scraper_runs.user_id,
+            COUNT(*) FILTER (WHERE created_at >= date_trunc('day', now())) as jobs_today,
+            COUNT(*) FILTER (WHERE created_at >= date_trunc('week', now())) as jobs_this_week,
+            COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now())) as jobs_this_month,
+            AVG(execution_time_ms) as avg_execution_time
+        FROM public.scraper_runs
+        WHERE created_at >= date_trunc('month', now())
+        GROUP BY scraper_runs.user_id
+    ) j ON u.id = j.user_id
+    ORDER BY u.id;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION get_user_workload_stats(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_user_workload_stats() IS 'Returns user workload distribution with active scrapers, integrations, and job statistics including daily, weekly, and monthly counts. Removed is_approved column reference.';
+
+
+--
+-- Name: get_worker_capacity_config(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_worker_capacity_config() RETURNS TABLE(worker_type text, max_concurrent_jobs integer, current_jobs integer, description text)
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    -- Return current worker capacity configuration
+    RETURN QUERY
+    SELECT
+        'python'::text as worker_type,
+        1 as max_concurrent_jobs,
+        (SELECT COUNT(*)::integer FROM scraper_runs WHERE status IN ('pending', 'initializing', 'running') AND scraper_type = 'python') as current_jobs,
+        'Python scraper worker (py-worker)'::text as description
+    UNION ALL
+    SELECT
+        'typescript'::text as worker_type,
+        1 as max_concurrent_jobs,
+        (SELECT COUNT(*)::integer FROM scraper_runs WHERE status IN ('pending', 'initializing', 'running') AND scraper_type = 'typescript') as current_jobs,
+        'TypeScript scraper worker (ts-worker)'::text as description
+    UNION ALL
+    SELECT
+        'integration'::text as worker_type,
+        1 as max_concurrent_jobs,
+        (SELECT COUNT(*)::integer FROM integration_runs WHERE status IN ('pending', 'initializing', 'running')) as current_jobs,
+        'Integration worker (ts-util-worker)'::text as description;
+END;
+$$;
+
+
+--
+-- Name: handle_worker_error(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.handle_worker_error() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    -- If a run has been in 'pending' status for more than 5 minutes, mark it as failed
+    -- BUT only if it hasn't been claimed by a worker
+    UPDATE scraper_runs
+    SET
+        status = 'failed',
+        error_message = 'Worker timeout: The job was not picked up by a worker within 5 minutes',
+        completed_at = NOW()
+    WHERE
+        status = 'pending'
+        AND started_at < NOW() - INTERVAL '5 minutes'
+        AND claimed_by_worker_at IS NULL
+        AND id NOT IN (SELECT run_id FROM scraper_run_timeouts WHERE processed = false);
+
+    RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION handle_worker_error(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.handle_worker_error() IS 'Handles worker timeouts by marking pending jobs as failed if they have been pending for too long and have not been claimed by a worker.';
+
+
+--
+-- Name: is_valid_ean(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.is_valid_ean(ean_code text) RETURNS boolean
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $_$
+BEGIN
+    -- Return false if ean_code is null, empty, or just whitespace
+    IF ean_code IS NULL OR trim(ean_code) = '' THEN
+        RETURN FALSE;
+    END IF;
+    
+    -- Clean the EAN code by trimming whitespace
+    ean_code := trim(ean_code);
+    
+    -- Check if it contains only digits
+    IF ean_code !~ '^[0-9]+$' THEN
+        RETURN FALSE;
+    END IF;
+    
+    -- Check length - valid EAN codes are 8, 10, 11, 12, or 13 digits
+    -- EAN-8: 8 digits
+    -- UPC-A: 12 digits  
+    -- EAN-13: 13 digits
+    -- Some systems also accept 10 and 11 digit codes
+    IF length(ean_code) < 8 OR length(ean_code) > 13 THEN
+        RETURN FALSE;
+    END IF;
+    
+    -- Additional check: reject obviously invalid codes like single digits repeated
+    -- Reject codes like "11111111" or "00000000" for 8-digit codes
+    IF length(ean_code) = 8 AND ean_code ~ '^(.)\1{7}$' THEN
+        RETURN FALSE;
+    END IF;
+    
+    -- Reject codes like "111111111111" or "1111111111111" for 12-13 digit codes
+    IF length(ean_code) >= 12 AND ean_code ~ '^(.)\1{11,12}$' THEN
+        RETURN FALSE;
+    END IF;
+    
+    RETURN TRUE;
+END;
+$_$;
+
+
+--
+-- Name: FUNCTION is_valid_ean(ean_code text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.is_valid_ean(ean_code text) IS 'Validates EAN codes to ensure they are 8-13 digits long, contain only numbers, and are not obviously invalid patterns like repeated single digits';
+
+
+--
+-- Name: mark_conversation_messages_read(uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.mark_conversation_messages_read(conversation_uuid uuid, reader_type text) RETURNS integer
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+  updated_count INTEGER;
+BEGIN
+  -- Mark messages as read based on reader type
+  IF reader_type = 'user' THEN
+    -- User reading admin messages
+    UPDATE support_messages 
+    SET read_by_recipient = TRUE
+    WHERE conversation_id = conversation_uuid
+    AND sender_type = 'admin'
+    AND read_by_recipient = FALSE;
+    
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+    
+    -- Update last read timestamp for user
+    UPDATE support_conversations
+    SET last_read_by_user = NOW()
+    WHERE id = conversation_uuid;
+    
+  ELSIF reader_type = 'admin' THEN
+    -- Admin reading user messages
+    UPDATE support_messages 
+    SET read_by_recipient = TRUE
+    WHERE conversation_id = conversation_uuid
+    AND sender_type = 'user'
+    AND read_by_recipient = FALSE;
+    
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+    
+    -- Update last read timestamp for admin
+    UPDATE support_conversations
+    SET last_read_by_admin = NOW()
+    WHERE id = conversation_uuid;
+    
+  ELSE
+    updated_count := 0;
+  END IF;
+  
+  RETURN updated_count;
+END;
+$$;
+
+
+--
+-- Name: merge_integration_price_changes(text, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.merge_integration_price_changes(source_integration_name text, target_integration_name text) RETURNS jsonb
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    source_integration_id UUID;
+    target_integration_id UUID;
+    merged_competitors_count INTEGER := 0;
+    merged_suppliers_count INTEGER := 0;
+    updated_products_count INTEGER := 0;
+    result JSONB;
+BEGIN
+    -- Get integration IDs
+    SELECT id INTO source_integration_id FROM integrations WHERE name = source_integration_name;
+    SELECT id INTO target_integration_id FROM integrations WHERE name = target_integration_name;
+    
+    IF source_integration_id IS NULL THEN
+        RAISE EXCEPTION 'Source integration not found: %', source_integration_name;
+    END IF;
+    
+    IF target_integration_id IS NULL THEN
+        RAISE EXCEPTION 'Target integration not found: %', target_integration_name;
+    END IF;
+    
+    -- Update existing price_changes_competitors records from source to target integration
+    UPDATE price_changes_competitors 
+    SET integration_id = target_integration_id
+    WHERE integration_id = source_integration_id;
+    
+    GET DIAGNOSTICS merged_competitors_count = ROW_COUNT;
+    
+    -- Update existing price_changes_suppliers records from source to target integration
+    UPDATE price_changes_suppliers 
+    SET integration_id = target_integration_id
+    WHERE integration_id = source_integration_id;
+    
+    GET DIAGNOSTICS merged_suppliers_count = ROW_COUNT;
+    
+    -- Update products.our_retail_price to match the latest price from the merged records
+    -- This ensures consistency between products table and price_changes_competitors table
+    WITH latest_prices AS (
+        SELECT 
+            product_id,
+            new_our_retail_price,
+            ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY changed_at DESC) as rn
+        FROM price_changes_competitors 
+        WHERE integration_id = target_integration_id 
+          AND new_our_retail_price IS NOT NULL
+    )
+    UPDATE products 
+    SET our_retail_price = latest_prices.new_our_retail_price,
+        updated_at = NOW()
+    FROM latest_prices 
+    WHERE products.id = latest_prices.product_id 
+      AND latest_prices.rn = 1
+      AND products.our_retail_price IS DISTINCT FROM latest_prices.new_our_retail_price;
+    
+    GET DIAGNOSTICS updated_products_count = ROW_COUNT;
+    
+    -- Return summary
+    result := jsonb_build_object(
+        'source_integration', source_integration_name,
+        'target_integration', target_integration_name,
+        'merged_competitor_price_changes', merged_competitors_count,
+        'merged_supplier_price_changes', merged_suppliers_count,
+        'updated_products', updated_products_count,
+        'success', true
+    );
+    
+    RETURN result;
+    
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+        'success', false,
+        'error', SQLERRM
+    );
+END;
+$$;
+
+
+--
+-- Name: merge_product_data(text, text, text, text, text, text, text, text, uuid, uuid, text, text, text, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.merge_product_data(existing_name text, new_name text, existing_sku text, new_sku text, existing_ean text, new_ean text, existing_brand text, new_brand text, existing_brand_id uuid, new_brand_id uuid, existing_image_url text, new_image_url text, existing_url text, new_url text) RETURNS jsonb
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    RETURN jsonb_build_object(
+        'name', CASE 
+            WHEN new_name IS NOT NULL AND LENGTH(TRIM(new_name)) > LENGTH(COALESCE(TRIM(existing_name), '')) 
+            THEN new_name 
+            ELSE COALESCE(existing_name, new_name) 
+        END,
+        'sku', COALESCE(existing_sku, new_sku), -- Keep existing SKU if present
+        'ean', COALESCE(existing_ean, new_ean), -- Add EAN if missing
+        'brand', COALESCE(existing_brand, new_brand), -- Keep existing brand if present
+        'brand_id', COALESCE(existing_brand_id, new_brand_id), -- Keep existing brand_id if present
+        'image_url', CASE 
+            WHEN new_image_url IS NOT NULL AND LENGTH(TRIM(new_image_url)) > 0 
+            THEN new_image_url 
+            ELSE existing_image_url 
+        END,
+        'url', CASE 
+            WHEN new_url IS NOT NULL AND LENGTH(TRIM(new_url)) > 0 
+            THEN new_url 
+            ELSE existing_url 
+        END
+    );
+END;
+$$;
+
+
+--
+-- Name: FUNCTION merge_product_data(existing_name text, new_name text, existing_sku text, new_sku text, existing_ean text, new_ean text, existing_brand text, new_brand text, existing_brand_id uuid, new_brand_id uuid, existing_image_url text, new_image_url text, existing_url text, new_url text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.merge_product_data(existing_name text, new_name text, existing_sku text, new_sku text, existing_ean text, new_ean text, existing_brand text, new_brand text, existing_brand_id uuid, new_brand_id uuid, existing_image_url text, new_image_url text, existing_url text, new_url text) IS 'Intelligently merges product data preferring more complete information';
+
+
+--
+-- Name: merge_products_api(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.merge_products_api(primary_id uuid, duplicate_id uuid) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    primary_record RECORD;
+    duplicate_record RECORD;
+    result JSONB;
+    price_changes_count INT := 0;
+    supplier_changes_count INT := 0;
+    custom_fields_count INT := 0;
+    dismissed_duplicates_count INT := 0;
+    temp_data_count INT := 0;
+    remaining_refs BOOLEAN;
+BEGIN
+    -- Set a longer statement timeout for this operation
+    SET LOCAL statement_timeout = '120000'; -- 2 minutes in milliseconds
+    
+    -- Get the primary and duplicate product records
+    SELECT * INTO primary_record FROM products WHERE id = primary_id;
+    SELECT * INTO duplicate_record FROM products WHERE id = duplicate_id;
+    
+    -- Check if both records exist
+    IF primary_record IS NULL THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Primary product not found',
+            'primary_id', primary_id,
+            'duplicate_id', duplicate_id
+        );
+    END IF;
+    
+    IF duplicate_record IS NULL THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Duplicate product not found',
+            'primary_id', primary_id,
+            'duplicate_id', duplicate_id
+        );
+    END IF;
+    
+    -- Use intelligent data merging (prefer more complete data)
+    UPDATE products
+    SET
+        name = CASE 
+            WHEN duplicate_record.name IS NOT NULL AND LENGTH(TRIM(duplicate_record.name)) > LENGTH(COALESCE(TRIM(primary_record.name), '')) 
+            THEN duplicate_record.name 
+            ELSE COALESCE(primary_record.name, duplicate_record.name) 
+        END,
+        sku = COALESCE(primary_record.sku, duplicate_record.sku),
+        ean = COALESCE(primary_record.ean, duplicate_record.ean),
+        brand_id = COALESCE(primary_record.brand_id, duplicate_record.brand_id),
+        brand = COALESCE(primary_record.brand, duplicate_record.brand),
+        category = COALESCE(primary_record.category, duplicate_record.category),
+        description = CASE 
+            WHEN duplicate_record.description IS NOT NULL AND LENGTH(TRIM(duplicate_record.description)) > LENGTH(COALESCE(TRIM(primary_record.description), '')) 
+            THEN duplicate_record.description 
+            ELSE COALESCE(primary_record.description, duplicate_record.description) 
+        END,
+        image_url = CASE 
+            WHEN duplicate_record.image_url IS NOT NULL AND LENGTH(TRIM(duplicate_record.image_url)) > 0 
+            THEN duplicate_record.image_url 
+            ELSE primary_record.image_url 
+        END,
+        our_retail_price = COALESCE(primary_record.our_retail_price, duplicate_record.our_retail_price),
+        our_wholesale_price = COALESCE(primary_record.our_wholesale_price, duplicate_record.our_wholesale_price),
+        currency_code = COALESCE(primary_record.currency_code, duplicate_record.currency_code),
+        our_url = CASE 
+            WHEN duplicate_record.our_url IS NOT NULL AND LENGTH(TRIM(duplicate_record.our_url)) > 0 
+            THEN duplicate_record.our_url 
+            ELSE primary_record.our_url 
+        END,
+        updated_at = NOW()
+    WHERE id = primary_id;
+    
+    -- Update references in price_changes_competitors table
+    -- First, delete any duplicate price records that would be created by the merge
+    DELETE FROM price_changes_competitors pc1
+    WHERE pc1.product_id = duplicate_id
+    AND EXISTS (
+        SELECT 1 FROM price_changes_competitors pc2
+        WHERE pc2.product_id = primary_id
+        AND pc2.competitor_id = pc1.competitor_id
+        AND pc2.new_competitor_price = pc1.new_competitor_price
+        AND pc2.changed_at::date = pc1.changed_at::date
+    );
+    
+    -- Then update remaining records to point to primary product
+    UPDATE price_changes_competitors
+    SET product_id = primary_id
+    WHERE product_id = duplicate_id;
+    GET DIAGNOSTICS price_changes_count = ROW_COUNT;
+    
+    -- Update references in price_changes_suppliers table
+    UPDATE price_changes_suppliers
+    SET product_id = primary_id
+    WHERE product_id = duplicate_id;
+    GET DIAGNOSTICS supplier_changes_count = ROW_COUNT;
+    
+    -- Update references in temp_competitors_scraped_data table
+    UPDATE temp_competitors_scraped_data
+    SET product_id = primary_id
+    WHERE product_id = duplicate_id;
+    GET DIAGNOSTICS temp_data_count = ROW_COUNT;
+    
+    -- Handle products_dismissed_duplicates table
+    -- Update both product_id_1 and product_id_2 references
+    UPDATE products_dismissed_duplicates
+    SET product_id_1 = primary_id
+    WHERE product_id_1 = duplicate_id;
+    
+    UPDATE products_dismissed_duplicates
+    SET product_id_2 = primary_id
+    WHERE product_id_2 = duplicate_id;
+    
+    -- Remove any dismissed duplicate entries where both products are now the same
+    DELETE FROM products_dismissed_duplicates
+    WHERE product_id_1 = product_id_2;
+    
+    GET DIAGNOSTICS dismissed_duplicates_count = ROW_COUNT;
+    
+    -- Handle custom field values: merge duplicate's custom fields into primary
+    -- For fields that exist in both products, keep the primary's values
+    -- For fields that only exist in duplicate, move them to primary
+    INSERT INTO product_custom_field_values (
+        product_id, custom_field_id, value, source_type, source_id, 
+        last_updated_by, confidence_score, created_by_source, created_at, updated_at
+    )
+    SELECT 
+        primary_id, 
+        pcfv.custom_field_id, 
+        pcfv.value, 
+        pcfv.source_type, 
+        pcfv.source_id,
+        pcfv.last_updated_by, 
+        pcfv.confidence_score, 
+        pcfv.created_by_source, 
+        pcfv.created_at, 
+        NOW()
+    FROM product_custom_field_values pcfv
+    WHERE pcfv.product_id = duplicate_id
+    AND NOT EXISTS (
+        -- Only insert if primary doesn't already have this custom field
+        SELECT 1 FROM product_custom_field_values existing
+        WHERE existing.product_id = primary_id 
+        AND existing.custom_field_id = pcfv.custom_field_id
+    )
+    ON CONFLICT (product_id, custom_field_id) DO NOTHING;
+    
+    GET DIAGNOSTICS custom_fields_count = ROW_COUNT;
+    
+    -- Delete custom field values for the duplicate product
+    DELETE FROM product_custom_field_values WHERE product_id = duplicate_id;
+    
+    -- Check if there are any remaining references to the duplicate product
+    SELECT EXISTS (
+        SELECT 1 FROM price_changes_competitors WHERE product_id = duplicate_id
+        UNION ALL
+        SELECT 1 FROM price_changes_suppliers WHERE product_id = duplicate_id
+        UNION ALL
+        SELECT 1 FROM product_custom_field_values WHERE product_id = duplicate_id
+        UNION ALL
+        SELECT 1 FROM products_dismissed_duplicates WHERE product_id_1 = duplicate_id OR product_id_2 = duplicate_id
+        UNION ALL
+        SELECT 1 FROM temp_competitors_scraped_data WHERE product_id = duplicate_id
+        LIMIT 1
+    ) INTO remaining_refs;
+    
+    IF remaining_refs THEN
+        -- There are still references to the duplicate product
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Cannot delete product: still has references in related tables',
+            'primary_id', primary_id,
+            'duplicate_id', duplicate_id,
+            'stats', jsonb_build_object(
+                'price_changes_updated', price_changes_count,
+                'supplier_changes_updated', supplier_changes_count,
+                'custom_fields_merged', custom_fields_count,
+                'dismissed_duplicates_updated', dismissed_duplicates_count,
+                'temp_data_updated', temp_data_count
+            )
+        );
+    END IF;
+    
+    -- Delete the duplicate product
+    BEGIN
+        DELETE FROM products WHERE id = duplicate_id;
+        
+        -- Return success result with statistics
+        result := jsonb_build_object(
+            'success', true,
+            'message', 'Products merged successfully',
+            'primary_id', primary_id,
+            'duplicate_id', duplicate_id,
+            'stats', jsonb_build_object(
+                'price_changes_updated', price_changes_count,
+                'supplier_changes_updated', supplier_changes_count,
+                'custom_fields_merged', custom_fields_count,
+                'dismissed_duplicates_updated', dismissed_duplicates_count,
+                'temp_data_updated', temp_data_count
+            )
+        );
+    EXCEPTION WHEN OTHERS THEN
+        -- Return detailed error information
+        result := jsonb_build_object(
+            'success', false,
+            'message', 'Error deleting duplicate product: ' || SQLERRM,
+            'detail', SQLSTATE,
+            'primary_id', primary_id,
+            'duplicate_id', duplicate_id,
+            'stats', jsonb_build_object(
+                'price_changes_updated', price_changes_count,
+                'supplier_changes_updated', supplier_changes_count,
+                'custom_fields_merged', custom_fields_count,
+                'dismissed_duplicates_updated', dismissed_duplicates_count,
+                'temp_data_updated', temp_data_count
+            )
+        );
+    END;
+    
+    RETURN result;
+EXCEPTION WHEN OTHERS THEN
+    -- Return detailed error information
+    result := jsonb_build_object(
+        'success', false,
+        'message', 'Error merging products: ' || SQLERRM,
+        'detail', SQLSTATE,
+        'primary_id', primary_id,
+        'duplicate_id', duplicate_id
+    );
+    
+    RETURN result;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION merge_products_api(primary_id uuid, duplicate_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.merge_products_api(primary_id uuid, duplicate_id uuid) IS 'Enhanced product merging with intelligent data selection and no temp table updates';
+
+
+--
+-- Name: normalize_sku(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.normalize_sku(sku text) RETURNS text
+    LANGUAGE plpgsql IMMUTABLE
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  -- Return NULL if input is NULL or empty
+  IF sku IS NULL OR TRIM(sku) = '' THEN
+    RETURN NULL;
+  END IF;
+  
+  -- Remove common separators and normalize to uppercase
+  RETURN REGEXP_REPLACE(UPPER(TRIM(sku)), '[^A-Z0-9]', '', 'g');
+END;
+$$;
+
+
+--
+-- Name: FUNCTION normalize_sku(sku text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.normalize_sku(sku text) IS 'Normalizes SKU by removing separators and converting to uppercase. Used for fuzzy SKU matching.';
+
+
+--
+-- Name: normalize_sku_for_matching(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.normalize_sku_for_matching(input_sku text) RETURNS text
+    LANGUAGE plpgsql IMMUTABLE
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    -- Return NULL if input is NULL or empty
+    IF input_sku IS NULL OR trim(input_sku) = '' THEN
+        RETURN NULL;
+    END IF;
+    
+    -- Remove spaces, hyphens, equals signs and similar separators
+    -- Keep only letters and numbers, convert to lowercase
+    RETURN lower(regexp_replace(input_sku, '[^a-zA-Z0-9]', '', 'g'));
+END;
+$$;
+
+
+--
+-- Name: normalize_url(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.normalize_url(url_text text) RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF url_text IS NULL OR url_text = '' THEN
+        RETURN NULL;
+    END IF;
+    
+    -- Remove trailing slash
+    url_text := rtrim(url_text, '/');
+    
+    -- Convert to lowercase for consistency
+    url_text := lower(url_text);
+    
+    -- Remove common tracking parameters
+    url_text := regexp_replace(url_text, '[?&](utm_[^&]*|gclid=[^&]*|fbclid=[^&]*)', '', 'g');
+    
+    -- Clean up any remaining ? or & at the end
+    url_text := rtrim(url_text, '?&');
+    
+    RETURN url_text;
+END;
+$$;
+
+
+--
+-- Name: optimize_scraper_schedules(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.optimize_scraper_schedules() RETURNS integer
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$ DECLARE scraper_record record; update_count integer := 0; time_slot integer := 0; total_scrapers integer; minutes_per_slot integer; new_hour integer; new_minute integer; new_time text; updated_schedule jsonb; BEGIN SELECT COUNT(*) INTO total_scrapers FROM public.scrapers WHERE is_active = true; minutes_per_slot := GREATEST(5, (24 * 60) / GREATEST(total_scrapers, 1)); FOR scraper_record IN SELECT id, schedule, user_id FROM public.scrapers WHERE is_active = true ORDER BY user_id, id LOOP new_hour := (time_slot * minutes_per_slot) / 60; new_minute := (time_slot * minutes_per_slot) % 60; new_time := LPAD((new_hour % 24)::text, 2, '0') || ':' || LPAD(new_minute::text, 2, '0'); updated_schedule := jsonb_set( scraper_record.schedule, '{time}', to_jsonb(new_time) ); UPDATE public.scrapers SET schedule = updated_schedule, updated_at = now() WHERE id = scraper_record.id; update_count := update_count + 1; time_slot := time_slot + 1; END LOOP; INSERT INTO public.debug_logs (message, created_at) VALUES ('Optimized scraper schedules - updated_scrapers: ' || update_count || ', total_scrapers: ' || total_scrapers || ', minutes_per_slot: ' || minutes_per_slot, now()); RETURN update_count; END; $$;
+
+
+--
+-- Name: populate_our_urls_in_changes(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.populate_our_urls_in_changes() RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    updated_count INTEGER := 0;
+BEGIN
+    -- Update price_changes_competitors
+    UPDATE price_changes_competitors pc
+    SET our_url = p.our_url
+    FROM products p
+    WHERE pc.product_id = p.id 
+      AND pc.our_url IS NULL 
+      AND p.our_url IS NOT NULL;
+    
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+    RAISE NOTICE 'Updated % competitor price change records with our_url', updated_count;
+    
+    -- Update price_changes_suppliers
+    UPDATE price_changes_suppliers ps
+    SET our_url = p.our_url
+    FROM products p
+    WHERE ps.product_id = p.id 
+      AND ps.our_url IS NULL 
+      AND p.our_url IS NOT NULL;
+    
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+    RAISE NOTICE 'Updated % supplier price change records with our_url', updated_count;
+    
+    -- Update stock_changes_competitors
+    UPDATE stock_changes_competitors sc
+    SET our_url = p.our_url
+    FROM products p
+    WHERE sc.product_id = p.id 
+      AND sc.our_url IS NULL 
+      AND p.our_url IS NOT NULL;
+    
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+    RAISE NOTICE 'Updated % competitor stock change records with our_url', updated_count;
+    
+    -- Update stock_changes_suppliers
+    UPDATE stock_changes_suppliers ss
+    SET our_url = p.our_url
+    FROM products p
+    WHERE ss.product_id = p.id 
+      AND ss.our_url IS NULL 
+      AND p.our_url IS NOT NULL;
+    
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+    RAISE NOTICE 'Updated % supplier stock change records with our_url', updated_count;
+    
+    RETURN updated_count;
+END;
+$$;
+
+
+--
+-- Name: process_all_pending_temp_integrations(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_all_pending_temp_integrations() RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    temp_record RECORD;
+    processed_count INTEGER := 0;
+BEGIN
+    FOR temp_record IN 
+        SELECT * FROM temp_integrations_scraped_data WHERE status = 'pending'
+    LOOP
+        -- Simulate the trigger by calling the processing logic
+        BEGIN
+            -- Call the same logic as the trigger function but adapted for manual processing
+            PERFORM process_single_temp_integration(temp_record);
+            processed_count := processed_count + 1;
+        EXCEPTION WHEN OTHERS THEN
+            -- Mark record as error
+            UPDATE temp_integrations_scraped_data 
+            SET status = 'error', error_message = SQLERRM 
+            WHERE id = temp_record.id;
+        END;
+    END LOOP;
+    
+    RETURN processed_count;
+END;
+$$;
+
+
+--
+-- Name: process_all_temp_data(integer, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_all_temp_data(batch_size integer DEFAULT 500, max_processing_time_minutes integer DEFAULT 30) RETURNS TABLE(processing_stage text, table_name text, processed integer, errors integer, new_products integer, changes integer, processing_time_ms numeric)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    start_time TIMESTAMP;
+    stage_start_time TIMESTAMP;
+    processing_deadline TIMESTAMP;
+    result_record RECORD;
+    competitor_record RECORD;
+    supplier_record RECORD;
+    integration_record RECORD;
+BEGIN
+    start_time := clock_timestamp();
+    processing_deadline := start_time + (max_processing_time_minutes || ' minutes')::INTERVAL;
+    
+    RAISE NOTICE 'Starting import orchestration (batch size: %, max time: % minutes)', batch_size, max_processing_time_minutes;
+    
+    -- Stage 1: Process Integrations First (our products)
+    stage_start_time := clock_timestamp();
+    
+    FOR integration_record IN 
+        SELECT DISTINCT user_id, integration_id
+        FROM temp_integrations_scraped_data
+        ORDER BY user_id, integration_id
+    LOOP
+        -- Check time limit
+        IF clock_timestamp() > processing_deadline THEN
+            RAISE NOTICE 'Processing time limit reached, stopping';
+            EXIT;
+        END IF;
+        
+        -- Process integration batch (function to be created)
+        SELECT * INTO result_record 
+        FROM process_temp_integrations_batch(integration_record.integration_id, batch_size);
+        
+        RETURN QUERY SELECT 
+            'integrations'::TEXT,
+            'temp_integrations_scraped_data'::TEXT,
+            result_record.processed,
+            result_record.errors,
+            result_record.new_products,
+            result_record.price_changes,
+            EXTRACT(EPOCH FROM (clock_timestamp() - stage_start_time)) * 1000;
+    END LOOP;
+    
+    -- Stage 2: Process Competitors (external products)
+    stage_start_time := clock_timestamp();
+    
+    FOR competitor_record IN 
+        SELECT DISTINCT user_id, competitor_id
+        FROM temp_competitors_scraped_data
+        ORDER BY user_id, competitor_id
+    LOOP
+        -- Check time limit
+        IF clock_timestamp() > processing_deadline THEN
+            RAISE NOTICE 'Processing time limit reached, stopping';
+            EXIT;
+        END IF;
+        
+        -- Process competitor batch
+        SELECT * INTO result_record 
+        FROM process_temp_competitors_batch(competitor_record.competitor_id, batch_size);
+        
+        RETURN QUERY SELECT 
+            'competitors'::TEXT,
+            'temp_competitors_scraped_data'::TEXT,
+            result_record.processed,
+            result_record.errors,
+            result_record.new_products,
+            result_record.price_changes,
+            EXTRACT(EPOCH FROM (clock_timestamp() - stage_start_time)) * 1000;
+    END LOOP;
+    
+    -- Stage 3: Process Suppliers (wholesale products)
+    stage_start_time := clock_timestamp();
+    
+    FOR supplier_record IN 
+        SELECT DISTINCT user_id, supplier_id
+        FROM temp_suppliers_scraped_data
+        WHERE supplier_id IS NOT NULL
+        ORDER BY user_id, supplier_id
+    LOOP
+        -- Check time limit
+        IF clock_timestamp() > processing_deadline THEN
+            RAISE NOTICE 'Processing time limit reached, stopping';
+            EXIT;
+        END IF;
+        
+        -- Process supplier batch
+        SELECT * INTO result_record 
+        FROM process_temp_suppliers_batch(supplier_record.supplier_id, batch_size);
+        
+        RETURN QUERY SELECT 
+            'suppliers'::TEXT,
+            'temp_suppliers_scraped_data'::TEXT,
+            result_record.processed,
+            result_record.errors,
+            result_record.new_products,
+            result_record.price_changes,
+            EXTRACT(EPOCH FROM (clock_timestamp() - stage_start_time)) * 1000;
+    END LOOP;
+    
+    -- Stage 4: Sync URL cross-references
+    stage_start_time := clock_timestamp();
+    
+    PERFORM sync_our_urls_from_products();
+    
+    RETURN QUERY SELECT 
+        'url_sync'::TEXT,
+        'all_tables'::TEXT,
+        0, 0, 0, 0,
+        EXTRACT(EPOCH FROM (clock_timestamp() - stage_start_time)) * 1000;
+    
+    RAISE NOTICE 'Import orchestration complete! Total time: %.2f ms', 
+                 EXTRACT(EPOCH FROM (clock_timestamp() - start_time)) * 1000;
+END;
+$$;
+
+
+--
+-- Name: process_custom_fields(uuid, uuid, jsonb); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_custom_fields(p_user_id uuid, p_product_id uuid, p_raw_data jsonb) RETURNS jsonb
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$ BEGIN RETURN process_custom_fields_from_raw_data(p_user_id, p_product_id, p_raw_data); END; $$;
+
+
+--
+-- Name: process_custom_fields_from_raw_data(uuid, uuid, jsonb, text, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_custom_fields_from_raw_data(p_user_id uuid, p_product_id uuid, p_raw_data jsonb, p_source_type text DEFAULT 'scraper'::text, p_source_id uuid DEFAULT NULL::uuid) RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    field_record RECORD;
+    field_value TEXT;
+    processed_count INTEGER := 0;
+    v_custom_field_id UUID;
+    v_field_type TEXT;
+    auto_create_enabled BOOLEAN := TRUE; -- Default to enabled
+BEGIN
+    -- Early return if no data
+    IF p_raw_data IS NULL OR p_raw_data = '{}' THEN
+        RETURN 0;
+    END IF;
+    
+    -- Process each field in the raw data
+    FOR field_record IN 
+        SELECT key, value 
+        FROM jsonb_each_text(p_raw_data)
+        WHERE value IS NOT NULL AND value != ''
+    LOOP
+        -- Check if this field is already configured for the user
+        SELECT id INTO v_custom_field_id
+        FROM product_custom_fields
+        WHERE user_id = p_user_id 
+          AND field_name = field_record.key
+        LIMIT 1;
+        
+        -- Auto-create field if it doesn't exist and auto-creation is enabled
+        IF v_custom_field_id IS NULL AND auto_create_enabled THEN
+            -- Detect field type based on value
+            v_field_type := detect_custom_field_type(field_record.value);
+            
+            -- Create the custom field
+            INSERT INTO product_custom_fields (
+                user_id, 
+                field_name, 
+                field_type, 
+                is_required, 
+                default_value,
+                allow_auto_update,
+                created_at
+            ) VALUES (
+                p_user_id,
+                field_record.key,
+                v_field_type,
+                false, -- Auto-created fields are not required by default
+                null,
+                true, -- Allow auto-updates for scraped fields
+                NOW()
+            ) RETURNING id INTO v_custom_field_id;
+            
+            RAISE NOTICE 'Auto-created custom field: % (type: %)', field_record.key, v_field_type;
+        END IF;
+        
+        -- Process the field if we have a custom_field_id (either existing or newly created)
+        IF v_custom_field_id IS NOT NULL THEN
+            field_value := field_record.value;
+            
+            -- Use the optimized storage function with deduplication
+            PERFORM store_custom_field_optimized(
+                p_product_id,
+                v_custom_field_id,
+                field_record.key,
+                field_value,
+                p_source_type,
+                p_source_id
+            );
+            
+            processed_count := processed_count + 1;
+        END IF;
+    END LOOP;
+    
+    RETURN processed_count;
+END;
+$$;
+
+
+--
+-- Name: process_custom_fields_from_raw_data(uuid, uuid, jsonb, character varying, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_custom_fields_from_raw_data(p_user_id uuid, p_product_id uuid, p_raw_data jsonb, p_source_type character varying, p_source_id uuid) RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    field_record RECORD;
+    field_value TEXT;
+    processed_count INTEGER := 0;
+    v_custom_field_id UUID;
+BEGIN
+    -- Early return if no data
+    IF p_raw_data IS NULL OR p_raw_data = '{}' THEN
+        RETURN 0;
+    END IF;
+    
+    -- Process each field in the raw data
+    FOR field_record IN 
+        SELECT key, value 
+        FROM jsonb_each_text(p_raw_data)
+        WHERE value IS NOT NULL AND value != ''
+    LOOP
+        -- Check if this field is configured for the user
+        SELECT id INTO v_custom_field_id
+        FROM user_custom_fields
+        WHERE user_id = p_user_id 
+          AND field_name = field_record.key
+        LIMIT 1;
+        
+        -- Only process if field is configured
+        IF v_custom_field_id IS NOT NULL THEN
+            field_value := field_record.value;
+            
+            -- Use the optimized storage function
+            PERFORM store_custom_field_optimized(
+                p_product_id,
+                v_custom_field_id,
+                field_record.key,
+                field_value,
+                p_source_type,
+                p_source_id
+            );
+            
+            processed_count := processed_count + 1;
+        END IF;
+    END LOOP;
+    
+    RETURN processed_count;
+END;
+$$;
+
+
+--
+-- Name: process_scraper_timeouts(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_scraper_timeouts() RETURNS integer
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$ DECLARE timeout_count integer := 0; timeout_record record; BEGIN FOR timeout_record IN SELECT sr.id, sr.scraper_id, sr.started_at FROM public.scraper_runs sr WHERE sr.status = 'running' AND sr.started_at < now() - interval '2 hours' LOOP UPDATE public.scraper_runs SET status = 'failed', completed_at = now(), error_message = 'Job timed out after 2 hours' WHERE id = timeout_record.id; timeout_count := timeout_count + 1; INSERT INTO public.debug_logs (message, created_at) VALUES ('Scraper run timed out - run_id: ' || timeout_record.id || ', scraper_id: ' || timeout_record.scraper_id || ', started_at: ' || timeout_record.started_at, now()); END LOOP; RETURN timeout_count; END; $$;
+
+
+--
+-- Name: process_temp_competitors_batch(uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_temp_competitors_batch(p_competitor_id uuid DEFAULT NULL::uuid, batch_size integer DEFAULT 500) RETURNS TABLE(processed integer, errors integer, new_products integer, price_changes integer)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+DECLARE
+    result_record RECORD;
+BEGIN
+    -- Call the new function with conflict detection
+    SELECT * INTO result_record
+    FROM process_temp_competitors_batch_with_conflict_detection(p_competitor_id, batch_size);
+    
+    -- Return only the original 4 columns for backward compatibility
+    RETURN QUERY 
+    SELECT result_record.processed, result_record.errors, result_record.new_products, result_record.price_changes;
+END;
+$$;
+
+
+--
+-- Name: process_temp_competitors_batch_with_conflict_detection(uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_temp_competitors_batch_with_conflict_detection(p_competitor_id uuid DEFAULT NULL::uuid, batch_size integer DEFAULT 100) RETURNS TABLE(processed integer, errors integer, new_products integer, price_changes integer, conflicts integer, reviews integer)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    temp_record RECORD;
+    total_processed INTEGER := 0;
+    total_errors INTEGER := 0;
+    total_new_products INTEGER := 0;
+    total_price_changes INTEGER := 0;
+    total_conflicts INTEGER := 0;
+    total_reviews INTEGER := 0;
+    matched_product_id UUID;
+    v_brand_id UUID;
+    current_competitor_price NUMERIC(10,2);
+    current_stock_quantity INTEGER;
+    current_stock_status TEXT;
+    current_availability_date DATE;
+    standardized_status TEXT;
+    start_time TIMESTAMP;
+    batch_ids UUID[];
+    first_user_id UUID;
+    custom_fields_processed INTEGER;
+    old_category TEXT;
+    new_category TEXT;
+BEGIN
+    start_time := clock_timestamp();
+    RAISE NOTICE 'Starting batch processing with improved stock logic for competitor % (batch size: %)', p_competitor_id, batch_size;
+    
+    -- Get batch IDs (FIX: qualify the processed column)
+    SELECT array_agg(subq.id ORDER BY subq.scraped_at) INTO batch_ids
+    FROM (
+        SELECT t.id, t.scraped_at
+        FROM temp_competitors_scraped_data t
+        WHERE (p_competitor_id IS NULL OR t.competitor_id = p_competitor_id)
+          AND t.processed = false
+        ORDER BY t.scraped_at
+        LIMIT batch_size
+    ) subq;
+    
+    -- Skip if no records
+    IF array_length(batch_ids, 1) IS NULL OR array_length(batch_ids, 1) = 0 THEN
+        RAISE NOTICE 'No records to process';
+        RETURN QUERY SELECT 0, 0, 0, 0, 0, 0;
+        RETURN;
+    END IF;
+    
+    -- Get user_id from first record
+    SELECT t.user_id INTO first_user_id
+    FROM temp_competitors_scraped_data t
+    WHERE t.id = batch_ids[1];
+    
+    total_conflicts := 0;
+    total_reviews := 0;
+    
+    RAISE NOTICE 'Processing % records with improved stock change detection', array_length(batch_ids, 1);
+    
+    -- Process records (FIX: qualify the processed column)
+    FOR temp_record IN 
+        SELECT * FROM temp_competitors_scraped_data t
+        WHERE (p_competitor_id IS NULL OR t.competitor_id = p_competitor_id)
+          AND t.processed = false
+        ORDER BY t.scraped_at
+        LIMIT batch_size
+    LOOP
+        BEGIN
+            -- STEP 1: Brand lookup using the proper function that respects aliases
+            v_brand_id := NULL;
+            IF temp_record.brand IS NOT NULL AND temp_record.brand != '' THEN
+                -- Use the find_or_create_brand function that properly checks aliases
+                SELECT find_or_create_brand(temp_record.user_id, temp_record.brand) INTO v_brand_id;
+            END IF;
+            
+            -- STEP 2: Product matching using resolved brand_id
+            matched_product_id := NULL;
+            
+            -- Try EAN match first
+            IF temp_record.ean IS NOT NULL AND temp_record.ean != '' AND is_valid_ean(temp_record.ean) THEN
+                SELECT id INTO matched_product_id
+                FROM products
+                WHERE user_id = temp_record.user_id
+                  AND ean = temp_record.ean
+                LIMIT 1;
+            END IF;
+            
+            -- Try brand_id + SKU match (using resolved brand_id)
+            IF matched_product_id IS NULL AND v_brand_id IS NOT NULL AND temp_record.sku IS NOT NULL AND temp_record.sku != '' THEN
+                SELECT id INTO matched_product_id
+                FROM products
+                WHERE user_id = temp_record.user_id
+                  AND brand_id = v_brand_id  -- Use resolved brand_id
+                  AND normalize_sku_for_matching(sku) = normalize_sku_for_matching(temp_record.sku)
+                LIMIT 1;
+            END IF;
+            
+            -- Fuzzy matching as last resort
+            IF matched_product_id IS NULL THEN
+                SELECT find_product_with_fuzzy_matching(
+                    temp_record.user_id,
+                    temp_record.ean,
+                    temp_record.brand,
+                    temp_record.sku,
+                    temp_record.name,
+                    v_brand_id
+                ) INTO matched_product_id;
+            END IF;
+            
+            -- Create new product if no match
+            IF matched_product_id IS NULL THEN
+                INSERT INTO products (
+                    user_id, name, sku, ean, brand, brand_id, image_url, currency_code
+                ) VALUES (
+                    temp_record.user_id, temp_record.name, temp_record.sku, temp_record.ean,
+                    temp_record.brand, v_brand_id, temp_record.image_url, 
+                    COALESCE(temp_record.currency_code, get_user_primary_currency(temp_record.user_id))
+                ) RETURNING id INTO matched_product_id;
+                
+                total_new_products := total_new_products + 1;
+            END IF;
+            
+            -- Process custom fields
+            IF matched_product_id IS NOT NULL AND temp_record.raw_data IS NOT NULL THEN
+                SELECT process_custom_fields_from_raw_data(
+                    temp_record.user_id,
+                    matched_product_id,
+                    temp_record.raw_data,
+                    'competitor',
+                    temp_record.competitor_id
+                ) INTO custom_fields_processed;
+            END IF;
+            
+            -- Price change detection
+            SELECT new_competitor_price INTO current_competitor_price
+            FROM price_changes_competitors
+            WHERE user_id = temp_record.user_id
+              AND product_id = matched_product_id
+              AND competitor_id = temp_record.competitor_id
+            ORDER BY changed_at DESC
+            LIMIT 1;
+            
+            -- Only insert if price actually changed
+            IF current_competitor_price IS NULL OR ABS(current_competitor_price - temp_record.competitor_price) > 0.01 THEN
+                INSERT INTO price_changes_competitors (
+                    user_id, product_id, competitor_id, old_competitor_price, new_competitor_price,
+                    changed_at, competitor_url, currency_code
+                ) VALUES (
+                    temp_record.user_id, matched_product_id, temp_record.competitor_id,
+                    current_competitor_price, temp_record.competitor_price, NOW(),
+                    temp_record.competitor_url, 
+                    COALESCE(temp_record.currency_code, get_user_primary_currency(temp_record.user_id))
+                );
+                
+                total_price_changes := total_price_changes + 1;
+            END IF;
+            
+            -- IMPROVED Stock processing - only record meaningful changes
+            IF temp_record.stock_quantity IS NOT NULL OR temp_record.stock_status IS NOT NULL THEN
+                SELECT new_stock_quantity, new_stock_status, new_availability_date
+                INTO current_stock_quantity, current_stock_status, current_availability_date
+                FROM stock_changes_competitors
+                WHERE user_id = temp_record.user_id
+                  AND product_id = matched_product_id
+                  AND competitor_id = temp_record.competitor_id
+                ORDER BY changed_at DESC
+                LIMIT 1;
+                
+                standardized_status := standardize_stock_status(temp_record.stock_status);
+                
+                -- Map statuses to major business categories
+                old_category := CASE 
+                    WHEN current_stock_status IN ('in_stock', 'limited_stock') THEN 'available'
+                    WHEN current_stock_status IN ('out_of_stock', 'discontinued') THEN 'unavailable'
+                    WHEN current_stock_status IN ('back_order', 'coming_soon') THEN 'pre_order'
+                    ELSE 'unknown'
+                END;
+                
+                new_category := CASE 
+                    WHEN standardized_status IN ('in_stock', 'limited_stock') THEN 'available'
+                    WHEN standardized_status IN ('out_of_stock', 'discontinued') THEN 'unavailable'
+                    WHEN standardized_status IN ('back_order', 'coming_soon') THEN 'pre_order'
+                    ELSE 'unknown'
+                END;
+                
+                -- Only record stock changes if:
+                -- 1) Stock quantity changed (always important)
+                -- 2) First record for this product/competitor (current_stock_status IS NULL)
+                -- 3) Major status category changed (available <-> unavailable <-> pre_order)
+                IF (current_stock_quantity IS DISTINCT FROM temp_record.stock_quantity) OR 
+                   (current_stock_status IS NULL) OR 
+                   (old_category IS DISTINCT FROM new_category) THEN
+                    
+                    INSERT INTO stock_changes_competitors (
+                        user_id, product_id, competitor_id,
+                        old_stock_quantity, new_stock_quantity,
+                        old_stock_status, new_stock_status,
+                        old_availability_date, new_availability_date,
+                        stock_change_quantity, changed_at, raw_stock_data,
+                        competitor_url
+                    ) VALUES (
+                        temp_record.user_id, matched_product_id, temp_record.competitor_id,
+                        current_stock_quantity, temp_record.stock_quantity,
+                        current_stock_status, standardized_status,
+                        current_availability_date, temp_record.availability_date,
+                        COALESCE(temp_record.stock_quantity, 0) - COALESCE(current_stock_quantity, 0),
+                        NOW(), temp_record.raw_stock_data,
+                        temp_record.competitor_url
+                    );
+                    
+                    RAISE NOTICE 'Stock change recorded: % -> % (category: % -> %)', 
+                        current_stock_status, standardized_status, old_category, new_category;
+                END IF;
+            END IF;
+            
+            -- Mark as processed and delete (FIX: qualify the processed column)
+            UPDATE temp_competitors_scraped_data SET processed = true WHERE id = temp_record.id;
+            DELETE FROM temp_competitors_scraped_data WHERE id = temp_record.id;
+            total_processed := total_processed + 1;
+            
+            IF total_processed % 50 = 0 THEN
+                RAISE NOTICE 'Processed % records (%.2f ms avg per record)', 
+                    total_processed, 
+                    EXTRACT(EPOCH FROM (clock_timestamp() - start_time)) * 1000 / total_processed;
+            END IF;
+            
+        EXCEPTION WHEN OTHERS THEN
+            total_errors := total_errors + 1;
+            RAISE WARNING 'Error processing record % (SKU: %, Brand: %): %', 
+                temp_record.id, temp_record.sku, temp_record.brand, SQLERRM;
+            UPDATE temp_competitors_scraped_data SET processed = true WHERE id = temp_record.id;
+            DELETE FROM temp_competitors_scraped_data WHERE id = temp_record.id;
+        END;
+    END LOOP;
+    
+    RAISE NOTICE 'Batch complete! Processed: %, Errors: %, New products: %, Price changes: %, Total time: %.2f ms', 
+                 total_processed, total_errors, total_new_products, total_price_changes,
+                 EXTRACT(EPOCH FROM (clock_timestamp() - start_time)) * 1000;
+    
+    RETURN QUERY SELECT total_processed, total_errors, total_new_products, total_price_changes, total_conflicts, total_reviews;
+END;
+$$;
+
+
+--
+-- Name: process_temp_competitors_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_temp_competitors_scraped_data() RETURNS TABLE(processed integer, errors integer, new_products integer, price_changes integer, conflicts_detected integer, reviews_created integer)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+    -- This function now uses the conflict detection version
+    RAISE NOTICE 'Processing all competitor data using optimized batch function with conflict detection';
+    
+    RETURN QUERY 
+    SELECT * FROM process_temp_competitors_batch_with_conflict_detection(NULL, 500);
+END;
+$$;
+
+
+--
+-- Name: process_temp_competitors_scraped_data_trigger(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_temp_competitors_scraped_data_trigger() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Only process records that are not marked as processed
+    IF NEW.processed = false THEN
+        -- Call the batch processing function for this specific record
+        -- We'll process it immediately in small batches
+        PERFORM process_temp_competitors_batch(NEW.competitor_id, 1);
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: process_temp_integrations_scraped_data(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_temp_integrations_scraped_data() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    existing_product_id UUID;
+    v_brand_id UUID;
+    current_retail_price NUMERIC(10,2);
+    current_wholesale_price NUMERIC(10,2);
+    custom_fields_result JSONB;
+    rounded_retail_price NUMERIC(10,2);
+    rounded_wholesale_price NUMERIC(10,2);
+    integration_config JSONB;
+    selective_import_enabled BOOLEAN := FALSE;
+    field_config JSONB;
+BEGIN
+    -- CRITICAL: Only process records with status 'pending'
+    -- Skip all other statuses: integration_pending, conflict_review, conflict_check, processed, error
+    IF NEW.status IS NULL OR NEW.status != 'pending' THEN
+        -- Log the skip for debugging
+        RAISE NOTICE 'Skipping processing for record % with status: %', NEW.id, COALESCE(NEW.status, 'NULL');
+        RETURN NEW;
+    END IF;
+
+    -- Validate that the record has minimum required data
+    IF (NEW.ean IS NULL OR NEW.ean = '') AND 
+       (NEW.sku IS NULL OR NEW.sku = '' OR NEW.brand IS NULL OR NEW.brand = '') THEN
+        -- Delete unprocessable records immediately
+        DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
+        RETURN NULL;
+    END IF;
+
+    -- Get integration configuration
+    SELECT configuration INTO integration_config
+    FROM integrations 
+    WHERE id = NEW.integration_id;
+
+    -- Check if selective import is enabled
+    IF integration_config IS NOT NULL AND 
+       integration_config->'selectiveImport'->>'enabled' = 'true' THEN
+        selective_import_enabled := TRUE;
+        field_config := integration_config->'selectiveImport'->'fields';
+    END IF;
+
+    -- Round integration prices to whole numbers (no decimals) - CONSISTENT ACROSS ALL PRICE TYPES
+    rounded_retail_price := CASE WHEN NEW.our_retail_price IS NOT NULL THEN ROUND(NEW.our_retail_price) ELSE NULL END;
+    rounded_wholesale_price := CASE WHEN NEW.our_wholesale_price IS NOT NULL THEN ROUND(NEW.our_wholesale_price) ELSE NULL END;
+
+    -- STEP 1: Find or create brand using the proper function that respects aliases
+    v_brand_id := NULL;
+    IF NEW.brand IS NOT NULL AND NEW.brand != '' AND 
+       (NOT selective_import_enabled OR field_config->>'brand' != 'false') THEN
+        -- Use the find_or_create_brand function that properly checks aliases
+        SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
+    ELSE
+        -- If no brand provided or brand field is disabled, use Unknown brand
+        SELECT get_or_create_unknown_brand(NEW.user_id) INTO v_brand_id;
+    END IF;
+
+    -- STEP 2: Try to find existing product using RESOLVED brand_id for matching
+    existing_product_id := NULL;
+    
+    -- Try EAN match first (most reliable)
+    IF NEW.ean IS NOT NULL AND NEW.ean != '' THEN
+        SELECT id INTO existing_product_id FROM products 
+        WHERE user_id = NEW.user_id AND ean = NEW.ean
+        LIMIT 1;
+    END IF;
+    
+    -- If no EAN match, try SKU + resolved brand_id match
+    IF existing_product_id IS NULL AND NEW.sku IS NOT NULL AND NEW.sku != '' AND v_brand_id IS NOT NULL THEN
+        SELECT id INTO existing_product_id FROM products 
+        WHERE user_id = NEW.user_id 
+          AND sku = NEW.sku 
+          AND brand_id = v_brand_id  -- Use resolved brand_id instead of original brand text
+        LIMIT 1;
+    END IF;
+
+    -- Get current prices for price change tracking - CONSISTENT RETRIEVAL
+    IF existing_product_id IS NOT NULL THEN
+        SELECT our_retail_price, our_wholesale_price 
+        INTO current_retail_price, current_wholesale_price
+        FROM products WHERE id = existing_product_id;
+    END IF;
+
+    IF existing_product_id IS NULL THEN
+        -- Create new product with only fields that exist in products table
+        INSERT INTO products (
+            user_id,
+            name,
+            sku,
+            ean,
+            brand,
+            brand_id,
+            our_retail_price,
+            our_wholesale_price,
+            image_url,
+            our_url,
+            currency_code
+        ) VALUES (
+            NEW.user_id,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'name' != 'false' THEN NEW.name ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'sku' != 'false' THEN NEW.sku ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'ean' != 'false' THEN NEW.ean ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN NEW.brand ELSE NULL END,
+            v_brand_id,  -- Always use v_brand_id (never NULL now)
+            CASE WHEN NOT selective_import_enabled OR field_config->>'our_retail_price' != 'false' THEN rounded_retail_price ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'our_wholesale_price' != 'false' THEN rounded_wholesale_price ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'image_url' != 'false' THEN NEW.image_url ELSE NULL END,
+            NEW.our_url,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'currency_code' != 'false' THEN COALESCE(NEW.currency_code, get_user_primary_currency(NEW.user_id)) ELSE NULL END
+        ) RETURNING id INTO existing_product_id;
+    ELSE
+        -- Update existing product
+        UPDATE products SET
+            name = CASE WHEN NOT selective_import_enabled OR field_config->>'name' != 'false' THEN COALESCE(NEW.name, name) ELSE name END,
+            sku = CASE WHEN NOT selective_import_enabled OR field_config->>'sku' != 'false' THEN COALESCE(NEW.sku, sku) ELSE sku END,
+            ean = CASE WHEN NOT selective_import_enabled OR field_config->>'ean' != 'false' THEN COALESCE(NEW.ean, ean) ELSE ean END,
+            brand = CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN COALESCE(NEW.brand, brand) ELSE brand END,
+            brand_id = CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN COALESCE(v_brand_id, brand_id) ELSE brand_id END,
+            our_retail_price = CASE WHEN NOT selective_import_enabled OR field_config->>'our_retail_price' != 'false' THEN rounded_retail_price ELSE our_retail_price END,
+            our_wholesale_price = CASE WHEN NOT selective_import_enabled OR field_config->>'our_wholesale_price' != 'false' THEN rounded_wholesale_price ELSE our_wholesale_price END,
+            image_url = CASE WHEN NOT selective_import_enabled OR field_config->>'image_url' != 'false' THEN COALESCE(NEW.image_url, image_url) ELSE image_url END,
+            our_url = COALESCE(NEW.our_url, our_url),
+            currency_code = CASE WHEN NOT selective_import_enabled OR field_config->>'currency_code' != 'false' THEN COALESCE(NEW.currency_code, currency_code) ELSE currency_code END,
+            updated_at = NOW()
+        WHERE id = existing_product_id;
+    END IF;
+
+    -- Record retail price changes in price_changes_competitors table (for our retail prices)
+    IF rounded_retail_price IS NOT NULL AND (current_retail_price IS NULL OR current_retail_price != rounded_retail_price) THEN
+        INSERT INTO price_changes_competitors (
+            user_id, product_id, old_our_retail_price, new_our_retail_price,
+            changed_at, integration_id, currency_code, our_url
+        ) VALUES (
+            NEW.user_id, existing_product_id, current_retail_price, rounded_retail_price,
+            NOW(), NEW.integration_id, COALESCE(NEW.currency_code, get_user_primary_currency(NEW.user_id)), NEW.our_url
+        );
+    END IF;
+
+    -- Record wholesale price changes in price_changes_suppliers table (for our wholesale prices)
+    IF rounded_wholesale_price IS NOT NULL AND (current_wholesale_price IS NULL OR current_wholesale_price != rounded_wholesale_price) THEN
+        INSERT INTO price_changes_suppliers (
+            user_id, product_id, old_our_wholesale_price, new_our_wholesale_price,
+            changed_at, integration_id, currency_code, our_url, change_source
+        ) VALUES (
+            NEW.user_id, existing_product_id, current_wholesale_price, rounded_wholesale_price,
+            NOW(), NEW.integration_id, COALESCE(NEW.currency_code, get_user_primary_currency(NEW.user_id)), NEW.our_url, 'integration'
+        );
+    END IF;
+
+    -- Process custom fields if they exist in raw_data
+    IF NEW.raw_data IS NOT NULL THEN
+        SELECT process_custom_fields_from_raw_data(
+            NEW.user_id,
+            existing_product_id,
+            NEW.raw_data,
+            'integration',
+            NEW.integration_id
+        ) INTO custom_fields_result;
+    END IF;
+
+    -- Mark as processed and delete
+    UPDATE temp_integrations_scraped_data 
+    SET status = 'processed', processed_at = NOW() 
+    WHERE id = NEW.id;
+
+    DELETE FROM temp_integrations_scraped_data WHERE id = NEW.id;
+    
+    RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: temp_integrations_scraped_data; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.temp_integrations_scraped_data (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    integration_run_id uuid NOT NULL,
+    integration_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    prestashop_product_id text,
+    name text NOT NULL,
+    sku text,
+    ean text,
+    brand text,
+    our_retail_price numeric(10,2),
+    our_wholesale_price numeric(10,2),
+    image_url text,
+    raw_data jsonb,
+    status text DEFAULT 'pending'::text NOT NULL,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    processed_at timestamp with time zone,
+    currency_code text,
+    our_url text,
+    stock_quantity integer,
+    stock_status text,
+    availability_date date,
+    raw_stock_data jsonb,
+    CONSTRAINT temp_integrations_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
+);
+
+
+--
+-- Name: COLUMN temp_integrations_scraped_data.stock_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_integrations_scraped_data.stock_quantity IS 'Numeric stock quantity from integration';
+
+
+--
+-- Name: COLUMN temp_integrations_scraped_data.stock_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_integrations_scraped_data.stock_status IS 'Text stock status from integration';
+
+
+--
+-- Name: COLUMN temp_integrations_scraped_data.availability_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_integrations_scraped_data.availability_date IS 'Future availability date if product is out of stock';
+
+
+--
+-- Name: COLUMN temp_integrations_scraped_data.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_integrations_scraped_data.raw_stock_data IS 'Raw stock data from integration including detailed stock information';
+
+
+--
+-- Name: process_temp_integrations_scraped_data_logic(public.temp_integrations_scraped_data); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_temp_integrations_scraped_data_logic(record_data public.temp_integrations_scraped_data) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    existing_product_id UUID;
+    v_brand_id UUID;
+    current_retail_price NUMERIC(10,2);
+    current_wholesale_price NUMERIC(10,2);
+    custom_fields_result JSONB;
+    rounded_retail_price NUMERIC(10,2);
+    rounded_wholesale_price NUMERIC(10,2);
+    integration_config JSONB;
+    selective_import_enabled BOOLEAN := FALSE;
+    field_config JSONB;
+    user_currency TEXT;
+BEGIN
+    -- Get user's primary currency
+    user_currency := get_user_primary_currency(record_data.user_id);
+    
+    -- Validate that the record has minimum required data
+    IF (record_data.ean IS NULL OR record_data.ean = '') AND 
+       (record_data.sku IS NULL OR record_data.sku = '' OR record_data.brand IS NULL OR record_data.brand = '') THEN
+        -- Delete unprocessable records immediately
+        DELETE FROM temp_integrations_scraped_data WHERE id = record_data.id;
+        RETURN;
+    END IF;
+
+    -- Get integration configuration
+    SELECT configuration INTO integration_config
+    FROM integrations 
+    WHERE id = record_data.integration_id;
+
+    -- Check if selective import is enabled
+    IF integration_config IS NOT NULL AND 
+       integration_config->'selectiveImport'->>'enabled' = 'true' THEN
+        selective_import_enabled := TRUE;
+        field_config := integration_config->'selectiveImport'->'fields';
+    END IF;
+
+    -- Round integration prices to whole numbers (no decimals)
+    rounded_retail_price := CASE WHEN record_data.our_retail_price IS NOT NULL THEN ROUND(record_data.our_retail_price) ELSE NULL END;
+    rounded_wholesale_price := CASE WHEN record_data.our_wholesale_price IS NOT NULL THEN ROUND(record_data.our_wholesale_price) ELSE NULL END;
+
+    -- STEP 1: Find or create brand using the proper function that respects aliases
+    v_brand_id := NULL;
+    IF record_data.brand IS NOT NULL AND record_data.brand != '' AND 
+       (NOT selective_import_enabled OR field_config->>'brand' != 'false') THEN
+        -- Use the find_or_create_brand function that properly checks aliases
+        SELECT find_or_create_brand(record_data.user_id, record_data.brand) INTO v_brand_id;
+    ELSE
+        -- If no brand provided or brand field is disabled, use Unknown brand
+        SELECT get_or_create_unknown_brand(record_data.user_id) INTO v_brand_id;
+    END IF;
+
+    -- STEP 2: Try to find existing product using RESOLVED brand_id for matching
+    existing_product_id := NULL;
+    
+    -- Try EAN match first (most reliable)
+    IF record_data.ean IS NOT NULL AND record_data.ean != '' THEN
+        SELECT id INTO existing_product_id FROM products 
+        WHERE user_id = record_data.user_id AND ean = record_data.ean
+        LIMIT 1;
+    END IF;
+    
+    -- If no EAN match, try SKU + resolved brand_id match
+    IF existing_product_id IS NULL AND record_data.sku IS NOT NULL AND record_data.sku != '' AND v_brand_id IS NOT NULL THEN
+        SELECT id INTO existing_product_id FROM products 
+        WHERE user_id = record_data.user_id 
+          AND sku = record_data.sku 
+          AND brand_id = v_brand_id  -- Use resolved brand_id instead of original brand text
+        LIMIT 1;
+    END IF;
+
+    -- Get current prices for price change tracking
+    IF existing_product_id IS NOT NULL THEN
+        SELECT our_retail_price, our_wholesale_price 
+        INTO current_retail_price, current_wholesale_price
+        FROM products WHERE id = existing_product_id;
+    END IF;
+
+    IF existing_product_id IS NULL THEN
+        -- Create new product
+        INSERT INTO products (
+            user_id, name, sku, ean, brand, brand_id, our_retail_price, our_wholesale_price,
+            image_url, our_url, currency_code
+        ) VALUES (
+            record_data.user_id,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'name' != 'false' THEN record_data.name ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'sku' != 'false' THEN record_data.sku ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'ean' != 'false' THEN record_data.ean ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN record_data.brand ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN v_brand_id ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'our_retail_price' != 'false' THEN rounded_retail_price ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'our_wholesale_price' != 'false' THEN rounded_wholesale_price ELSE NULL END,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'image_url' != 'false' THEN record_data.image_url ELSE NULL END,
+            record_data.our_url,
+            CASE WHEN NOT selective_import_enabled OR field_config->>'currency_code' != 'false' THEN COALESCE(record_data.currency_code, user_currency) ELSE NULL END
+        ) RETURNING id INTO existing_product_id;
+    ELSE
+        -- Update existing product
+        UPDATE products SET
+            name = CASE WHEN NOT selective_import_enabled OR field_config->>'name' != 'false' THEN COALESCE(record_data.name, name) ELSE name END,
+            sku = CASE WHEN NOT selective_import_enabled OR field_config->>'sku' != 'false' THEN COALESCE(record_data.sku, sku) ELSE sku END,
+            ean = CASE WHEN NOT selective_import_enabled OR field_config->>'ean' != 'false' THEN COALESCE(record_data.ean, ean) ELSE ean END,
+            brand = CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN COALESCE(record_data.brand, brand) ELSE brand END,
+            brand_id = CASE WHEN NOT selective_import_enabled OR field_config->>'brand' != 'false' THEN COALESCE(v_brand_id, brand_id) ELSE brand_id END,
+            our_retail_price = CASE WHEN NOT selective_import_enabled OR field_config->>'our_retail_price' != 'false' THEN rounded_retail_price ELSE our_retail_price END,
+            our_wholesale_price = CASE WHEN NOT selective_import_enabled OR field_config->>'our_wholesale_price' != 'false' THEN rounded_wholesale_price ELSE our_wholesale_price END,
+            image_url = CASE WHEN NOT selective_import_enabled OR field_config->>'image_url' != 'false' THEN COALESCE(record_data.image_url, image_url) ELSE image_url END,
+            our_url = COALESCE(record_data.our_url, our_url),
+            currency_code = CASE WHEN NOT selective_import_enabled OR field_config->>'currency_code' != 'false' THEN COALESCE(record_data.currency_code, currency_code) ELSE currency_code END,
+            updated_at = NOW()
+        WHERE id = existing_product_id;
+    END IF;
+
+    -- Record retail price changes in price_changes_competitors table (for our retail prices)
+    IF rounded_retail_price IS NOT NULL AND (current_retail_price IS NULL OR current_retail_price != rounded_retail_price) THEN
+        INSERT INTO price_changes_competitors (
+            user_id, product_id, old_our_retail_price, new_our_retail_price, 
+            changed_at, integration_id, currency_code, our_url
+        ) VALUES (
+            record_data.user_id, existing_product_id, current_retail_price, rounded_retail_price,
+            NOW(), record_data.integration_id, COALESCE(record_data.currency_code, user_currency), record_data.our_url
+        );
+    END IF;
+
+    -- Record wholesale price changes in price_changes_suppliers table (for our wholesale prices)
+    IF rounded_wholesale_price IS NOT NULL AND (current_wholesale_price IS NULL OR current_wholesale_price != rounded_wholesale_price) THEN
+        INSERT INTO price_changes_suppliers (
+            user_id, product_id, old_our_wholesale_price, new_our_wholesale_price,
+            changed_at, integration_id, currency_code, our_url, change_source
+        ) VALUES (
+            record_data.user_id, existing_product_id, current_wholesale_price, rounded_wholesale_price,
+            NOW(), record_data.integration_id, COALESCE(record_data.currency_code, user_currency), record_data.our_url, 'integration'
+        );
+    END IF;
+
+    -- Process custom fields if they exist in raw_data
+    IF record_data.raw_data IS NOT NULL THEN
+        SELECT process_custom_fields_from_raw_data(
+            record_data.user_id,
+            existing_product_id,
+            record_data.raw_data,
+            'integration',
+            record_data.integration_id
+        ) INTO custom_fields_result;
+    END IF;
+
+    -- Mark as processed and delete
+    UPDATE temp_integrations_scraped_data 
+    SET status = 'processed', processed_at = NOW() 
+    WHERE id = record_data.id;
+
+    DELETE FROM temp_integrations_scraped_data WHERE id = record_data.id;
+END;
+$$;
+
+
+--
+-- Name: process_temp_integrations_scraped_data_manual(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_temp_integrations_scraped_data_manual(p_record_id uuid) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    record_data temp_integrations_scraped_data%ROWTYPE;
+BEGIN
+    -- Get the record
+    SELECT * INTO record_data FROM temp_integrations_scraped_data WHERE id = p_record_id;
+    
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Record with id % not found', p_record_id;
+    END IF;
+    
+    -- Only process if status is 'pending'
+    IF record_data.status != 'pending' THEN
+        RAISE NOTICE 'Skipping record % with status %', p_record_id, record_data.status;
+        RETURN;
+    END IF;
+    
+    -- Call the main processing function logic
+    PERFORM process_temp_integrations_scraped_data_logic(record_data);
+END;
+$$;
+
+
+--
+-- Name: process_temp_suppliers_batch(uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_temp_suppliers_batch(p_supplier_id uuid DEFAULT NULL::uuid, batch_size integer DEFAULT 100) RETURNS TABLE(processed integer, errors integer, new_products integer, price_changes integer)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    temp_record RECORD;
+    total_processed INTEGER := 0;
+    total_errors INTEGER := 0;
+    total_new_products INTEGER := 0;
+    total_price_changes INTEGER := 0;
+    total_stock_changes INTEGER := 0;
+    matched_product_id UUID;
+    v_brand_id UUID;
+    current_wholesale_price NUMERIC(10,2);
+    current_stock_quantity INTEGER;
+    current_stock_status TEXT;
+    current_availability_date DATE;
+    standardized_status TEXT;
+    start_time TIMESTAMP;
+    old_category TEXT;
+    new_category TEXT;
+    last_supplier_price NUMERIC(10,2);
+    last_supplier_recommended_price NUMERIC(10,2);
+    custom_fields_result JSONB;
+BEGIN
+    start_time := clock_timestamp();
+    
+    -- Debug: Log start of batch processing
+    INSERT INTO debug_logs (message, created_at) VALUES 
+        ('SUPPLIER_BATCH: Starting batch processing for supplier_id: ' || COALESCE(p_supplier_id::text, 'ALL') || ', batch_size: ' || batch_size, NOW());
+    
+    -- Process records in batches
+    FOR temp_record IN 
+        SELECT * FROM temp_suppliers_scraped_data t
+        WHERE (p_supplier_id IS NULL OR t.supplier_id = p_supplier_id)
+          AND t.processed = false
+        ORDER BY t.created_at
+        LIMIT batch_size
+    LOOP
+        BEGIN
+            -- Debug: Log processing start for each record
+            INSERT INTO debug_logs (message, created_at) VALUES 
+                ('SUPPLIER_BATCH: Processing record ' || temp_record.id || ' - Name: ' || COALESCE(temp_record.name, 'NULL') || ', SKU: ' || COALESCE(temp_record.sku, 'NULL') || ', Has raw_data: ' || (temp_record.raw_data IS NOT NULL)::text, NOW());
+            
+            -- Validate that the record has minimum required data
+            IF (temp_record.ean IS NULL OR temp_record.ean = '') AND 
+               (temp_record.sku IS NULL OR temp_record.sku = '' OR temp_record.brand IS NULL OR temp_record.brand = '') THEN
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Validation failed for record ' || temp_record.id || ' - Missing EAN and SKU+Brand', NOW());
+                -- Delete unprocessable records immediately
+                DELETE FROM temp_suppliers_scraped_data WHERE id = temp_record.id;
+                total_errors := total_errors + 1;
+                CONTINUE;
+            END IF;
+            
+            INSERT INTO debug_logs (message, created_at) VALUES 
+                ('SUPPLIER_BATCH: Validation passed for record ' || temp_record.id, NOW());
+            
+            -- Find or create brand if we have brand name
+            v_brand_id := NULL;
+            IF temp_record.brand IS NOT NULL AND temp_record.brand != '' THEN
+                SELECT find_or_create_brand(temp_record.user_id, temp_record.brand) INTO v_brand_id;
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Brand ID for "' || temp_record.brand || '": ' || COALESCE(v_brand_id::text, 'NULL'), NOW());
+            END IF;
+            
+            -- Use enhanced fuzzy matching to find existing product
+            SELECT find_product_with_fuzzy_matching(
+                temp_record.user_id,
+                temp_record.ean,
+                temp_record.brand,
+                temp_record.sku,
+                temp_record.name,
+                v_brand_id
+            ) INTO matched_product_id;
+            
+            INSERT INTO debug_logs (message, created_at) VALUES 
+                ('SUPPLIER_BATCH: Fuzzy matching result: ' || COALESCE(matched_product_id::text, 'NULL'), NOW());
+            
+            IF matched_product_id IS NOT NULL THEN
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Updating existing product ' || matched_product_id, NOW());
+                    
+                -- Update existing product with supplier data (only fill missing fields)
+                -- REMOVED: our_url update - suppliers should not populate our_url
+                UPDATE products SET
+                    name = CASE WHEN (name IS NULL OR name = '') AND temp_record.name IS NOT NULL AND temp_record.name != '' THEN temp_record.name ELSE name END,
+                    sku = CASE WHEN (sku IS NULL OR sku = '') AND temp_record.sku IS NOT NULL AND temp_record.sku != '' THEN temp_record.sku ELSE sku END,
+                    ean = CASE WHEN (ean IS NULL OR ean = '') AND temp_record.ean IS NOT NULL AND temp_record.ean != '' THEN temp_record.ean ELSE ean END,
+                    brand = CASE WHEN (brand IS NULL OR brand = '') AND temp_record.brand IS NOT NULL AND temp_record.brand != '' THEN temp_record.brand ELSE brand END,
+                    brand_id = CASE WHEN brand_id IS NULL AND v_brand_id IS NOT NULL THEN v_brand_id ELSE brand_id END,
+                    image_url = CASE WHEN (image_url IS NULL OR image_url = '') AND temp_record.image_url IS NOT NULL AND temp_record.image_url != '' THEN temp_record.image_url ELSE image_url END,
+                    currency_code = CASE WHEN (currency_code IS NULL OR currency_code = '') AND temp_record.currency_code IS NOT NULL AND temp_record.currency_code != '' THEN temp_record.currency_code ELSE currency_code END,
+                    updated_at = NOW()
+                WHERE id = matched_product_id;
+            ELSE
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Creating new product', NOW());
+                    
+                -- Create new product
+                -- REMOVED: our_url field - suppliers should not populate our_url
+                INSERT INTO products (
+                    user_id,
+                    name,
+                    sku,
+                    ean,
+                    brand,
+                    brand_id,
+                    image_url,
+                    currency_code
+                ) VALUES (
+                    temp_record.user_id,
+                    temp_record.name,
+                    temp_record.sku,
+                    temp_record.ean,
+                    temp_record.brand,
+                    v_brand_id,
+                    temp_record.image_url,
+                    temp_record.currency_code
+                ) RETURNING id INTO matched_product_id;
+                
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Created new product with ID: ' || matched_product_id, NOW());
+                    
+                total_new_products := total_new_products + 1;
+            END IF;
+            
+            -- PROCESS CUSTOM FIELDS from raw_data
+            IF matched_product_id IS NOT NULL AND temp_record.raw_data IS NOT NULL THEN
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Processing custom fields from raw_data', NOW());
+                    
+                SELECT process_custom_fields_from_raw_data(
+                    temp_record.user_id,
+                    matched_product_id,
+                    temp_record.raw_data,
+                    'supplier',
+                    temp_record.supplier_id
+                ) INTO custom_fields_result;
+                
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: Custom fields result: ' || COALESCE(custom_fields_result::text, 'NULL'), NOW());
+            ELSE
+                INSERT INTO debug_logs (message, created_at) VALUES 
+                    ('SUPPLIER_BATCH: No custom fields to process - Product ID: ' || COALESCE(matched_product_id::text, 'NULL') || ', Has raw_data: ' || (temp_record.raw_data IS NOT NULL)::text, NOW());
+            END IF;
+            
+            -- Process price changes if we have a product and price
+            IF matched_product_id IS NOT NULL AND temp_record.supplier_price IS NOT NULL THEN
+                -- Get last supplier price for comparison
+                SELECT 
+                    new_supplier_price,
+                    new_supplier_recommended_price
+                INTO 
+                    last_supplier_price,
+                    last_supplier_recommended_price
+                FROM price_changes_suppliers 
+                WHERE product_id = matched_product_id 
+                  AND supplier_id = temp_record.supplier_id
+                ORDER BY changed_at DESC 
+                LIMIT 1;
+                
+                -- Only create price change if price actually changed or this is the first price
+                IF last_supplier_price IS NULL OR last_supplier_price != temp_record.supplier_price THEN
+                    INSERT INTO price_changes_suppliers (
+                        user_id,
+                        product_id,
+                        supplier_id,
+                        old_supplier_price,
+                        new_supplier_price,
+                        old_supplier_recommended_price,
+                        new_supplier_recommended_price,
+                        price_change_percentage,
+                        changed_at,
+                        currency_code,
+                        supplier_url
+                    ) VALUES (
+                        temp_record.user_id,
+                        matched_product_id,
+                        temp_record.supplier_id,
+                        last_supplier_price,
+                        temp_record.supplier_price,
+                        last_supplier_recommended_price,
+                        temp_record.supplier_recommended_price,
+                        CASE 
+                            WHEN last_supplier_price IS NULL OR last_supplier_price = 0 THEN 0
+                            ELSE ROUND(((temp_record.supplier_price - last_supplier_price) / last_supplier_price * 100)::numeric, 2)
+                        END,
+                        NOW(),
+                        temp_record.currency_code,
+                        temp_record.supplier_url
+                    );
+                    
+                    total_price_changes := total_price_changes + 1;
+                END IF;
+            END IF;
+            
+            -- STOCK PROCESSING
+            IF matched_product_id IS NOT NULL AND (temp_record.stock_quantity IS NOT NULL OR temp_record.stock_status IS NOT NULL OR temp_record.availability_date IS NOT NULL) THEN
+                -- Get current stock data for comparison
+                SELECT 
+                    new_stock_quantity,
+                    new_stock_status,
+                    new_availability_date
+                INTO 
+                    current_stock_quantity,
+                    current_stock_status,
+                    current_availability_date
+                FROM stock_changes_suppliers 
+                WHERE product_id = matched_product_id 
+                  AND supplier_id = temp_record.supplier_id
+                ORDER BY changed_at DESC 
+                LIMIT 1;
+
+                -- Standardize stock status
+                standardized_status := CASE 
+                    WHEN temp_record.stock_status ILIKE '%in stock%' OR temp_record.stock_status ILIKE '%available%' THEN 'in_stock'
+                    WHEN temp_record.stock_status ILIKE '%out of stock%' OR temp_record.stock_status ILIKE '%unavailable%' THEN 'out_of_stock'
+                    WHEN temp_record.stock_status ILIKE '%pre%order%' OR temp_record.stock_status ILIKE '%backorder%' THEN 'pre_order'
+                    WHEN temp_record.stock_status ILIKE '%discontinued%' THEN 'discontinued'
+                    ELSE COALESCE(temp_record.stock_status, 'unknown')
+                END;
+
+                -- Check if stock has changed (or this is the first stock entry)
+                IF current_stock_quantity IS NULL OR 
+                   (COALESCE(current_stock_quantity, -999) != COALESCE(temp_record.stock_quantity, -999)) OR
+                   (COALESCE(current_stock_status, '') != COALESCE(standardized_status, '')) OR
+                   (COALESCE(current_availability_date, '1900-01-01'::date) != COALESCE(temp_record.availability_date, '1900-01-01'::date)) THEN
+                    
+                    INSERT INTO stock_changes_suppliers (
+                        user_id,
+                        product_id,
+                        supplier_id,
+                        old_stock_quantity,
+                        new_stock_quantity,
+                        old_stock_status,
+                        new_stock_status,
+                        old_availability_date,
+                        new_availability_date,
+                        stock_change_quantity,
+                        changed_at,
+                        supplier_url,
+                        raw_stock_data
+                    ) VALUES (
+                        temp_record.user_id,
+                        matched_product_id,
+                        temp_record.supplier_id,
+                        current_stock_quantity,
+                        temp_record.stock_quantity,
+                        current_stock_status,
+                        standardized_status,
+                        current_availability_date,
+                        temp_record.availability_date,
+                        COALESCE(temp_record.stock_quantity, 0) - COALESCE(current_stock_quantity, 0),
+                        NOW(),
+                        temp_record.supplier_url,
+                        temp_record.raw_stock_data
+                    );
+                    
+                    total_stock_changes := total_stock_changes + 1;
+                END IF;
+            END IF;
+            
+            -- CLEANUP: Delete the processed record from temp table
+            DELETE FROM temp_suppliers_scraped_data WHERE id = temp_record.id;
+            total_processed := total_processed + 1;
+            
+            INSERT INTO debug_logs (message, created_at) VALUES 
+                ('SUPPLIER_BATCH: Completed processing and deleted record ' || temp_record.id, NOW());
+            
+        EXCEPTION WHEN OTHERS THEN
+            INSERT INTO debug_logs (message, created_at) VALUES 
+                ('SUPPLIER_BATCH: Error processing record ' || temp_record.id || ': ' || SQLERRM, NOW());
+            total_errors := total_errors + 1;
+            -- Delete record even on error to avoid infinite loops
+            DELETE FROM temp_suppliers_scraped_data WHERE id = temp_record.id;
+        END;
+    END LOOP;
+    
+    -- Debug: Log completion
+    INSERT INTO debug_logs (message, created_at) VALUES 
+        ('SUPPLIER_BATCH: Completed batch processing - Processed: ' || total_processed || ', Errors: ' || total_errors || ', New products: ' || total_new_products || ', Price changes: ' || total_price_changes || ', Stock changes: ' || total_stock_changes, NOW());
+    
+    RETURN QUERY SELECT total_processed, total_errors, total_new_products, total_price_changes;
+END;
+$$;
+
+
+--
+-- Name: process_temp_suppliers_scraped_data_trigger(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.process_temp_suppliers_scraped_data_trigger() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Only process records that are not marked as processed
+    IF NEW.processed = false THEN
+        -- Call the batch processing function for this specific record
+        -- We'll process it immediately in small batches
+        PERFORM process_temp_suppliers_batch(NEW.supplier_id, 1);
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: retry_error_integration_products(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.retry_error_integration_products(run_id uuid) RETURNS jsonb
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    stats JSONB;
+BEGIN
+    -- Reset error products to pending status
+    UPDATE temp_integrations_scraped_data
+    SET
+        status = 'pending',
+        error_message = NULL
+    WHERE integration_run_id = run_id AND status = 'error';
+
+    -- Force processing of these products
+    UPDATE temp_integrations_scraped_data
+    SET status = status  -- This is a no-op update that will trigger the BEFORE UPDATE trigger
+    WHERE integration_run_id = run_id AND status = 'pending';
+
+    -- Get the statistics
+    SELECT get_integration_run_stats(run_id) INTO stats;
+
+    -- Update the run status
+    PERFORM update_integration_run_status(run_id);
+
+    RETURN stats;
+END;
+$$;
+
+
+--
+-- Name: retry_fetch_failed_runs(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.retry_fetch_failed_runs() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+  retry_count INTEGER;
+BEGIN
+  IF NEW.status = 'failed' AND NEW.error_message = 'fetch failed' THEN
+    SELECT COUNT(*) INTO retry_count
+    FROM scraper_runs
+    WHERE scraper_id = NEW.scraper_id
+      AND error_message = 'fetch failed'
+      AND started_at > NOW() - INTERVAL '1 hour';
+    IF retry_count < 3 THEN
+      INSERT INTO scraper_runs (
+        scraper_id, user_id, status, started_at, is_test_run, scraper_type
+      ) VALUES (
+        NEW.scraper_id, NEW.user_id, 'pending', NOW(), NEW.is_test_run, NEW.scraper_type
+      );
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION retry_fetch_failed_runs(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.retry_fetch_failed_runs() IS 'Automatically retries runs that failed with "fetch failed" error, up to 3 times within an hour';
+
+
+--
+-- Name: run_daily_price_snapshots(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.run_daily_price_snapshots() RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    user_record RECORD;
+    result_record RECORD;
+    total_users INTEGER := 0;
+    successful_users INTEGER := 0;
+    failed_users INTEGER := 0;
+    total_snapshots INTEGER := 0;
+    start_time TIMESTAMP := NOW();
+    end_time TIMESTAMP;
+    duration_seconds INTEGER;
+    log_message TEXT := '';
+    error_message TEXT;
+BEGIN
+    log_message := log_message || '🚀 Starting daily price competitiveness snapshots for ' || CURRENT_DATE || E'\n';
+    log_message := log_message || '⏰ Started at: ' || start_time || ' UTC (after daily scrapers)' || E'\n';
+
+    -- Get all active users who have both products and competitors
+    FOR user_record IN 
+        SELECT DISTINCT p.user_id
+        FROM products p
+        WHERE p.is_active = true
+        AND p.our_retail_price IS NOT NULL
+        AND EXISTS (
+            SELECT 1 FROM competitors c 
+            WHERE c.user_id = p.user_id 
+            AND c.is_active = true
+        )
+        AND EXISTS (
+            SELECT 1 FROM price_changes_competitors pcc 
+            WHERE pcc.user_id = p.user_id 
+            AND pcc.changed_at >= CURRENT_DATE - INTERVAL '7 days'
+        )
+        LIMIT 100 -- Safety limit
+    LOOP
+        total_users := total_users + 1;
+        
+        BEGIN
+            -- Calculate snapshots for this user
+            SELECT COUNT(*) INTO result_record
+            FROM calculate_all_daily_snapshots(user_record.user_id, CURRENT_DATE);
+            
+            successful_users := successful_users + 1;
+            total_snapshots := total_snapshots + COALESCE(result_record.count, 0);
+            
+            log_message := log_message || '✅ User ' || user_record.user_id || ': ' || COALESCE(result_record.count, 0) || ' snapshots' || E'\n';
+            
+        EXCEPTION WHEN OTHERS THEN
+            failed_users := failed_users + 1;
+            error_message := SQLERRM;
+            log_message := log_message || '❌ User ' || user_record.user_id || ': ' || error_message || E'\n';
+        END;
+        
+        -- Small delay to prevent overwhelming the database
+        PERFORM pg_sleep(0.1);
+    END LOOP;
+
+    end_time := NOW();
+    duration_seconds := EXTRACT(EPOCH FROM (end_time - start_time))::INTEGER;
+
+    -- Build summary
+    log_message := log_message || E'\n📈 DAILY SNAPSHOTS SUMMARY' || E'\n';
+    log_message := log_message || '═══════════════════════════════════════════════════' || E'\n';
+    log_message := log_message || '📅 Date: ' || CURRENT_DATE || E'\n';
+    log_message := log_message || '⏱️ Duration: ' || duration_seconds || ' seconds' || E'\n';
+    log_message := log_message || '👥 Users processed: ' || total_users || E'\n';
+    log_message := log_message || '✅ Successful: ' || successful_users || E'\n';
+    log_message := log_message || '❌ Failed: ' || failed_users || E'\n';
+    log_message := log_message || '📊 Total snapshots created: ' || total_snapshots || E'\n';
+    
+    IF total_users = 0 THEN
+        log_message := log_message || 'ℹ️ No active users found with recent price data.' || E'\n';
+    END IF;
+
+    log_message := log_message || '🎉 Daily snapshots completed!' || E'\n';
+
+    -- Log to a table for monitoring (optional)
+    INSERT INTO cron_job_logs (job_name, execution_date, status, duration_seconds, details, users_processed, snapshots_created)
+    VALUES (
+        'daily_price_snapshots',
+        CURRENT_DATE,
+        CASE WHEN failed_users = 0 THEN 'SUCCESS' ELSE 'PARTIAL_SUCCESS' END,
+        duration_seconds,
+        log_message,
+        total_users,
+        total_snapshots
+    )
+    ON CONFLICT (job_name, execution_date) 
+    DO UPDATE SET
+        status = EXCLUDED.status,
+        duration_seconds = EXCLUDED.duration_seconds,
+        details = EXCLUDED.details,
+        users_processed = EXCLUDED.users_processed,
+        snapshots_created = EXCLUDED.snapshots_created,
+        updated_at = NOW();
+
+    RETURN log_message;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION run_daily_price_snapshots(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.run_daily_price_snapshots() IS 'Main function executed by pg_cron daily to calculate price competitiveness snapshots for all active users.
+Returns a detailed log of the execution including success/failure counts and timing information.';
+
+
+--
+-- Name: set_product_brand_id(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.set_product_brand_id() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  IF NEW.brand_id IS NULL AND NEW.brand IS NOT NULL THEN
+    SELECT id INTO NEW.brand_id FROM brands WHERE name = NEW.brand LIMIT 1;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: set_statement_timeout(integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.set_statement_timeout(p_milliseconds integer) RETURNS void
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  EXECUTE format('SET statement_timeout = %s', p_milliseconds);
+END;
+$$;
+
+
+--
+-- Name: standardize_stock_status(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.standardize_stock_status(raw_status text) RETURNS text
+    LANGUAGE plpgsql
+    AS $_$
+DECLARE
+    numeric_value INTEGER;
+BEGIN
+    IF raw_status IS NULL OR raw_status = '' THEN
+        RETURN 'unknown';
+    END IF;
+    
+    -- Convert to lowercase for comparison
+    raw_status := lower(trim(raw_status));
+    
+    -- Handle numeric stock values (e.g., '1 st', '10 st', '0 st')
+    IF raw_status ~ '^[0-9]+ st$' THEN
+        BEGIN
+            numeric_value := CAST(regexp_replace(raw_status, ' st$', '') AS INTEGER);
+            IF numeric_value > 0 THEN
+                RETURN 'in_stock';
+            ELSE
+                RETURN 'out_of_stock';
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            -- If conversion fails, continue with text matching
+            NULL;
+        END;
+    END IF;
+    
+    -- In stock variations (Swedish and English) - but check for delivery timeframes first
+    IF (raw_status IN ('i lager', 'finns i lager', 'in stock', 'available', 'tillgänglig', 'på lager') 
+       OR raw_status LIKE '%i lager%')
+       AND NOT (raw_status LIKE '%leveranstid%' OR raw_status LIKE '%arbetsdagar%' OR raw_status LIKE '%leverans%') THEN
+        RETURN 'in_stock';
+    END IF;
+    
+    -- Out of stock variations
+    IF raw_status IN ('ej i lager', 'slut i lager', 'utgången produkt', 'out of stock', 'sold out', 'slutsåld') THEN
+        RETURN 'out_of_stock';
+    END IF;
+    
+    -- Limited stock
+    IF raw_status LIKE '%få kvar%' OR raw_status LIKE '%limited%' OR raw_status LIKE '%begränsad%' OR raw_status LIKE '%få st%' THEN
+        RETURN 'limited_stock';
+    END IF;
+    
+    -- Coming soon / future availability
+    IF raw_status LIKE '%snart%' OR raw_status LIKE '%kommer%' OR raw_status LIKE '%coming soon%' OR raw_status LIKE '%inkommer%' THEN
+        RETURN 'coming_soon';
+    END IF;
+    
+    -- Back order / restocking / pre-order / delivery timeframes
+    IF raw_status LIKE '%beställningsvara%' OR raw_status LIKE '%back order%' OR raw_status LIKE '%restocking%' 
+       OR raw_status LIKE '%pre-order%' OR raw_status LIKE '%beräknas från%'
+       OR raw_status LIKE '%leverans %' OR raw_status LIKE '%leveranstid%' OR raw_status LIKE '%arbetsdagar%'
+       OR raw_status ~ 'leverans [0-9]+-[0-9]+ ?dag' OR raw_status ~ 'leverans [0-9]+-[0-9]+dgr'
+       OR raw_status LIKE '%få hos leverantör%' THEN
+        RETURN 'back_order';
+    END IF;
+    
+    -- Discontinued
+    IF raw_status LIKE '%utgången%' OR raw_status LIKE '%discontinued%' OR raw_status LIKE '%upphörd%' THEN
+        RETURN 'discontinued';
+    END IF;
+    
+    -- Physical store only
+    IF raw_status LIKE '%endast för köp i fysisk butik%' OR raw_status LIKE '%only in store%' THEN
+        RETURN 'limited_stock';
+    END IF;
+    
+    -- Default to original status if no match
+    RETURN raw_status;
+END;
+$_$;
+
+
+--
+-- Name: FUNCTION standardize_stock_status(raw_status text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.standardize_stock_status(raw_status text) IS 'Standardizes various stock status formats into consistent categories';
+
+
+--
+-- Name: store_custom_field_optimized(uuid, uuid, text, text, text, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.store_custom_field_optimized(p_product_id uuid, p_custom_field_id uuid, p_field_name text, p_field_value text, p_source_type text DEFAULT 'scraper'::text, p_source_id uuid DEFAULT NULL::uuid) RETURNS uuid
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_value_hash TEXT;
+    v_record_id UUID;
+BEGIN
+    -- Create hash for deduplication (just the value, since field_name is in custom_field_id)
+    v_value_hash := encode(sha256(p_field_value::bytea), 'hex');
+    
+    -- Insert or update the custom field value
+    INSERT INTO product_custom_field_values (
+        product_id, 
+        custom_field_id, 
+        value, 
+        value_hash,
+        source_type, 
+        source_id,
+        created_at,
+        updated_at
+    )
+    VALUES (
+        p_product_id, 
+        p_custom_field_id, 
+        p_field_value, 
+        v_value_hash,
+        p_source_type, 
+        p_source_id,
+        NOW(),
+        NOW()
+    )
+    ON CONFLICT (product_id, custom_field_id)
+    DO UPDATE SET
+        value = EXCLUDED.value,
+        value_hash = EXCLUDED.value_hash,
+        source_type = EXCLUDED.source_type,
+        source_id = EXCLUDED.source_id,
+        updated_at = NOW()
+    RETURNING id INTO v_record_id;
+    
+    RETURN v_record_id;
+END;
+$$;
+
+
+--
+-- Name: sync_brand_id(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.sync_brand_id() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    v_brand_id UUID;
+BEGIN
+    -- If brand column is updated but brand_id is not, update brand_id
+    IF NEW.brand IS NOT NULL AND NEW.brand != '' AND 
+       (NEW.brand_id IS NULL OR (TG_OP = 'UPDATE' AND NEW.brand != OLD.brand)) THEN
+        -- Find or create the brand
+        SELECT find_or_create_brand(NEW.user_id, NEW.brand) INTO v_brand_id;
+        NEW.brand_id := v_brand_id;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: sync_brand_name(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.sync_brand_name() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    -- If brand_id is set, update the brand column with the brand name
+    IF NEW.brand_id IS NOT NULL THEN
+        SELECT name INTO NEW.brand
+        FROM brands
+        WHERE id = NEW.brand_id;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: sync_our_urls_from_products(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.sync_our_urls_from_products(p_user_id uuid DEFAULT NULL::uuid, p_product_id uuid DEFAULT NULL::uuid) RETURNS TABLE(table_name text, updated_count integer)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_updated_count INTEGER;
+    where_clause TEXT := '';
+BEGIN
+    -- Build WHERE clause based on parameters
+    IF p_user_id IS NOT NULL THEN
+        where_clause := where_clause || ' AND pc_table.user_id = ''' || p_user_id || '''::UUID';
+    END IF;
+    
+    IF p_product_id IS NOT NULL THEN
+        where_clause := where_clause || ' AND pc_table.product_id = ''' || p_product_id || '''::UUID';
+    END IF;
+    
+    -- Update price_changes_competitors
+    EXECUTE 'UPDATE price_changes_competitors pc_table
+             SET our_url = p.our_url
+             FROM products p
+             WHERE pc_table.product_id = p.id 
+               AND pc_table.our_url IS NULL 
+               AND p.our_url IS NOT NULL' || where_clause;
+    
+    GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+    RETURN QUERY SELECT 'price_changes_competitors'::TEXT, v_updated_count;
+    
+    -- Update price_changes_suppliers
+    EXECUTE 'UPDATE price_changes_suppliers ps_table
+             SET our_url = p.our_url
+             FROM products p
+             WHERE ps_table.product_id = p.id 
+               AND ps_table.our_url IS NULL 
+               AND p.our_url IS NOT NULL' || REPLACE(where_clause, 'pc_table', 'ps_table');
+    
+    GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+    RETURN QUERY SELECT 'price_changes_suppliers'::TEXT, v_updated_count;
+    
+    -- Update stock_changes_competitors
+    EXECUTE 'UPDATE stock_changes_competitors sc_table
+             SET our_url = p.our_url
+             FROM products p
+             WHERE sc_table.product_id = p.id 
+               AND sc_table.our_url IS NULL 
+               AND p.our_url IS NOT NULL' || REPLACE(where_clause, 'pc_table', 'sc_table');
+    
+    GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+    RETURN QUERY SELECT 'stock_changes_competitors'::TEXT, v_updated_count;
+    
+    -- Update stock_changes_suppliers
+    EXECUTE 'UPDATE stock_changes_suppliers ss_table
+             SET our_url = p.our_url
+             FROM products p
+             WHERE ss_table.product_id = p.id 
+               AND ss_table.our_url IS NULL 
+               AND p.our_url IS NOT NULL' || REPLACE(where_clause, 'pc_table', 'ss_table');
+    
+    GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+    RETURN QUERY SELECT 'stock_changes_suppliers'::TEXT, v_updated_count;
+END;
+$$;
+
+
+--
+-- Name: trigger_snapshots_for_date(date); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.trigger_snapshots_for_date(target_date date DEFAULT CURRENT_DATE) RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    result TEXT;
+BEGIN
+    -- Temporarily modify the function to use the target date
+    -- This is a simple approach - in production you might want a more sophisticated method
+    
+    SELECT run_daily_price_snapshots() INTO result;
+    
+    RETURN 'Triggered snapshots for ' || target_date || E'\n' || result;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION trigger_snapshots_for_date(target_date date); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.trigger_snapshots_for_date(target_date date) IS 'Manually trigger snapshot calculations for a specific date. Useful for backfilling or testing.';
+
+
+--
+-- Name: trigger_sync_our_url_on_product_update(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.trigger_sync_our_url_on_product_update() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Only sync if our_url was actually changed
+    IF OLD.our_url IS DISTINCT FROM NEW.our_url AND NEW.our_url IS NOT NULL THEN
+        -- Sync the our_url to all related price and stock changes
+        PERFORM sync_our_urls_from_products(NEW.user_id, NEW.id);
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: trim_progress_messages(uuid, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.trim_progress_messages(p_run_id uuid, p_max_messages integer DEFAULT 100) RETURNS void
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+  v_current_messages text[];
+  v_message_count integer;
+BEGIN
+  -- Get current messages
+  SELECT progress_messages INTO v_current_messages
+  FROM scraper_runs
+  WHERE id = p_run_id;
+  
+  -- If no messages or null, do nothing
+  IF v_current_messages IS NULL OR array_length(v_current_messages, 1) IS NULL THEN
+    RETURN;
+  END IF;
+  
+  v_message_count := array_length(v_current_messages, 1);
+  
+  -- If we have more messages than the max, trim the oldest ones
+  IF v_message_count > p_max_messages THEN
+    UPDATE scraper_runs
+    SET progress_messages = v_current_messages[(v_message_count - p_max_messages + 1):v_message_count]
+    WHERE id = p_run_id;
+  END IF;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION trim_progress_messages(p_run_id uuid, p_max_messages integer); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.trim_progress_messages(p_run_id uuid, p_max_messages integer) IS 'Trims the progress_messages array to prevent database bloat';
+
+
+--
+-- Name: undismiss_product_duplicates(uuid, uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.undismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid) RETURNS jsonb
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    ordered_id_1 UUID;
+    ordered_id_2 UUID;
+    deleted_count INTEGER;
+BEGIN
+    -- Ensure consistent ordering (smaller UUID first)
+    IF p_product_id_1 < p_product_id_2 THEN
+        ordered_id_1 := p_product_id_1;
+        ordered_id_2 := p_product_id_2;
+    ELSE
+        ordered_id_1 := p_product_id_2;
+        ordered_id_2 := p_product_id_1;
+    END IF;
+    
+    -- Delete dismissal record
+    DELETE FROM products_dismissed_duplicates
+    WHERE user_id = p_user_id 
+      AND product_id_1 = ordered_id_1 
+      AND product_id_2 = ordered_id_2;
+    
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    
+    IF deleted_count > 0 THEN
+        RETURN jsonb_build_object(
+            'success', true,
+            'message', 'Product duplicate undismissed successfully',
+            'product_id_1', ordered_id_1,
+            'product_id_2', ordered_id_2
+        );
+    ELSE
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'No dismissed duplicate found for these products',
+            'product_id_1', ordered_id_1,
+            'product_id_2', ordered_id_2
+        );
+    END IF;
+    
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+        'success', false,
+        'message', 'Error undismissing product duplicate: ' || SQLERRM,
+        'product_id_1', p_product_id_1,
+        'product_id_2', p_product_id_2
+    );
+END;
+$$;
+
+
+--
+-- Name: FUNCTION undismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.undismiss_product_duplicates(p_user_id uuid, p_product_id_1 uuid, p_product_id_2 uuid) IS 'Undismisses product duplicates to allow them to appear in duplicate detection again';
+
+
+--
+-- Name: update_conversation_timestamp(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_conversation_timestamp() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  UPDATE support_conversations 
+  SET updated_at = NOW() 
+  WHERE id = NEW.conversation_id;
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: update_daily_snapshots_updated_at(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_daily_snapshots_updated_at() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: update_integration_next_run_on_completion(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_integration_next_run_on_completion() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    -- Update next_run_time when status changes to 'completed' or 'failed'
+    IF (NEW.status = 'completed' AND OLD.status != 'completed') OR 
+       (NEW.status = 'failed' AND OLD.status != 'failed') THEN
+        
+        IF NEW.status = 'completed' THEN
+            -- Update the integration's last_sync_at and next_run_time for successful runs
+            UPDATE public.integrations
+            SET 
+                last_sync_at = NEW.completed_at,
+                last_sync_status = 'success',
+                status = 'active',  -- Ensure it stays active
+                updated_at = now()
+            WHERE id = NEW.integration_id;
+        ELSE
+            -- For failed runs, update last_sync_status but keep it active for retry
+            UPDATE public.integrations
+            SET 
+                last_sync_at = NEW.completed_at,
+                last_sync_status = 'failed',
+                status = 'active',  -- Reset to active so it can be scheduled again
+                updated_at = now()
+            WHERE id = NEW.integration_id;
+        END IF;
+        
+        -- Calculate and set the next run time for both completed and failed runs
+        PERFORM public.update_integration_next_run_time(NEW.integration_id, NEW.completed_at);
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: update_integration_next_run_time(uuid, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_integration_next_run_time(integration_id uuid, completed_at timestamp with time zone DEFAULT now()) RETURNS timestamp with time zone
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    integration_record record;
+    next_run timestamp with time zone;
+    base_time timestamp with time zone;
+BEGIN
+    -- Get integration details
+    SELECT id, sync_frequency, last_sync_at
+    INTO integration_record
+    FROM public.integrations
+    WHERE id = integration_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Integration not found: %', integration_id;
+    END IF;
+
+    -- Use completed_at as base time
+    base_time := completed_at;
+
+    -- Calculate next run time based on frequency
+    CASE integration_record.sync_frequency
+        WHEN 'hourly' THEN
+            next_run := base_time + interval '1 hour';
+        WHEN 'daily' THEN
+            -- Schedule for 5:00 AM the next day
+            next_run := date_trunc('day', base_time) + interval '1 day' + interval '5 hours';
+        WHEN 'weekly' THEN
+            next_run := base_time + interval '7 days';
+        WHEN 'monthly' THEN
+            next_run := base_time + interval '1 month';
+        ELSE
+            -- Default to daily if frequency is unknown
+            next_run := date_trunc('day', base_time) + interval '1 day' + interval '5 hours';
+    END CASE;
+
+    -- Update the integration with the new next run time
+    UPDATE public.integrations
+    SET next_run_time = next_run,
+        updated_at = now()
+    WHERE id = integration_id;
+
+    RETURN next_run;
+END;
+$$;
+
+
+--
+-- Name: update_integration_progress_timestamp(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_integration_progress_timestamp() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    -- Only update last_progress_update if products_processed actually changed
+    -- and the status is 'processing'
+    IF NEW.status = 'processing' AND 
+       (OLD.products_processed IS NULL OR NEW.products_processed != OLD.products_processed) THEN
+        NEW.last_progress_update = now();
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: update_integration_run_status(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_integration_run_status(run_id uuid) RETURNS void
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    stats JSONB;
+    integration_record RECORD;
+BEGIN
+    -- Get the statistics
+    SELECT get_integration_run_stats(run_id) INTO stats;
+
+    -- Get the integration ID
+    SELECT integration_id INTO integration_record
+    FROM integration_runs
+    WHERE id = run_id;
+
+    -- If there are no pending products, mark the run as completed
+    IF (stats->>'pending')::INTEGER = 0 THEN
+        UPDATE integration_runs
+        SET
+            status = 'completed',
+            completed_at = NOW(),
+            products_processed = (stats->>'processed')::INTEGER,
+            products_created = (stats->>'created')::INTEGER,
+            products_updated = (stats->>'updated')::INTEGER,
+            error_message = CASE
+                WHEN (stats->>'errors')::INTEGER > 0
+                THEN format('Completed with %s errors', (stats->>'errors')::INTEGER)
+                ELSE NULL
+            END
+        WHERE id = run_id;
+
+        -- Update the integration status
+        UPDATE integrations
+        SET
+            status = 'active',
+            last_sync_at = NOW(),
+            last_sync_status = 'success'
+        WHERE id = integration_record.integration_id;
+    END IF;
+END;
+$$;
+
+
+--
+-- Name: update_product_match_reviews_updated_at(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_product_match_reviews_updated_at() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: update_scheduling_config(integer, integer, integer, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_scheduling_config(p_max_python_workers integer DEFAULT 1, p_max_typescript_workers integer DEFAULT 1, p_max_integration_workers integer DEFAULT 1, p_max_jobs_per_run integer DEFAULT 2) RETURNS text
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    -- This function serves as documentation for the current limits
+    -- In the future, these could be stored in a configuration table
+    -- For now, it just returns the current configuration
+
+    RETURN format('Worker capacity configuration:
+- Python workers: %s (handles scraper_type = ''python'')
+- TypeScript workers: %s (handles scraper_type = ''typescript'')
+- Integration workers: %s (handles integration jobs)
+- Max jobs created per scheduling run: %s
+
+To increase capacity:
+1. Deploy additional worker instances on Railway
+2. Update the scheduling functions with new limits
+3. Monitor performance and adjust as needed
+
+Current pg_cron schedule:
+- Scraper jobs: Every 5 minutes
+- Integration jobs: Every 10 minutes
+- Utility jobs: Every hour',
+        p_max_python_workers,
+        p_max_typescript_workers,
+        p_max_integration_workers,
+        p_max_jobs_per_run);
+END;
+$$;
+
+
+--
+-- Name: update_scraper_next_run_on_completion(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_scraper_next_run_on_completion() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    -- Only update next_run_time when status changes to 'completed'
+    IF NEW.status = 'completed' AND OLD.status != 'completed' THEN
+        -- Update the scraper's last_run and calculate next_run_time
+        UPDATE public.scrapers
+        SET 
+            last_run = NEW.completed_at,
+            updated_at = now()
+        WHERE id = NEW.scraper_id;
+        
+        -- Calculate and set the next run time
+        PERFORM public.update_scraper_next_run_time(NEW.scraper_id, NEW.completed_at);
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: update_scraper_next_run_time(uuid, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_scraper_next_run_time(scraper_id uuid, completed_at timestamp with time zone DEFAULT now()) RETURNS timestamp with time zone
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    scraper_record record;
+    next_run timestamp with time zone;
+    base_time timestamp with time zone;
+    schedule_time text;
+    schedule_hours integer;
+    schedule_minutes integer;
+BEGIN
+    -- Get scraper details
+    SELECT id, schedule, last_run
+    INTO scraper_record
+    FROM public.scrapers
+    WHERE id = scraper_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Scraper not found: %', scraper_id;
+    END IF;
+
+    -- Use completed_at as base time
+    base_time := completed_at;
+    
+    -- Get schedule time (default to 02:00 if not specified)
+    schedule_time := COALESCE(scraper_record.schedule->>'time', '02:00');
+    
+    -- Parse hours and minutes
+    schedule_hours := split_part(schedule_time, ':', 1)::integer;
+    schedule_minutes := split_part(schedule_time, ':', 2)::integer;
+
+    -- Calculate next run time based on frequency
+    CASE scraper_record.schedule->>'frequency'
+        WHEN 'hourly' THEN
+            next_run := base_time + interval '1 hour';
+        WHEN 'daily' THEN
+            -- Schedule for the specified time the next day
+            next_run := date_trunc('day', base_time) + interval '1 day' + 
+                       make_interval(hours => schedule_hours, mins => schedule_minutes);
+        WHEN 'weekly' THEN
+            -- Schedule for the same day next week at the specified time
+            next_run := date_trunc('day', base_time) + interval '7 days' + 
+                       make_interval(hours => schedule_hours, mins => schedule_minutes);
+        WHEN 'monthly' THEN
+            -- Schedule for the same day next month at the specified time
+            next_run := date_trunc('day', base_time) + interval '1 month' + 
+                       make_interval(hours => schedule_hours, mins => schedule_minutes);
+        ELSE
+            -- Default to daily if frequency is unknown
+            next_run := date_trunc('day', base_time) + interval '1 day' + 
+                       make_interval(hours => schedule_hours, mins => schedule_minutes);
+    END CASE;
+
+    -- Update the scraper with the new next run time
+    UPDATE public.scrapers
+    SET next_run_time = next_run,
+        updated_at = now()
+    WHERE id = scraper_id;
+
+    RETURN next_run;
+END;
+$$;
+
+
+--
+-- Name: update_scraper_status_from_run(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_scraper_status_from_run() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  -- When a scraper run is completed or failed, update the scraper's status
+  IF NEW.status IN ('completed', 'failed') THEN
+    -- Comment out the debug logging
+    -- INSERT INTO debug_logs (message)
+    -- VALUES ('Updating scraper status from run: ' || NEW.id ||
+    --         ', Status: ' || NEW.status ||
+    --         ', Execution time: ' || NEW.execution_time_ms ||
+    --         ', Products per second: ' || NEW.products_per_second);
+    
+    UPDATE scrapers
+    SET
+      status = CASE
+        WHEN NEW.status = 'completed' THEN 'idle'
+        WHEN NEW.status = 'failed' THEN 'error'
+        ELSE status
+      END,
+      error_message = CASE
+        WHEN NEW.status = 'failed' THEN NEW.error_message
+        ELSE NULL
+      END,
+      last_run = NEW.completed_at,
+      execution_time = COALESCE(
+        NEW.execution_time_ms,
+        EXTRACT(EPOCH FROM (NEW.completed_at - NEW.started_at)) * 1000
+      ),
+      last_products_per_second = NEW.products_per_second,
+      updated_at = NOW()
+    WHERE id = NEW.scraper_id;
+    
+    -- Comment out the debug logging
+    -- INSERT INTO debug_logs (message)
+    -- VALUES ('Updated scraper: ' || NEW.scraper_id ||
+    --         ' with execution_time: ' || COALESCE(
+    --           NEW.execution_time_ms,
+    --           EXTRACT(EPOCH FROM (NEW.completed_at - NEW.started_at)) * 1000
+    --         ) ||
+    --         ', last_products_per_second: ' || NEW.products_per_second);
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: FUNCTION update_scraper_status_from_run(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.update_scraper_status_from_run() IS 'Modified to remove debug logging to debug_logs table';
+
+
+--
+-- Name: update_updated_at_column(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_updated_at_column() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: update_user_profile(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_user_profile() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+BEGIN
+  -- Update the user_profile when next_auth.users is updated
+  UPDATE public.user_profiles
+  SET 
+    name = NEW.name,
+    avatar_url = NEW.image,
+    updated_at = NOW()
+  WHERE id = NEW.id;
+  
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: validate_api_key(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.validate_api_key(p_api_key text) RETURNS TABLE(user_id uuid, is_valid boolean)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        ak.user_id,
+        (ak.is_active AND ak.api_key = p_api_key) as is_valid
+    FROM api_keys ak
+    WHERE ak.api_key = p_api_key;
+    
+    -- Update last_used_at if key is valid
+    UPDATE api_keys 
+    SET last_used_at = NOW() 
+    WHERE api_key = p_api_key AND is_active = true;
+END;
+$$;
+
+
+--
+-- Name: validate_temp_competitors_data(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.validate_temp_competitors_data() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public'
+    AS $$
+DECLARE
+    user_matching_rules JSONB;
+    has_ean BOOLEAN := FALSE;
+    has_brand_sku BOOLEAN := FALSE;
+    has_name BOOLEAN := FALSE;
+    fuzzy_name_enabled BOOLEAN := FALSE;
+BEGIN
+    -- Get user's matching rules settings
+    SELECT matching_rules INTO user_matching_rules
+    FROM user_settings
+    WHERE user_id = NEW.user_id;
+    
+    -- Default to empty JSONB if no settings found
+    user_matching_rules := COALESCE(user_matching_rules, '{}');
+    
+    -- Check what data we have (with EAN validation)
+    has_ean := (NEW.ean IS NOT NULL AND NEW.ean != '' AND NEW.ean != '-' AND is_valid_ean(NEW.ean));
+    has_brand_sku := (NEW.brand IS NOT NULL AND NEW.brand != '' AND NEW.sku IS NOT NULL AND NEW.sku != '' AND NEW.sku != '-');
+    has_name := (NEW.name IS NOT NULL AND NEW.name != '');
+    fuzzy_name_enabled := (user_matching_rules->>'fuzzy_name_matching')::boolean;
+    
+    -- If EAN is provided but invalid, set it to NULL
+    IF NEW.ean IS NOT NULL AND NEW.ean != '' AND NEW.ean != '-' AND NOT is_valid_ean(NEW.ean) THEN
+        NEW.ean := NULL;
+    END IF;
+    
+    -- Validate that the record has sufficient data for processing
+    -- Must have either valid EAN OR both brand+sku OR (name if fuzzy matching is enabled)
+    IF NOT has_ean AND NOT has_brand_sku AND NOT (fuzzy_name_enabled AND has_name) THEN
+        -- Reject records that don't meet any matching criteria
+        RETURN NULL;
+    END IF;
+    
+    -- Validate that competitor_price is provided and valid
+    IF NEW.competitor_price IS NULL OR NEW.competitor_price <= 0 THEN
+        RAISE EXCEPTION 'competitor_price must be provided and greater than 0, got: %', NEW.competitor_price;
+    END IF;
+    
+    -- Set default currency_code using user's primary currency
+    NEW.currency_code := COALESCE(NEW.currency_code, get_user_primary_currency(NEW.user_id));
+    
+    -- Just validate and insert, processing will be done in batches later
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: validate_temp_integrations_data(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.validate_temp_integrations_data() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Basic validation only - keep it simple and fast
+    IF (NEW.our_retail_price IS NULL OR NEW.our_retail_price <= 0) AND
+       (NEW.our_wholesale_price IS NULL OR NEW.our_wholesale_price <= 0) THEN
+        RAISE EXCEPTION 'Either our_retail_price or our_wholesale_price must be provided and greater than 0';
+    END IF;
+    
+    -- Validate required fields
+    IF NEW.user_id IS NULL THEN
+        RAISE EXCEPTION 'user_id is required';
+    END IF;
+    
+    IF NEW.integration_id IS NULL THEN
+        RAISE EXCEPTION 'integration_id is required';
+    END IF;
+    
+    IF NEW.name IS NULL OR NEW.name = '' THEN
+        RAISE EXCEPTION 'product name is required';
+    END IF;
+    
+    -- Set defaults
+    NEW.created_at := COALESCE(NEW.created_at, NOW());
+    NEW.currency_code := COALESCE(NEW.currency_code, get_user_primary_currency(NEW.user_id));
+    
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: validate_temp_suppliers_data(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.validate_temp_suppliers_data() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Basic validation only - keep it simple and fast
+    IF NEW.supplier_price IS NOT NULL AND NEW.supplier_price <= 0 THEN
+        RAISE EXCEPTION 'supplier_price must be greater than 0, got: %', NEW.supplier_price;
+    END IF;
+    
+    -- Validate required fields
+    IF NEW.user_id IS NULL THEN
+        RAISE EXCEPTION 'user_id is required';
+    END IF;
+    
+    IF NEW.name IS NULL OR NEW.name = '' THEN
+        RAISE EXCEPTION 'product name is required';
+    END IF;
+    
+    -- Set defaults
+    NEW.created_at := COALESCE(NEW.created_at, NOW());
+    NEW.currency_code := COALESCE(NEW.currency_code, 'SEK');
+    
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: validate_url(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.validate_url(url_text text) RETURNS boolean
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Basic URL validation
+    IF url_text IS NULL OR url_text = '' THEN
+        RETURN FALSE;
+    END IF;
+    
+    -- Check if it starts with http:// or https://
+    IF NOT (url_text ~* '^https?://') THEN
+        RETURN FALSE;
+    END IF;
+    
+    -- Check for basic URL structure
+    IF NOT (url_text ~* '^https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}') THEN
+        RETURN FALSE;
+    END IF;
+    
+    RETURN TRUE;
+END;
+$$;
+
+
+--
+-- Name: admin_communication_log; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.admin_communication_log (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    admin_user_id uuid NOT NULL,
+    target_user_id uuid NOT NULL,
+    communication_type text DEFAULT 'email'::text NOT NULL,
+    subject text,
+    message_content text NOT NULL,
+    sent_at timestamp with time zone DEFAULT now(),
+    status text DEFAULT 'sent'::text,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: TABLE admin_communication_log; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.admin_communication_log IS 'Logs communications sent by admins to users.';
+
+
+--
+-- Name: COLUMN admin_communication_log.admin_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.admin_communication_log.admin_user_id IS 'The ID of the admin who sent the communication.';
+
+
+--
+-- Name: COLUMN admin_communication_log.target_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.admin_communication_log.target_user_id IS 'The ID of the user who received the communication.';
+
+
+--
+-- Name: api_keys; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.api_keys (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    key_name text NOT NULL,
+    api_key text NOT NULL,
+    created_at timestamp with time zone DEFAULT now(),
+    last_used_at timestamp with time zone,
+    is_active boolean DEFAULT true,
+    permissions jsonb DEFAULT '{}'::jsonb
+);
+
+
+--
+-- Name: brand_aliases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.brand_aliases (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    user_id uuid NOT NULL,
+    brand_id uuid NOT NULL,
+    alias_name text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: brands; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.brands (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text NOT NULL,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    needs_review boolean DEFAULT false NOT NULL
+);
+
+
+--
+-- Name: competitors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.competitors (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text NOT NULL,
+    website text NOT NULL,
+    logo_url text,
+    notes text,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: cron_job_logs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cron_job_logs (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    job_name text NOT NULL,
+    execution_date date NOT NULL,
+    status text NOT NULL,
+    duration_seconds integer,
+    details text,
+    users_processed integer DEFAULT 0,
+    snapshots_created integer DEFAULT 0,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: TABLE cron_job_logs; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.cron_job_logs IS 'Logs for cron job executions, including daily price snapshots';
+
+
+--
+-- Name: COLUMN cron_job_logs.job_name; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cron_job_logs.job_name IS 'Name of the cron job (e.g., daily_price_snapshots)';
+
+
+--
+-- Name: COLUMN cron_job_logs.execution_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cron_job_logs.execution_date IS 'Date when the job was executed';
+
+
+--
+-- Name: COLUMN cron_job_logs.status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cron_job_logs.status IS 'SUCCESS, FAILED, or PARTIAL_SUCCESS';
+
+
+--
+-- Name: COLUMN cron_job_logs.details; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cron_job_logs.details IS 'Detailed log output from the job execution';
+
+
+--
+-- Name: csv_uploads; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.csv_uploads (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    competitor_id uuid NOT NULL,
+    filename text NOT NULL,
+    file_content text NOT NULL,
+    uploaded_at timestamp with time zone DEFAULT now(),
+    processed boolean DEFAULT false,
+    processed_at timestamp with time zone,
+    error_message text
+);
+
+
+--
+-- Name: daily_price_competitiveness_snapshots; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.daily_price_competitiveness_snapshots (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    snapshot_date date NOT NULL,
+    competitor_id uuid,
+    brand_filter text,
+    total_products_analyzed integer DEFAULT 0 NOT NULL,
+    products_we_are_cheapest integer DEFAULT 0 NOT NULL,
+    products_we_are_same_price integer DEFAULT 0 NOT NULL,
+    products_we_are_more_expensive integer DEFAULT 0 NOT NULL,
+    cheapest_percentage numeric(5,2) DEFAULT 0 NOT NULL,
+    same_price_percentage numeric(5,2) DEFAULT 0 NOT NULL,
+    more_expensive_percentage numeric(5,2) DEFAULT 0 NOT NULL,
+    avg_price_difference_when_higher numeric(10,2),
+    avg_price_difference_percentage_when_higher numeric(5,2),
+    total_potential_savings numeric(12,2),
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: TABLE daily_price_competitiveness_snapshots; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.daily_price_competitiveness_snapshots IS 'Stores daily snapshots of price competitiveness for historical trend analysis. Supports both competitor-specific and brand-specific filtering.';
+
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.competitor_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.competitor_id IS 'NULL means analysis across all competitors';
+
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.brand_filter; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.brand_filter IS 'NULL means analysis across all brands. When set, only products matching this brand are included.';
+
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.total_products_analyzed; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.total_products_analyzed IS 'Total number of products included in this snapshot analysis';
+
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.products_we_are_cheapest; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.products_we_are_cheapest IS 'Number of products where our price is lower than or equal to the lowest competitor price';
+
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.products_we_are_same_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.products_we_are_same_price IS 'Number of products where our price exactly matches the lowest competitor price';
+
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.products_we_are_more_expensive; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.products_we_are_more_expensive IS 'Number of products where our price is higher than the lowest competitor price';
+
+
+--
+-- Name: COLUMN daily_price_competitiveness_snapshots.total_potential_savings; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.daily_price_competitiveness_snapshots.total_potential_savings IS 'Total amount in kr that customers could save if we matched all lowest competitor prices';
+
+
+--
+-- Name: debug_logs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.debug_logs (
+    id integer NOT NULL,
+    message text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: debug_logs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.debug_logs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: debug_logs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.debug_logs_id_seq OWNED BY public.debug_logs.id;
+
+
+--
+-- Name: dismissed_duplicates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.dismissed_duplicates (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    user_id uuid NOT NULL,
+    brand_id_1 uuid NOT NULL,
+    brand_id_2 uuid NOT NULL,
+    dismissal_key text NOT NULL,
+    dismissed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT brand_id_order CHECK ((brand_id_1 < brand_id_2))
+);
+
+
+--
+-- Name: integrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.integrations (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    platform text NOT NULL,
+    name text NOT NULL,
+    api_url text NOT NULL,
+    api_key text NOT NULL,
+    status text DEFAULT 'pending_setup'::text NOT NULL,
+    last_sync_at timestamp with time zone,
+    last_sync_status text,
+    sync_frequency text DEFAULT 'daily'::text,
+    configuration jsonb,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    next_run_time timestamp with time zone,
+    is_active boolean DEFAULT true NOT NULL
+);
+
+
+--
+-- Name: COLUMN integrations.is_active; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.integrations.is_active IS 'Whether the integration is active and should run on schedule';
+
+
+--
+-- Name: marketing_contacts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.marketing_contacts (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name text NOT NULL,
+    email text NOT NULL,
+    company text,
+    message text NOT NULL,
+    contact_type text DEFAULT 'general'::text,
+    status text DEFAULT 'new'::text,
+    created_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT marketing_contacts_contact_type_check CHECK ((contact_type = ANY (ARRAY['general'::text, 'sales'::text, 'support'::text, 'partnership'::text]))),
+    CONSTRAINT marketing_contacts_status_check CHECK ((status = ANY (ARRAY['new'::text, 'contacted'::text, 'resolved'::text])))
+);
+
+
+--
+-- Name: newsletter_subscriptions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.newsletter_subscriptions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email text NOT NULL,
+    name text,
+    subscribed_at timestamp with time zone DEFAULT now(),
+    unsubscribed_at timestamp with time zone,
+    is_active boolean DEFAULT true
+);
+
+
+--
+-- Name: price_changes_competitors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.price_changes_competitors (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    competitor_id uuid,
+    old_competitor_price numeric(10,2),
+    new_competitor_price numeric(10,2),
+    price_change_percentage numeric(10,2),
+    changed_at timestamp with time zone DEFAULT now(),
+    integration_id uuid,
+    currency_code text,
+    competitor_url text,
+    old_our_retail_price numeric(10,2),
+    new_our_retail_price numeric(10,2),
+    our_url text,
+    CONSTRAINT check_at_least_one_price CHECK (((new_competitor_price IS NOT NULL) OR (new_our_retail_price IS NOT NULL))),
+    CONSTRAINT check_competitor_price_has_competitor_id CHECK ((((old_competitor_price IS NULL) AND (new_competitor_price IS NULL)) OR ((competitor_id IS NOT NULL) AND (integration_id IS NULL)))),
+    CONSTRAINT check_our_retail_price_has_integration_id CHECK ((((old_our_retail_price IS NULL) AND (new_our_retail_price IS NULL)) OR ((integration_id IS NOT NULL) AND (competitor_id IS NULL)))),
+    CONSTRAINT check_price_consistency CHECK ((((old_competitor_price IS NULL) = (new_competitor_price IS NULL)) OR ((old_our_retail_price IS NULL) = (new_our_retail_price IS NULL)))),
+    CONSTRAINT check_price_type_consistency CHECK ((((old_competitor_price IS NULL) AND (old_our_retail_price IS NULL)) OR ((old_competitor_price IS NOT NULL) AND (old_our_retail_price IS NULL)) OR ((old_competitor_price IS NULL) AND (old_our_retail_price IS NOT NULL)))),
+    CONSTRAINT price_changes_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code)))),
+    CONSTRAINT price_changes_source_check CHECK (((competitor_id IS NOT NULL) OR (integration_id IS NOT NULL)))
+);
+
+
+--
+-- Name: COLUMN price_changes_competitors.currency_code; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.price_changes_competitors.currency_code IS 'ISO 4217 currency code (e.g., SEK, USD)';
+
+
+--
+-- Name: price_changes_suppliers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.price_changes_suppliers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    supplier_id uuid,
+    old_our_wholesale_price numeric(10,2),
+    new_our_wholesale_price numeric(10,2),
+    price_change_percentage numeric(10,2),
+    currency_code text DEFAULT 'SEK'::text,
+    supplier_url text,
+    minimum_order_quantity integer DEFAULT 1,
+    lead_time_days integer,
+    changed_at timestamp with time zone DEFAULT now(),
+    change_source text DEFAULT 'manual'::text,
+    old_supplier_price numeric(10,2),
+    new_supplier_price numeric(10,2),
+    old_supplier_recommended_price numeric(10,2),
+    new_supplier_recommended_price numeric(10,2),
+    integration_id uuid,
+    our_url text,
+    CONSTRAINT check_exactly_one_source CHECK ((((supplier_id IS NOT NULL) AND (integration_id IS NULL)) OR ((supplier_id IS NULL) AND (integration_id IS NOT NULL)))),
+    CONSTRAINT check_our_wholesale_price_has_integration_id CHECK ((((old_our_wholesale_price IS NULL) AND (new_our_wholesale_price IS NULL)) OR ((integration_id IS NOT NULL) AND (supplier_id IS NULL)))),
+    CONSTRAINT check_supplier_price_consistency CHECK ((((old_supplier_price IS NULL) AND (new_supplier_price IS NULL)) OR ((old_supplier_price IS NULL) AND (new_supplier_price IS NOT NULL)) OR ((old_supplier_price IS NOT NULL) AND (new_supplier_price IS NOT NULL)) OR ((old_supplier_price IS NOT NULL) AND (new_supplier_price IS NULL)))),
+    CONSTRAINT check_supplier_price_has_supplier_id CHECK ((((old_supplier_price IS NULL) AND (new_supplier_price IS NULL)) OR ((supplier_id IS NOT NULL) AND (integration_id IS NULL)))),
+    CONSTRAINT price_changes_suppliers_change_source_check CHECK ((change_source = ANY (ARRAY['manual'::text, 'csv'::text, 'scraper'::text, 'integration'::text])))
+);
+
+
+--
+-- Name: product_custom_field_values; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.product_custom_field_values (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    product_id uuid NOT NULL,
+    custom_field_id uuid NOT NULL,
+    value text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    source_type character varying(20),
+    source_id uuid,
+    last_updated_by character varying(20),
+    confidence_score integer DEFAULT 100,
+    created_by_source character varying(20),
+    value_hash text
+);
+
+
+--
+-- Name: product_custom_fields; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.product_custom_fields (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    field_name text NOT NULL,
+    field_type text NOT NULL,
+    is_required boolean DEFAULT false,
+    default_value text,
+    validation_rules jsonb,
+    created_at timestamp with time zone DEFAULT now(),
+    update_strategy character varying(20) DEFAULT 'source_priority'::character varying,
+    source_priority jsonb DEFAULT '{"manual": 100, "supplier": 60, "competitor": 40, "integration": 80}'::jsonb,
+    allow_auto_update boolean DEFAULT true,
+    CONSTRAINT user_custom_fields_field_type_check CHECK ((field_type = ANY (ARRAY['text'::text, 'number'::text, 'boolean'::text, 'url'::text, 'date'::text])))
+);
+
+
+--
+-- Name: products; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.products (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text NOT NULL,
+    sku text,
+    ean text,
+    brand text,
+    category text,
+    description text,
+    image_url text,
+    our_retail_price numeric(10,2),
+    our_wholesale_price numeric(10,2),
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    brand_id uuid NOT NULL,
+    currency_code text,
+    our_url text,
+    CONSTRAINT products_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
+);
+
+
+--
+-- Name: COLUMN products.currency_code; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.products.currency_code IS 'ISO 4217 currency code (e.g., SEK, USD)';
+
+
+--
+-- Name: COLUMN products.our_url; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.products.our_url IS 'URL to the product on the source platform';
+
+
+--
+-- Name: products_dismissed_duplicates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.products_dismissed_duplicates (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id_1 uuid NOT NULL,
+    product_id_2 uuid NOT NULL,
+    dismissal_key text NOT NULL,
+    dismissed_at timestamp without time zone DEFAULT now(),
+    CONSTRAINT product_id_order CHECK ((product_id_1 < product_id_2))
+);
+
+
+--
+-- Name: professional_scraper_requests; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.professional_scraper_requests (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid,
+    competitor_id uuid,
+    name text NOT NULL,
+    email text NOT NULL,
+    website text NOT NULL,
+    requirements text NOT NULL,
+    additional_info text,
+    status text DEFAULT 'submitted'::text,
+    quoted_price numeric(10,2),
+    estimated_delivery_days integer,
+    admin_notes text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT professional_scraper_requests_status_check CHECK ((status = ANY (ARRAY['submitted'::text, 'reviewing'::text, 'quoted'::text, 'in_progress'::text, 'completed'::text, 'cancelled'::text])))
+);
+
+
+--
+-- Name: rate_limit_log; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.rate_limit_log (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    ip_address inet NOT NULL,
+    endpoint text NOT NULL,
+    attempts integer DEFAULT 1,
+    window_start timestamp with time zone DEFAULT now(),
+    created_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: scraper_ai_sessions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraper_ai_sessions (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    competitor_id uuid NOT NULL,
+    url text NOT NULL,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    current_phase text NOT NULL,
+    analysis_data jsonb DEFAULT '{}'::jsonb,
+    url_collection_data jsonb DEFAULT '{}'::jsonb,
+    data_extraction_data jsonb DEFAULT '{}'::jsonb,
+    assembly_data jsonb DEFAULT '{}'::jsonb,
+    CONSTRAINT scraper_ai_sessions_current_phase_check CHECK ((current_phase = ANY (ARRAY['analysis'::text, 'data-validation'::text, 'assembly'::text, 'complete'::text])))
+);
+
+
+--
+-- Name: TABLE scraper_ai_sessions; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.scraper_ai_sessions IS 'AI scraper sessions with phases: analysis, data-validation, assembly, complete';
+
+
+--
+-- Name: COLUMN scraper_ai_sessions.current_phase; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_ai_sessions.current_phase IS 'Current phase of the AI scraper generation process: analysis, data-validation, assembly, complete';
+
+
+--
+-- Name: COLUMN scraper_ai_sessions.analysis_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_ai_sessions.analysis_data IS 'Data from the site analysis phase';
+
+
+--
+-- Name: COLUMN scraper_ai_sessions.url_collection_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_ai_sessions.url_collection_data IS 'Legacy: Data from the URL collection phase (now part of data-validation)';
+
+
+--
+-- Name: COLUMN scraper_ai_sessions.data_extraction_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_ai_sessions.data_extraction_data IS 'Data from the data validation phase (previously data-extraction)';
+
+
+--
+-- Name: COLUMN scraper_ai_sessions.assembly_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scraper_ai_sessions.assembly_data IS 'Data from the script assembly phase';
+
+
+--
+-- Name: scraper_run_timeouts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraper_run_timeouts (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    run_id uuid NOT NULL,
+    timeout_at timestamp with time zone NOT NULL,
+    processed boolean DEFAULT false NOT NULL,
+    processed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: scraper_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scraper_runs (
+    id uuid NOT NULL,
+    scraper_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    status text DEFAULT 'initializing'::text,
+    started_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    is_test_run boolean DEFAULT false,
+    product_count integer DEFAULT 0,
+    current_batch integer DEFAULT 0,
+    total_batches integer,
+    error_message text,
+    progress_messages text[],
+    created_at timestamp with time zone DEFAULT now(),
+    execution_time_ms bigint,
+    products_per_second numeric(10,2),
+    scraper_type text,
+    error_details text,
+    claimed_by_worker_at timestamp with time zone,
+    current_phase integer
+);
+
+
+--
+-- Name: scrapers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scrapers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    competitor_id uuid,
+    name text NOT NULL,
+    url text NOT NULL,
+    schedule jsonb NOT NULL,
+    is_active boolean DEFAULT false,
+    status text DEFAULT 'idle'::text,
+    error_message text,
+    last_run timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    scraper_type character varying(20) DEFAULT 'ai'::character varying NOT NULL,
+    python_script text,
+    script_metadata jsonb,
+    test_results jsonb,
+    execution_time bigint,
+    last_products_per_second numeric(10,2),
+    typescript_script text,
+    scrape_only_own_products boolean DEFAULT false NOT NULL,
+    filter_by_active_brands boolean DEFAULT false NOT NULL,
+    supplier_id uuid,
+    next_run_time timestamp with time zone,
+    CONSTRAINT scrapers_target_check CHECK ((((competitor_id IS NOT NULL) AND (supplier_id IS NULL)) OR ((competitor_id IS NULL) AND (supplier_id IS NOT NULL))))
+);
+
+
+--
+-- Name: TABLE scrapers; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.scrapers IS 'Stores scraper configurations for different types: AI, Python, and CSV';
+
+
+--
+-- Name: COLUMN scrapers.execution_time; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scrapers.execution_time IS 'Time in milliseconds it took to run the scraper';
+
+
+--
+-- Name: COLUMN scrapers.last_products_per_second; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scrapers.last_products_per_second IS 'Products per second metric from the most recently completed successful run.';
+
+
+--
+-- Name: COLUMN scrapers.scrape_only_own_products; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.scrapers.scrape_only_own_products IS 'Flag to only scrape products matching the user''s own product catalog (based on EAN/SKU/Brand matching)';
+
+
+--
+-- Name: stock_changes_competitors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.stock_changes_competitors (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    competitor_id uuid,
+    integration_id uuid,
+    old_stock_quantity integer,
+    new_stock_quantity integer,
+    old_stock_status text,
+    new_stock_status text,
+    old_availability_date date,
+    new_availability_date date,
+    stock_change_quantity integer,
+    changed_at timestamp with time zone DEFAULT now(),
+    raw_stock_data jsonb,
+    competitor_url text,
+    our_url text,
+    CONSTRAINT stock_changes_source_check CHECK (((competitor_id IS NOT NULL) OR (integration_id IS NOT NULL)))
+);
+
+
+--
+-- Name: TABLE stock_changes_competitors; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.stock_changes_competitors IS 'Tracks stock level changes for competitor products over time';
+
+
+--
+-- Name: COLUMN stock_changes_competitors.stock_change_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_competitors.stock_change_quantity IS 'Calculated field: new_stock_quantity - old_stock_quantity';
+
+
+--
+-- Name: COLUMN stock_changes_competitors.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_competitors.raw_stock_data IS 'JSON data containing detailed stock information like product combinations/variants';
+
+
+--
+-- Name: stock_changes_suppliers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.stock_changes_suppliers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    supplier_id uuid,
+    integration_id uuid,
+    old_stock_quantity integer,
+    new_stock_quantity integer,
+    old_stock_status text,
+    new_stock_status text,
+    old_availability_date date,
+    new_availability_date date,
+    stock_change_quantity integer,
+    changed_at timestamp with time zone DEFAULT now(),
+    raw_stock_data jsonb,
+    supplier_url text,
+    our_url text,
+    CONSTRAINT stock_changes_suppliers_source_check CHECK (((supplier_id IS NOT NULL) OR (integration_id IS NOT NULL)))
+);
+
+
+--
+-- Name: TABLE stock_changes_suppliers; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.stock_changes_suppliers IS 'Tracks stock level changes for supplier products over time';
+
+
+--
+-- Name: COLUMN stock_changes_suppliers.stock_change_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_suppliers.stock_change_quantity IS 'Calculated field: new_stock_quantity - old_stock_quantity';
+
+
+--
+-- Name: COLUMN stock_changes_suppliers.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_changes_suppliers.raw_stock_data IS 'JSON data containing detailed stock information';
+
+
+--
+-- Name: suppliers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.suppliers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text NOT NULL,
+    website text,
+    contact_email text,
+    contact_phone text,
+    logo_url text,
+    notes text,
+    login_username text,
+    login_password text,
+    api_key text,
+    api_url text,
+    login_url text,
+    price_file_url text,
+    scraping_config jsonb,
+    sync_frequency text DEFAULT 'weekly'::text,
+    last_sync_at timestamp with time zone,
+    last_sync_status text,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT suppliers_sync_frequency_check CHECK ((sync_frequency = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text, 'manual'::text])))
+);
+
+
+--
+-- Name: support_conversations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.support_conversations (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid,
+    admin_user_id uuid,
+    subject text NOT NULL,
+    status text DEFAULT 'open'::text,
+    priority text DEFAULT 'medium'::text,
+    category text DEFAULT 'general'::text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    resolved_at timestamp with time zone,
+    last_read_by_user timestamp with time zone,
+    last_read_by_admin timestamp with time zone,
+    CONSTRAINT support_conversations_category_check CHECK ((category = ANY (ARRAY['general'::text, 'technical'::text, 'billing'::text, 'scraper_request'::text, 'feature_request'::text]))),
+    CONSTRAINT support_conversations_priority_check CHECK ((priority = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text, 'urgent'::text]))),
+    CONSTRAINT support_conversations_status_check CHECK ((status = ANY (ARRAY['open'::text, 'in_progress'::text, 'resolved'::text, 'closed'::text])))
+);
+
+
+--
+-- Name: support_messages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.support_messages (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    conversation_id uuid,
+    sender_id uuid,
+    sender_type text NOT NULL,
+    message_content text NOT NULL,
+    is_internal boolean DEFAULT false,
+    created_at timestamp with time zone DEFAULT now(),
+    read_by_recipient boolean DEFAULT false,
+    CONSTRAINT support_messages_sender_type_check CHECK ((sender_type = ANY (ARRAY['user'::text, 'admin'::text])))
+);
+
+
+--
+-- Name: temp_competitors_scraped_data; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.temp_competitors_scraped_data (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    scraper_id uuid,
+    competitor_id uuid NOT NULL,
+    product_id uuid,
+    name text NOT NULL,
+    competitor_price numeric(10,2) NOT NULL,
+    competitor_url text,
+    image_url text,
+    sku text,
+    brand text,
+    scraped_at timestamp with time zone DEFAULT now(),
+    ean text,
+    currency_code text,
+    raw_data jsonb,
+    stock_quantity integer,
+    stock_status text,
+    availability_date date,
+    raw_stock_data jsonb,
+    processed boolean DEFAULT false,
+    CONSTRAINT temp_competitors_scraped_data_currency_code_check CHECK (((char_length(currency_code) = 3) AND (currency_code = upper(currency_code))))
+);
+
+
+--
+-- Name: COLUMN temp_competitors_scraped_data.stock_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_competitors_scraped_data.stock_quantity IS 'Numeric stock quantity extracted from competitor site';
+
+
+--
+-- Name: COLUMN temp_competitors_scraped_data.stock_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_competitors_scraped_data.stock_status IS 'Text stock status (e.g., "I lager", "Ej i lager")';
+
+
+--
+-- Name: COLUMN temp_competitors_scraped_data.availability_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_competitors_scraped_data.availability_date IS 'Future availability date if product is out of stock';
+
+
+--
+-- Name: COLUMN temp_competitors_scraped_data.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_competitors_scraped_data.raw_stock_data IS 'Raw stock data from scraper including combinations and metadata';
+
+
+--
+-- Name: temp_suppliers_scraped_data; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.temp_suppliers_scraped_data (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    supplier_id uuid NOT NULL,
+    scraper_id uuid NOT NULL,
+    run_id text NOT NULL,
+    name text,
+    sku text,
+    brand text,
+    ean text,
+    supplier_price numeric(10,2),
+    currency_code text DEFAULT 'SEK'::text,
+    supplier_url text,
+    image_url text,
+    minimum_order_quantity integer DEFAULT 1,
+    lead_time_days integer,
+    stock_quantity integer,
+    product_description text,
+    category text,
+    scraped_at timestamp with time zone DEFAULT now(),
+    processed boolean DEFAULT false,
+    created_at timestamp with time zone DEFAULT now(),
+    supplier_recommended_price numeric(10,2),
+    raw_data jsonb,
+    stock_status text,
+    availability_date date,
+    raw_stock_data jsonb
+);
+
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.supplier_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.supplier_price IS 'Supplier cost price (what they charge us)';
+
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.stock_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.stock_quantity IS 'Numeric stock quantity from supplier (renamed from stock_level)';
+
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.supplier_recommended_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.supplier_recommended_price IS 'Supplier recommended retail price (what they suggest we charge customers)';
+
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.stock_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.stock_status IS 'Text stock status from supplier';
+
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.availability_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.availability_date IS 'Future availability date if product is out of stock';
+
+
+--
+-- Name: COLUMN temp_suppliers_scraped_data.raw_stock_data; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.temp_suppliers_scraped_data.raw_stock_data IS 'Raw stock data from supplier including detailed stock information';
+
+
+--
+-- Name: user_profiles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_profiles (
+    id uuid NOT NULL,
+    name text,
+    avatar_url text,
+    subscription_tier text DEFAULT 'free'::text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    email text,
+    admin_role text,
+    is_suspended boolean DEFAULT false
+);
+
+
+--
+-- Name: COLUMN user_profiles.admin_role; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_profiles.admin_role IS 'Defines the admin role for the user, if any (e.g., super_admin, support_admin).';
+
+
+--
+-- Name: COLUMN user_profiles.is_suspended; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_profiles.is_suspended IS 'Indicates if the user account is currently suspended by an admin.';
+
+
+--
+-- Name: user_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_settings (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    name text,
+    address text,
+    org_number text,
+    primary_currency text,
+    secondary_currencies text[],
+    currency_format text,
+    matching_rules jsonb,
+    price_thresholds jsonb,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    auto_create_custom_fields boolean DEFAULT true,
+    custom_fields_update_strategy character varying(20) DEFAULT 'source_priority'::character varying,
+    custom_fields_source_priority jsonb DEFAULT '{"manual": 100, "supplier": 60, "competitor": 40, "integration": 80}'::jsonb,
+    CONSTRAINT companies_primary_currency_check CHECK ((char_length(primary_currency) = 3))
+);
+
+
+--
+-- Name: user_subscriptions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_subscriptions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    stripe_customer_id text,
+    stripe_subscription_id text,
+    price_id text,
+    status text DEFAULT 'inactive'::text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: debug_logs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.debug_logs ALTER COLUMN id SET DEFAULT nextval('public.debug_logs_id_seq'::regclass);
+
+
+--
+-- Name: admin_communication_log admin_communication_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_communication_log
+    ADD CONSTRAINT admin_communication_log_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: api_keys api_keys_api_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.api_keys
+    ADD CONSTRAINT api_keys_api_key_key UNIQUE (api_key);
+
+
+--
+-- Name: api_keys api_keys_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.api_keys
+    ADD CONSTRAINT api_keys_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: brand_aliases brand_aliases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brand_aliases
+    ADD CONSTRAINT brand_aliases_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: brands brands_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brands
+    ADD CONSTRAINT brands_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_settings companies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_settings
+    ADD CONSTRAINT companies_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: competitors competitors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competitors
+    ADD CONSTRAINT competitors_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: cron_job_logs cron_job_logs_job_name_execution_date_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cron_job_logs
+    ADD CONSTRAINT cron_job_logs_job_name_execution_date_key UNIQUE (job_name, execution_date);
+
+
+--
+-- Name: cron_job_logs cron_job_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cron_job_logs
+    ADD CONSTRAINT cron_job_logs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: csv_uploads csv_uploads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.csv_uploads
+    ADD CONSTRAINT csv_uploads_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: daily_price_competitiveness_snapshots daily_price_competitiveness_snapshots_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_price_competitiveness_snapshots
+    ADD CONSTRAINT daily_price_competitiveness_snapshots_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: debug_logs debug_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.debug_logs
+    ADD CONSTRAINT debug_logs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: dismissed_duplicates dismissed_duplicates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dismissed_duplicates
+    ADD CONSTRAINT dismissed_duplicates_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: integration_runs integration_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.integration_runs
+    ADD CONSTRAINT integration_runs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: integrations integrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.integrations
+    ADD CONSTRAINT integrations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: marketing_contacts marketing_contacts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.marketing_contacts
+    ADD CONSTRAINT marketing_contacts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: newsletter_subscriptions newsletter_subscriptions_email_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.newsletter_subscriptions
+    ADD CONSTRAINT newsletter_subscriptions_email_key UNIQUE (email);
+
+
+--
+-- Name: newsletter_subscriptions newsletter_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.newsletter_subscriptions
+    ADD CONSTRAINT newsletter_subscriptions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: price_changes_competitors price_changes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_competitors
+    ADD CONSTRAINT price_changes_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: product_custom_field_values product_custom_field_values_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: product_custom_field_values product_custom_field_values_product_id_custom_field_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_product_id_custom_field_id_key UNIQUE (product_id, custom_field_id);
+
+
+--
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: products products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products
+    ADD CONSTRAINT products_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: professional_scraper_requests professional_scraper_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.professional_scraper_requests
+    ADD CONSTRAINT professional_scraper_requests_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: rate_limit_log rate_limit_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.rate_limit_log
+    ADD CONSTRAINT rate_limit_log_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: scraper_ai_sessions scraper_ai_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_ai_sessions
+    ADD CONSTRAINT scraper_ai_sessions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: scraper_run_timeouts scraper_run_timeouts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_run_timeouts
+    ADD CONSTRAINT scraper_run_timeouts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: scraper_runs scraper_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_runs
+    ADD CONSTRAINT scraper_runs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: scrapers scrapers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scrapers
+    ADD CONSTRAINT scrapers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: stock_changes_competitors stock_changes_competitors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_competitors
+    ADD CONSTRAINT stock_changes_competitors_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: stock_changes_suppliers stock_changes_suppliers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_suppliers
+    ADD CONSTRAINT stock_changes_suppliers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: suppliers suppliers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.suppliers
+    ADD CONSTRAINT suppliers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: support_conversations support_conversations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_conversations
+    ADD CONSTRAINT support_conversations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: support_messages support_messages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_messages
+    ADD CONSTRAINT support_messages_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: temp_integrations_scraped_data temp_integrations_scraped_data_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_integrations_scraped_data
+    ADD CONSTRAINT temp_integrations_scraped_data_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: brand_aliases unique_brand_alias; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brand_aliases
+    ADD CONSTRAINT unique_brand_alias UNIQUE (user_id, brand_id, alias_name);
+
+
+--
+-- Name: dismissed_duplicates unique_dismissed_pair; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dismissed_duplicates
+    ADD CONSTRAINT unique_dismissed_pair UNIQUE (user_id, brand_id_1, brand_id_2);
+
+
+--
+-- Name: products_dismissed_duplicates unique_dismissed_product_pair; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT unique_dismissed_product_pair UNIQUE (user_id, product_id_1, product_id_2);
+
+
+--
+-- Name: brands unique_user_brand; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brands
+    ADD CONSTRAINT unique_user_brand UNIQUE (user_id, name);
+
+
+--
+-- Name: product_custom_fields user_custom_fields_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_fields
+    ADD CONSTRAINT user_custom_fields_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: product_custom_fields user_custom_fields_user_id_field_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_fields
+    ADD CONSTRAINT user_custom_fields_user_id_field_name_key UNIQUE (user_id, field_name);
+
+
+--
+-- Name: user_profiles user_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_profiles
+    ADD CONSTRAINT user_profiles_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_settings user_settings_user_id_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_settings
+    ADD CONSTRAINT user_settings_user_id_unique UNIQUE (user_id);
+
+
+--
+-- Name: user_subscriptions user_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_subscriptions
+    ADD CONSTRAINT user_subscriptions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: idx_admin_communication_log_admin_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_admin_communication_log_admin_user_id ON public.admin_communication_log USING btree (admin_user_id);
+
+
+--
+-- Name: idx_admin_communication_log_sent_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_admin_communication_log_sent_at ON public.admin_communication_log USING btree (sent_at);
+
+
+--
+-- Name: idx_admin_communication_log_target_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_admin_communication_log_target_user_id ON public.admin_communication_log USING btree (target_user_id);
+
+
+--
+-- Name: idx_brand_aliases_alias_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_brand_aliases_alias_name ON public.brand_aliases USING btree (alias_name);
+
+
+--
+-- Name: idx_brand_aliases_brand_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_brand_aliases_brand_id ON public.brand_aliases USING btree (brand_id);
+
+
+--
+-- Name: idx_brand_aliases_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_brand_aliases_user_id ON public.brand_aliases USING btree (user_id);
+
+
+--
+-- Name: idx_brands_is_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_brands_is_active ON public.brands USING btree (is_active);
+
+
+--
+-- Name: idx_brands_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_brands_name ON public.brands USING btree (name);
+
+
+--
+-- Name: idx_brands_needs_review; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_brands_needs_review ON public.brands USING btree (needs_review);
+
+
+--
+-- Name: idx_brands_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_brands_user_id ON public.brands USING btree (user_id);
+
+
+--
+-- Name: idx_cron_job_logs_job_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_cron_job_logs_job_date ON public.cron_job_logs USING btree (job_name, execution_date DESC);
+
+
+--
+-- Name: idx_daily_snapshots_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_daily_snapshots_unique ON public.daily_price_competitiveness_snapshots USING btree (user_id, snapshot_date, COALESCE((competitor_id)::text, 'ALL'::text), COALESCE(brand_filter, 'ALL'::text));
+
+
+--
+-- Name: idx_daily_snapshots_user_brand_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_daily_snapshots_user_brand_date ON public.daily_price_competitiveness_snapshots USING btree (user_id, brand_filter, snapshot_date DESC);
+
+
+--
+-- Name: idx_daily_snapshots_user_competitor_brand_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_daily_snapshots_user_competitor_brand_date ON public.daily_price_competitiveness_snapshots USING btree (user_id, competitor_id, brand_filter, snapshot_date DESC);
+
+
+--
+-- Name: idx_daily_snapshots_user_competitor_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_daily_snapshots_user_competitor_date ON public.daily_price_competitiveness_snapshots USING btree (user_id, competitor_id, snapshot_date DESC);
+
+
+--
+-- Name: idx_daily_snapshots_user_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_daily_snapshots_user_date ON public.daily_price_competitiveness_snapshots USING btree (user_id, snapshot_date DESC);
+
+
+--
+-- Name: idx_dismissed_duplicates_brand_ids; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_dismissed_duplicates_brand_ids ON public.dismissed_duplicates USING btree (brand_id_1, brand_id_2);
+
+
+--
+-- Name: idx_dismissed_duplicates_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_dismissed_duplicates_user_id ON public.dismissed_duplicates USING btree (user_id);
+
+
+--
+-- Name: idx_integration_runs_integration_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_integration_runs_integration_id ON public.integration_runs USING btree (integration_id);
+
+
+--
+-- Name: idx_integration_runs_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_integration_runs_status ON public.integration_runs USING btree (status);
+
+
+--
+-- Name: idx_integration_runs_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_integration_runs_user_id ON public.integration_runs USING btree (user_id);
+
+
+--
+-- Name: idx_integrations_platform; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_integrations_platform ON public.integrations USING btree (platform);
+
+
+--
+-- Name: idx_integrations_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_integrations_status ON public.integrations USING btree (status);
+
+
+--
+-- Name: idx_integrations_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_integrations_user_id ON public.integrations USING btree (user_id);
+
+
+--
+-- Name: idx_marketing_contacts_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_marketing_contacts_created_at ON public.marketing_contacts USING btree (created_at);
+
+
+--
+-- Name: idx_marketing_contacts_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_marketing_contacts_status ON public.marketing_contacts USING btree (status);
+
+
+--
+-- Name: idx_price_changes_analysis; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_analysis ON public.price_changes_competitors USING btree (user_id, product_id, competitor_id, changed_at DESC, new_competitor_price);
+
+
+--
+-- Name: idx_price_changes_competitor_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitor_id ON public.price_changes_competitors USING btree (competitor_id);
+
+
+--
+-- Name: idx_price_changes_competitors_competitor_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_competitor_date ON public.price_changes_competitors USING btree (competitor_id, changed_at) WHERE (competitor_id IS NOT NULL);
+
+
+--
+-- Name: idx_price_changes_competitors_integration; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_integration ON public.price_changes_competitors USING btree (user_id, integration_id, changed_at) WHERE (integration_id IS NOT NULL);
+
+
+--
+-- Name: idx_price_changes_competitors_our_prices; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_our_prices ON public.price_changes_competitors USING btree (user_id, product_id, changed_at) WHERE (new_our_retail_price IS NOT NULL);
+
+
+--
+-- Name: idx_price_changes_competitors_prices; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_prices ON public.price_changes_competitors USING btree (user_id, product_id, changed_at) WHERE (new_competitor_price IS NOT NULL);
+
+
+--
+-- Name: idx_price_changes_competitors_product_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_product_user ON public.price_changes_competitors USING btree (user_id, product_id, changed_at);
+
+
+--
+-- Name: idx_price_changes_competitors_user_product_competitor; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_competitors_user_product_competitor ON public.price_changes_competitors USING btree (user_id, product_id, competitor_id, changed_at DESC) WHERE ((new_competitor_price IS NOT NULL) AND (competitor_id IS NOT NULL));
+
+
+--
+-- Name: idx_price_changes_integration_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_integration_id ON public.price_changes_competitors USING btree (integration_id);
+
+
+--
+-- Name: idx_price_changes_product_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_product_date ON public.price_changes_competitors USING btree (product_id, changed_at DESC);
+
+
+--
+-- Name: idx_price_changes_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_product_id ON public.price_changes_competitors USING btree (product_id);
+
+
+--
+-- Name: idx_price_changes_product_user_time; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_product_user_time ON public.price_changes_competitors USING btree (product_id, user_id, changed_at DESC);
+
+
+--
+-- Name: idx_price_changes_suppliers_analysis; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_analysis ON public.price_changes_suppliers USING btree (user_id, product_id, supplier_id, changed_at DESC, new_our_wholesale_price);
+
+
+--
+-- Name: idx_price_changes_suppliers_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_changed_at ON public.price_changes_suppliers USING btree (changed_at);
+
+
+--
+-- Name: idx_price_changes_suppliers_product_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_product_date ON public.price_changes_suppliers USING btree (product_id, changed_at DESC);
+
+
+--
+-- Name: idx_price_changes_suppliers_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_product_id ON public.price_changes_suppliers USING btree (product_id);
+
+
+--
+-- Name: idx_price_changes_suppliers_supplier_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_supplier_id ON public.price_changes_suppliers USING btree (supplier_id);
+
+
+--
+-- Name: idx_price_changes_suppliers_user_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_user_changed_at ON public.price_changes_suppliers USING btree (user_id, changed_at DESC);
+
+
+--
+-- Name: idx_price_changes_suppliers_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_user_id ON public.price_changes_suppliers USING btree (user_id);
+
+
+--
+-- Name: idx_price_changes_suppliers_user_product; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_user_product ON public.price_changes_suppliers USING btree (user_id, product_id);
+
+
+--
+-- Name: idx_price_changes_suppliers_user_supplier_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_suppliers_user_supplier_date ON public.price_changes_suppliers USING btree (user_id, supplier_id, changed_at DESC) WHERE (supplier_id IS NOT NULL);
+
+
+--
+-- Name: idx_price_changes_user_competitor_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_competitor_date ON public.price_changes_competitors USING btree (user_id, competitor_id, changed_at DESC);
+
+
+--
+-- Name: idx_price_changes_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id ON public.price_changes_competitors USING btree (user_id);
+
+
+--
+-- Name: INDEX idx_price_changes_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id IS 'Optimizes user-based price_changes queries';
+
+
+--
+-- Name: idx_price_changes_user_id_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id_changed_at ON public.price_changes_competitors USING btree (user_id, changed_at DESC);
+
+
+--
+-- Name: INDEX idx_price_changes_user_id_changed_at; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id_changed_at IS 'Optimizes time-based price change queries';
+
+
+--
+-- Name: idx_price_changes_user_id_competitor_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id_competitor_id ON public.price_changes_competitors USING btree (user_id, competitor_id) WHERE (competitor_id IS NOT NULL);
+
+
+--
+-- Name: INDEX idx_price_changes_user_id_competitor_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id_competitor_id IS 'Optimizes competitor-based price queries';
+
+
+--
+-- Name: idx_price_changes_user_id_integration_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id_integration_id ON public.price_changes_competitors USING btree (user_id, integration_id) WHERE (integration_id IS NOT NULL);
+
+
+--
+-- Name: INDEX idx_price_changes_user_id_integration_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id_integration_id IS 'Optimizes integration-based price queries';
+
+
+--
+-- Name: idx_price_changes_user_id_percentage_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id_percentage_changed_at ON public.price_changes_competitors USING btree (user_id, price_change_percentage, changed_at DESC);
+
+
+--
+-- Name: INDEX idx_price_changes_user_id_percentage_changed_at; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id_percentage_changed_at IS 'Optimizes dashboard price drop queries';
+
+
+--
+-- Name: idx_price_changes_user_id_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_changes_user_id_product_id ON public.price_changes_competitors USING btree (user_id, product_id);
+
+
+--
+-- Name: INDEX idx_price_changes_user_id_product_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_price_changes_user_id_product_id IS 'Optimizes get_brand_analytics function joins';
+
+
+--
+-- Name: idx_product_custom_field_values_created_at_product; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_created_at_product ON public.product_custom_field_values USING btree (created_at DESC, product_id);
+
+
+--
+-- Name: idx_product_custom_field_values_custom_field_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_custom_field_id ON public.product_custom_field_values USING btree (custom_field_id);
+
+
+--
+-- Name: idx_product_custom_field_values_dedup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_dedup ON public.product_custom_field_values USING btree (custom_field_id, value_hash);
+
+
+--
+-- Name: idx_product_custom_field_values_hash; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_hash ON public.product_custom_field_values USING btree (value_hash);
+
+
+--
+-- Name: idx_product_custom_field_values_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_product_id ON public.product_custom_field_values USING btree (product_id);
+
+
+--
+-- Name: idx_product_custom_field_values_product_source; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_product_source ON public.product_custom_field_values USING btree (product_id, source_type);
+
+
+--
+-- Name: idx_product_custom_field_values_source_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_source_id ON public.product_custom_field_values USING btree (source_id);
+
+
+--
+-- Name: idx_product_custom_field_values_source_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_source_type ON public.product_custom_field_values USING btree (source_type);
+
+
+--
+-- Name: idx_product_custom_field_values_value_hash; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_product_custom_field_values_value_hash ON public.product_custom_field_values USING btree (md5(value)) WHERE (value IS NOT NULL);
+
+
+--
+-- Name: idx_products_brand; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_brand ON public.products USING btree (brand);
+
+
+--
+-- Name: idx_products_brand_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_brand_id ON public.products USING btree (brand_id);
+
+
+--
+-- Name: idx_products_brand_id_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_brand_id_name ON public.products USING btree (user_id, brand_id, name);
+
+
+--
+-- Name: idx_products_brand_sku; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_brand_sku ON public.products USING btree (brand, sku);
+
+
+--
+-- Name: idx_products_dismissed_duplicates_products; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_dismissed_duplicates_products ON public.products_dismissed_duplicates USING btree (product_id_1, product_id_2);
+
+
+--
+-- Name: idx_products_dismissed_duplicates_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_dismissed_duplicates_user_id ON public.products_dismissed_duplicates USING btree (user_id);
+
+
+--
+-- Name: idx_products_dismissed_duplicates_user_products; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_dismissed_duplicates_user_products ON public.products_dismissed_duplicates USING btree (user_id, product_id_1, product_id_2);
+
+
+--
+-- Name: idx_products_ean; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_ean ON public.products USING btree (ean);
+
+
+--
+-- Name: idx_products_ean_nonempty; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_ean_nonempty ON public.products USING btree (user_id, ean) WHERE ((ean IS NOT NULL) AND (ean <> ''::text));
+
+
+--
+-- Name: idx_products_name_length; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_name_length ON public.products USING btree (user_id, length(name));
+
+
+--
+-- Name: idx_products_user_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_active ON public.products USING btree (user_id, is_active) WHERE (is_active = true);
+
+
+--
+-- Name: idx_products_user_active_price; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_active_price ON public.products USING btree (user_id, is_active, our_retail_price) WHERE ((is_active = true) AND (our_retail_price IS NOT NULL));
+
+
+--
+-- Name: idx_products_user_brand; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_brand ON public.products USING btree (user_id, brand);
+
+
+--
+-- Name: idx_products_user_brand_sku; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_brand_sku ON public.products USING btree (user_id, brand_id, sku) WHERE ((brand_id IS NOT NULL) AND (sku IS NOT NULL) AND (sku <> ''::text));
+
+
+--
+-- Name: idx_products_user_ean; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_ean ON public.products USING btree (user_id, ean) WHERE ((ean IS NOT NULL) AND (ean <> ''::text));
+
+
+--
+-- Name: idx_products_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_id ON public.products USING btree (user_id);
+
+
+--
+-- Name: INDEX idx_products_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_products_user_id IS 'Optimizes user-based product queries';
+
+
+--
+-- Name: idx_products_user_id_brand_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_user_id_brand_id ON public.products USING btree (user_id, brand_id);
+
+
+--
+-- Name: INDEX idx_products_user_id_brand_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_products_user_id_brand_id IS 'Optimizes product-brand joins in analytics';
+
+
+--
+-- Name: idx_professional_scraper_requests_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_professional_scraper_requests_created_at ON public.professional_scraper_requests USING btree (created_at);
+
+
+--
+-- Name: idx_professional_scraper_requests_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_professional_scraper_requests_status ON public.professional_scraper_requests USING btree (status);
+
+
+--
+-- Name: idx_professional_scraper_requests_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_professional_scraper_requests_user_id ON public.professional_scraper_requests USING btree (user_id);
+
+
+--
+-- Name: idx_rate_limit_log_ip_endpoint; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_rate_limit_log_ip_endpoint ON public.rate_limit_log USING btree (ip_address, endpoint);
+
+
+--
+-- Name: idx_rate_limit_log_window_start; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_rate_limit_log_window_start ON public.rate_limit_log USING btree (window_start);
+
+
+--
+-- Name: idx_scraper_ai_sessions_competitor_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_ai_sessions_competitor_id ON public.scraper_ai_sessions USING btree (competitor_id);
+
+
+--
+-- Name: idx_scraper_ai_sessions_current_phase; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_ai_sessions_current_phase ON public.scraper_ai_sessions USING btree (current_phase);
+
+
+--
+-- Name: idx_scraper_ai_sessions_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_ai_sessions_user_id ON public.scraper_ai_sessions USING btree (user_id);
+
+
+--
+-- Name: idx_scraper_run_timeouts_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_run_timeouts_run_id ON public.scraper_run_timeouts USING btree (run_id);
+
+
+--
+-- Name: idx_scraper_run_timeouts_timeout_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_run_timeouts_timeout_at ON public.scraper_run_timeouts USING btree (timeout_at) WHERE (processed = false);
+
+
+--
+-- Name: idx_scraper_runs_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_runs_created_at ON public.scraper_runs USING btree (created_at);
+
+
+--
+-- Name: idx_scraper_runs_scraper_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_runs_scraper_id ON public.scraper_runs USING btree (scraper_id);
+
+
+--
+-- Name: idx_scraper_runs_started_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_runs_started_at ON public.scraper_runs USING btree (started_at);
+
+
+--
+-- Name: idx_scraper_runs_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_runs_status ON public.scraper_runs USING btree (status);
+
+
+--
+-- Name: idx_scraper_runs_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scraper_runs_user_id ON public.scraper_runs USING btree (user_id);
+
+
+--
+-- Name: idx_scrapers_competitor_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scrapers_competitor_id ON public.scrapers USING btree (competitor_id);
+
+
+--
+-- Name: idx_scrapers_execution_time; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scrapers_execution_time ON public.scrapers USING btree (execution_time);
+
+
+--
+-- Name: idx_scrapers_scraper_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_scrapers_scraper_type ON public.scrapers USING btree (scraper_type);
+
+
+--
+-- Name: idx_stock_changes_analysis; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_analysis ON public.stock_changes_competitors USING btree (user_id, product_id, competitor_id, changed_at DESC, stock_change_quantity);
+
+
+--
+-- Name: idx_stock_changes_competitors_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_changed_at ON public.stock_changes_competitors USING btree (changed_at DESC);
+
+
+--
+-- Name: idx_stock_changes_competitors_competitor_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_competitor_date ON public.stock_changes_competitors USING btree (competitor_id, changed_at) WHERE (competitor_id IS NOT NULL);
+
+
+--
+-- Name: idx_stock_changes_competitors_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_product_id ON public.stock_changes_competitors USING btree (product_id);
+
+
+--
+-- Name: idx_stock_changes_competitors_product_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_product_user ON public.stock_changes_competitors USING btree (user_id, product_id, changed_at);
+
+
+--
+-- Name: idx_stock_changes_competitors_user_competitor; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_user_competitor ON public.stock_changes_competitors USING btree (user_id, competitor_id) WHERE (competitor_id IS NOT NULL);
+
+
+--
+-- Name: INDEX idx_stock_changes_competitors_user_competitor; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_competitors_user_competitor IS 'Optimizes competitor-based stock queries';
+
+
+--
+-- Name: idx_stock_changes_competitors_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_user_id ON public.stock_changes_competitors USING btree (user_id);
+
+
+--
+-- Name: INDEX idx_stock_changes_competitors_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_competitors_user_id IS 'Optimizes user-based stock queries';
+
+
+--
+-- Name: idx_stock_changes_competitors_user_integration; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_user_integration ON public.stock_changes_competitors USING btree (user_id, integration_id) WHERE (integration_id IS NOT NULL);
+
+
+--
+-- Name: INDEX idx_stock_changes_competitors_user_integration; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_competitors_user_integration IS 'Optimizes integration-based stock queries';
+
+
+--
+-- Name: idx_stock_changes_competitors_user_product_time; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_competitors_user_product_time ON public.stock_changes_competitors USING btree (user_id, product_id, changed_at DESC);
+
+
+--
+-- Name: INDEX idx_stock_changes_competitors_user_product_time; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_competitors_user_product_time IS 'Optimizes product stock history queries';
+
+
+--
+-- Name: idx_stock_changes_product_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_product_date ON public.stock_changes_competitors USING btree (product_id, changed_at DESC);
+
+
+--
+-- Name: idx_stock_changes_suppliers_changed_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_changed_at ON public.stock_changes_suppliers USING btree (changed_at DESC);
+
+
+--
+-- Name: idx_stock_changes_suppliers_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_product_id ON public.stock_changes_suppliers USING btree (product_id);
+
+
+--
+-- Name: idx_stock_changes_suppliers_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_user_id ON public.stock_changes_suppliers USING btree (user_id);
+
+
+--
+-- Name: INDEX idx_stock_changes_suppliers_user_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_suppliers_user_id IS 'Optimizes user-based supplier stock queries';
+
+
+--
+-- Name: idx_stock_changes_suppliers_user_integration; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_user_integration ON public.stock_changes_suppliers USING btree (user_id, integration_id) WHERE (integration_id IS NOT NULL);
+
+
+--
+-- Name: INDEX idx_stock_changes_suppliers_user_integration; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_suppliers_user_integration IS 'Optimizes integration-based supplier stock queries';
+
+
+--
+-- Name: idx_stock_changes_suppliers_user_product_time; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_user_product_time ON public.stock_changes_suppliers USING btree (user_id, product_id, changed_at DESC);
+
+
+--
+-- Name: INDEX idx_stock_changes_suppliers_user_product_time; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_suppliers_user_product_time IS 'Optimizes product supplier stock history queries';
+
+
+--
+-- Name: idx_stock_changes_suppliers_user_supplier; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_suppliers_user_supplier ON public.stock_changes_suppliers USING btree (user_id, supplier_id) WHERE (supplier_id IS NOT NULL);
+
+
+--
+-- Name: INDEX idx_stock_changes_suppliers_user_supplier; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_stock_changes_suppliers_user_supplier IS 'Optimizes supplier-based stock queries';
+
+
+--
+-- Name: idx_stock_changes_user_competitor_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_user_competitor_date ON public.stock_changes_competitors USING btree (user_id, competitor_id, changed_at DESC);
+
+
+--
+-- Name: idx_stock_changes_user_quantity_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_stock_changes_user_quantity_date ON public.stock_changes_competitors USING btree (user_id, stock_change_quantity, changed_at) WHERE (stock_change_quantity < 0);
+
+
+--
+-- Name: idx_suppliers_is_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_suppliers_is_active ON public.suppliers USING btree (is_active);
+
+
+--
+-- Name: idx_suppliers_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_suppliers_name ON public.suppliers USING btree (name);
+
+
+--
+-- Name: idx_suppliers_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_suppliers_user_id ON public.suppliers USING btree (user_id);
+
+
+--
+-- Name: idx_support_conversations_admin_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_conversations_admin_user_id ON public.support_conversations USING btree (admin_user_id);
+
+
+--
+-- Name: idx_support_conversations_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_conversations_created_at ON public.support_conversations USING btree (created_at);
+
+
+--
+-- Name: idx_support_conversations_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_conversations_status ON public.support_conversations USING btree (status);
+
+
+--
+-- Name: idx_support_conversations_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_conversations_user_id ON public.support_conversations USING btree (user_id);
+
+
+--
+-- Name: idx_support_messages_conversation_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_messages_conversation_created ON public.support_messages USING btree (conversation_id, created_at);
+
+
+--
+-- Name: idx_support_messages_conversation_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_messages_conversation_id ON public.support_messages USING btree (conversation_id);
+
+
+--
+-- Name: idx_support_messages_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_messages_created_at ON public.support_messages USING btree (created_at);
+
+
+--
+-- Name: idx_support_messages_sender_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_messages_sender_id ON public.support_messages USING btree (sender_id);
+
+
+--
+-- Name: idx_support_messages_unread; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_support_messages_unread ON public.support_messages USING btree (conversation_id, sender_type, read_by_recipient);
+
+
+--
+-- Name: idx_temp_competitors_scraped_data_competitor_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_competitor_id ON public.temp_competitors_scraped_data USING btree (competitor_id);
+
+
+--
+-- Name: idx_temp_competitors_scraped_data_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_product_id ON public.temp_competitors_scraped_data USING btree (product_id);
+
+
+--
+-- Name: idx_temp_competitors_scraped_data_scraped_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_scraped_at ON public.temp_competitors_scraped_data USING btree (scraped_at);
+
+
+--
+-- Name: idx_temp_competitors_scraped_data_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_competitors_scraped_data_user_id ON public.temp_competitors_scraped_data USING btree (user_id);
+
+
+--
+-- Name: idx_temp_integrations_scraped_data_integration_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_integrations_scraped_data_integration_run_id ON public.temp_integrations_scraped_data USING btree (integration_run_id);
+
+
+--
+-- Name: idx_temp_integrations_scraped_data_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_integrations_scraped_data_status ON public.temp_integrations_scraped_data USING btree (status);
+
+
+--
+-- Name: idx_temp_suppliers_scraped_data_processed; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_processed ON public.temp_suppliers_scraped_data USING btree (processed);
+
+
+--
+-- Name: idx_temp_suppliers_scraped_data_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_run_id ON public.temp_suppliers_scraped_data USING btree (run_id);
+
+
+--
+-- Name: idx_temp_suppliers_scraped_data_scraper_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_scraper_id ON public.temp_suppliers_scraped_data USING btree (scraper_id);
+
+
+--
+-- Name: idx_temp_suppliers_scraped_data_supplier_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_supplier_id ON public.temp_suppliers_scraped_data USING btree (supplier_id);
+
+
+--
+-- Name: idx_temp_suppliers_scraped_data_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_temp_suppliers_scraped_data_user_id ON public.temp_suppliers_scraped_data USING btree (user_id);
+
+
+--
+-- Name: idx_user_custom_fields_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_custom_fields_user_id ON public.product_custom_fields USING btree (user_id);
+
+
+--
+-- Name: idx_user_profiles_admin_role; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_admin_role ON public.user_profiles USING btree (admin_role) WHERE (admin_role IS NOT NULL);
+
+
+--
+-- Name: idx_user_profiles_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_created_at ON public.user_profiles USING btree (created_at);
+
+
+--
+-- Name: idx_user_profiles_is_suspended; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_is_suspended ON public.user_profiles USING btree (is_suspended) WHERE (is_suspended = true);
+
+
+--
+-- Name: idx_user_profiles_subscription_tier; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_profiles_subscription_tier ON public.user_profiles USING btree (subscription_tier);
+
+
+--
+-- Name: temp_competitors_scraped_data auto_process_temp_competitors_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER auto_process_temp_competitors_trigger AFTER INSERT ON public.temp_competitors_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_competitors_scraped_data_trigger();
+
+
+--
+-- Name: temp_integrations_scraped_data auto_process_temp_integrations_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER auto_process_temp_integrations_trigger AFTER INSERT ON public.temp_integrations_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_integrations_scraped_data();
+
+
+--
+-- Name: temp_suppliers_scraped_data auto_process_temp_suppliers_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER auto_process_temp_suppliers_trigger AFTER INSERT ON public.temp_suppliers_scraped_data FOR EACH ROW EXECUTE FUNCTION public.process_temp_suppliers_scraped_data_trigger();
+
+
+--
+-- Name: integration_runs integration_runs_progress_update_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER integration_runs_progress_update_trigger BEFORE UPDATE ON public.integration_runs FOR EACH ROW EXECUTE FUNCTION public.update_integration_progress_timestamp();
+
+
+--
+-- Name: scrapers one_active_scraper_per_competitor; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER one_active_scraper_per_competitor BEFORE INSERT OR UPDATE ON public.scrapers FOR EACH ROW EXECUTE FUNCTION public.ensure_one_active_scraper_per_competitor();
+
+
+--
+-- Name: products set_product_brand_id_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER set_product_brand_id_trigger BEFORE INSERT OR UPDATE ON public.products FOR EACH ROW EXECUTE FUNCTION public.set_product_brand_id();
+
+
+--
+-- Name: products sync_brand_id_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER sync_brand_id_trigger BEFORE INSERT OR UPDATE OF brand ON public.products FOR EACH ROW EXECUTE FUNCTION public.sync_brand_id();
+
+
+--
+-- Name: products sync_brand_name_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER sync_brand_name_trigger BEFORE INSERT OR UPDATE OF brand_id ON public.products FOR EACH ROW EXECUTE FUNCTION public.sync_brand_name();
+
+
+--
+-- Name: products sync_our_url_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER sync_our_url_trigger AFTER UPDATE ON public.products FOR EACH ROW EXECUTE FUNCTION public.trigger_sync_our_url_on_product_update();
+
+
+--
+-- Name: price_changes_competitors trigger_calculate_price_change_percentage; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trigger_calculate_price_change_percentage BEFORE INSERT OR UPDATE ON public.price_changes_competitors FOR EACH ROW EXECUTE FUNCTION public.calculate_price_change_percentage();
+
+
+--
+-- Name: price_changes_suppliers trigger_calculate_supplier_price_change_percentage; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trigger_calculate_supplier_price_change_percentage BEFORE INSERT OR UPDATE ON public.price_changes_suppliers FOR EACH ROW EXECUTE FUNCTION public.calculate_supplier_price_change_percentage();
+
+
+--
+-- Name: support_messages trigger_update_conversation_timestamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trigger_update_conversation_timestamp AFTER INSERT ON public.support_messages FOR EACH ROW EXECUTE FUNCTION public.update_conversation_timestamp();
+
+
+--
+-- Name: daily_price_competitiveness_snapshots trigger_update_daily_snapshots_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trigger_update_daily_snapshots_updated_at BEFORE UPDATE ON public.daily_price_competitiveness_snapshots FOR EACH ROW EXECUTE FUNCTION public.update_daily_snapshots_updated_at();
+
+
+--
+-- Name: integration_runs trigger_update_integration_next_run; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trigger_update_integration_next_run AFTER UPDATE ON public.integration_runs FOR EACH ROW EXECUTE FUNCTION public.update_integration_next_run_on_completion();
+
+
+--
+-- Name: scraper_runs trigger_update_scraper_next_run; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trigger_update_scraper_next_run AFTER UPDATE ON public.scraper_runs FOR EACH ROW EXECUTE FUNCTION public.update_scraper_next_run_on_completion();
+
+
+--
+-- Name: professional_scraper_requests update_professional_scraper_requests_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER update_professional_scraper_requests_updated_at BEFORE UPDATE ON public.professional_scraper_requests FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+
+--
+-- Name: scraper_runs update_scraper_status_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER update_scraper_status_trigger AFTER UPDATE ON public.scraper_runs FOR EACH ROW EXECUTE FUNCTION public.update_scraper_status_from_run();
+
+
+--
+-- Name: support_conversations update_support_conversations_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER update_support_conversations_updated_at BEFORE UPDATE ON public.support_conversations FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+
+--
+-- Name: temp_competitors_scraped_data validate_temp_competitors_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER validate_temp_competitors_trigger BEFORE INSERT ON public.temp_competitors_scraped_data FOR EACH ROW EXECUTE FUNCTION public.validate_temp_competitors_data();
+
+
+--
+-- Name: temp_integrations_scraped_data validate_temp_integrations_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER validate_temp_integrations_trigger BEFORE INSERT ON public.temp_integrations_scraped_data FOR EACH ROW EXECUTE FUNCTION public.validate_temp_integrations_data();
+
+
+--
+-- Name: temp_suppliers_scraped_data validate_temp_suppliers_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER validate_temp_suppliers_trigger BEFORE INSERT ON public.temp_suppliers_scraped_data FOR EACH ROW EXECUTE FUNCTION public.validate_temp_suppliers_data();
+
+
+--
+-- Name: admin_communication_log admin_communication_log_admin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_communication_log
+    ADD CONSTRAINT admin_communication_log_admin_user_id_fkey FOREIGN KEY (admin_user_id) REFERENCES next_auth.users(id);
+
+
+--
+-- Name: admin_communication_log admin_communication_log_target_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_communication_log
+    ADD CONSTRAINT admin_communication_log_target_user_id_fkey FOREIGN KEY (target_user_id) REFERENCES next_auth.users(id);
+
+
+--
+-- Name: api_keys api_keys_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.api_keys
+    ADD CONSTRAINT api_keys_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: brand_aliases brand_aliases_brand_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brand_aliases
+    ADD CONSTRAINT brand_aliases_brand_id_fkey FOREIGN KEY (brand_id) REFERENCES public.brands(id) ON DELETE CASCADE;
+
+
+--
+-- Name: brand_aliases brand_aliases_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brand_aliases
+    ADD CONSTRAINT brand_aliases_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: brands brands_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brands
+    ADD CONSTRAINT brands_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: competitors competitors_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competitors
+    ADD CONSTRAINT competitors_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: csv_uploads csv_uploads_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.csv_uploads
+    ADD CONSTRAINT csv_uploads_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+
+--
+-- Name: csv_uploads csv_uploads_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.csv_uploads
+    ADD CONSTRAINT csv_uploads_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: daily_price_competitiveness_snapshots daily_price_competitiveness_snapshots_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_price_competitiveness_snapshots
+    ADD CONSTRAINT daily_price_competitiveness_snapshots_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id) ON DELETE CASCADE;
+
+
+--
+-- Name: daily_price_competitiveness_snapshots daily_price_competitiveness_snapshots_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_price_competitiveness_snapshots
+    ADD CONSTRAINT daily_price_competitiveness_snapshots_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: dismissed_duplicates dismissed_duplicates_brand_id_1_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dismissed_duplicates
+    ADD CONSTRAINT dismissed_duplicates_brand_id_1_fkey FOREIGN KEY (brand_id_1) REFERENCES public.brands(id) ON DELETE CASCADE;
+
+
+--
+-- Name: dismissed_duplicates dismissed_duplicates_brand_id_2_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dismissed_duplicates
+    ADD CONSTRAINT dismissed_duplicates_brand_id_2_fkey FOREIGN KEY (brand_id_2) REFERENCES public.brands(id) ON DELETE CASCADE;
+
+
+--
+-- Name: dismissed_duplicates dismissed_duplicates_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dismissed_duplicates
+    ADD CONSTRAINT dismissed_duplicates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: stock_changes_competitors fk_stock_competitors_competitor; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_competitors
+    ADD CONSTRAINT fk_stock_competitors_competitor FOREIGN KEY (competitor_id) REFERENCES public.competitors(id) ON DELETE CASCADE;
+
+
+--
+-- Name: stock_changes_competitors fk_stock_competitors_integration; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_competitors
+    ADD CONSTRAINT fk_stock_competitors_integration FOREIGN KEY (integration_id) REFERENCES public.integrations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: stock_changes_competitors fk_stock_competitors_product; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_competitors
+    ADD CONSTRAINT fk_stock_competitors_product FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE;
+
+
+--
+-- Name: stock_changes_competitors fk_stock_competitors_user; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_competitors
+    ADD CONSTRAINT fk_stock_competitors_user FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: stock_changes_suppliers fk_stock_suppliers_integration; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_suppliers
+    ADD CONSTRAINT fk_stock_suppliers_integration FOREIGN KEY (integration_id) REFERENCES public.integrations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: stock_changes_suppliers fk_stock_suppliers_product; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_suppliers
+    ADD CONSTRAINT fk_stock_suppliers_product FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE;
+
+
+--
+-- Name: stock_changes_suppliers fk_stock_suppliers_supplier; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_suppliers
+    ADD CONSTRAINT fk_stock_suppliers_supplier FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id) ON DELETE CASCADE;
+
+
+--
+-- Name: stock_changes_suppliers fk_stock_suppliers_user; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_changes_suppliers
+    ADD CONSTRAINT fk_stock_suppliers_user FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: integration_runs integration_runs_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.integration_runs
+    ADD CONSTRAINT integration_runs_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id);
+
+
+--
+-- Name: integration_runs integration_runs_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.integration_runs
+    ADD CONSTRAINT integration_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id);
+
+
+--
+-- Name: integrations integrations_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.integrations
+    ADD CONSTRAINT integrations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id);
+
+
+--
+-- Name: price_changes_competitors price_changes_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_competitors
+    ADD CONSTRAINT price_changes_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+
+--
+-- Name: price_changes_competitors price_changes_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_competitors
+    ADD CONSTRAINT price_changes_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: price_changes_competitors price_changes_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_competitors
+    ADD CONSTRAINT price_changes_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE;
+
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_integration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES public.integrations(id);
+
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE;
+
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_supplier_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id);
+
+
+--
+-- Name: price_changes_suppliers price_changes_suppliers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_suppliers
+    ADD CONSTRAINT price_changes_suppliers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: price_changes_competitors price_changes_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_changes_competitors
+    ADD CONSTRAINT price_changes_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: product_custom_field_values product_custom_field_values_custom_field_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_custom_field_id_fkey FOREIGN KEY (custom_field_id) REFERENCES public.product_custom_fields(id);
+
+
+--
+-- Name: product_custom_field_values product_custom_field_values_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_field_values
+    ADD CONSTRAINT product_custom_field_values_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+
+--
+-- Name: products products_brand_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products
+    ADD CONSTRAINT products_brand_id_fkey FOREIGN KEY (brand_id) REFERENCES public.brands(id);
+
+
+--
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_product_id_1_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_product_id_1_fkey FOREIGN KEY (product_id_1) REFERENCES public.products(id);
+
+
+--
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_product_id_2_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_product_id_2_fkey FOREIGN KEY (product_id_2) REFERENCES public.products(id);
+
+
+--
+-- Name: products_dismissed_duplicates products_dismissed_duplicates_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products_dismissed_duplicates
+    ADD CONSTRAINT products_dismissed_duplicates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: products products_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products
+    ADD CONSTRAINT products_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: professional_scraper_requests professional_scraper_requests_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.professional_scraper_requests
+    ADD CONSTRAINT professional_scraper_requests_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+
+--
+-- Name: professional_scraper_requests professional_scraper_requests_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.professional_scraper_requests
+    ADD CONSTRAINT professional_scraper_requests_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id);
+
+
+--
+-- Name: scraper_ai_sessions scraper_ai_sessions_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_ai_sessions
+    ADD CONSTRAINT scraper_ai_sessions_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+
+--
+-- Name: scraper_ai_sessions scraper_ai_sessions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_ai_sessions
+    ADD CONSTRAINT scraper_ai_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: scraper_run_timeouts scraper_run_timeouts_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_run_timeouts
+    ADD CONSTRAINT scraper_run_timeouts_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.scraper_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: scraper_runs scraper_runs_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_runs
+    ADD CONSTRAINT scraper_runs_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
+
+
+--
+-- Name: scraper_runs scraper_runs_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scraper_runs
+    ADD CONSTRAINT scraper_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: scrapers scrapers_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scrapers
+    ADD CONSTRAINT scrapers_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id);
+
+
+--
+-- Name: scrapers scrapers_supplier_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scrapers
+    ADD CONSTRAINT scrapers_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id);
+
+
+--
+-- Name: scrapers scrapers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scrapers
+    ADD CONSTRAINT scrapers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: suppliers suppliers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.suppliers
+    ADD CONSTRAINT suppliers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: support_conversations support_conversations_admin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_conversations
+    ADD CONSTRAINT support_conversations_admin_user_id_fkey FOREIGN KEY (admin_user_id) REFERENCES public.user_profiles(id);
+
+
+--
+-- Name: support_conversations support_conversations_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_conversations
+    ADD CONSTRAINT support_conversations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id);
+
+
+--
+-- Name: support_messages support_messages_conversation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_messages
+    ADD CONSTRAINT support_messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.support_conversations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: support_messages support_messages_sender_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.support_messages
+    ADD CONSTRAINT support_messages_sender_id_fkey FOREIGN KEY (sender_id) REFERENCES public.user_profiles(id);
+
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_competitor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_competitor_id_fkey FOREIGN KEY (competitor_id) REFERENCES public.competitors(id) ON DELETE CASCADE;
+
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
+
+
+--
+-- Name: temp_competitors_scraped_data temp_competitors_scraped_data_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_competitors_scraped_data
+    ADD CONSTRAINT temp_competitors_scraped_data_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.user_profiles(id) ON DELETE CASCADE;
+
+
+--
+-- Name: temp_integrations_scraped_data temp_integrations_scraped_data_integration_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_integrations_scraped_data
+    ADD CONSTRAINT temp_integrations_scraped_data_integration_run_id_fkey FOREIGN KEY (integration_run_id) REFERENCES public.integration_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_scraper_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_scraper_id_fkey FOREIGN KEY (scraper_id) REFERENCES public.scrapers(id);
+
+
+--
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_supplier_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id);
+
+
+--
+-- Name: temp_suppliers_scraped_data temp_suppliers_scraped_data_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.temp_suppliers_scraped_data
+    ADD CONSTRAINT temp_suppliers_scraped_data_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: product_custom_fields user_custom_fields_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_custom_fields
+    ADD CONSTRAINT user_custom_fields_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: user_subscriptions user_subscriptions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_subscriptions
+    ADD CONSTRAINT user_subscriptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: debug_logs Authenticated users can access debug logs; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Authenticated users can access debug logs" ON public.debug_logs USING ((auth.uid() IS NOT NULL));
+
+
+--
+-- Name: marketing_contacts Authenticated users can access marketing contacts; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Authenticated users can access marketing contacts" ON public.marketing_contacts USING ((auth.uid() IS NOT NULL));
+
+
+--
+-- Name: newsletter_subscriptions Authenticated users can access newsletter subscriptions; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Authenticated users can access newsletter subscriptions" ON public.newsletter_subscriptions USING ((auth.uid() IS NOT NULL));
+
+
+--
+-- Name: rate_limit_log Authenticated users can access rate limit logs; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Authenticated users can access rate limit logs" ON public.rate_limit_log USING ((auth.uid() IS NOT NULL));
+
+
+--
+-- Name: stock_changes_competitors Users can access their own competitor stock changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can access their own competitor stock changes" ON public.stock_changes_competitors USING ((user_id = auth.uid()));
+
+
+--
+-- Name: product_custom_fields Users can access their own custom fields; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can access their own custom fields" ON public.product_custom_fields USING ((user_id = auth.uid()));
+
+
+--
+-- Name: products_dismissed_duplicates Users can access their own dismissed duplicates; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can access their own dismissed duplicates" ON public.products_dismissed_duplicates USING ((user_id = auth.uid()));
+
+
+--
+-- Name: product_custom_field_values Users can access their own product custom field values; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can access their own product custom field values" ON public.product_custom_field_values USING ((EXISTS ( SELECT 1
+   FROM public.product_custom_fields ucf
+  WHERE ((ucf.id = product_custom_field_values.custom_field_id) AND (ucf.user_id = auth.uid())))));
+
+
+--
+-- Name: scraper_runs Users can access their own scraper runs; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can access their own scraper runs" ON public.scraper_runs USING ((user_id = auth.uid()));
+
+
+--
+-- Name: stock_changes_suppliers Users can access their own supplier stock changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can access their own supplier stock changes" ON public.stock_changes_suppliers USING ((user_id = auth.uid()));
+
+
+--
+-- Name: support_messages Users can add messages to own conversations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can add messages to own conversations" ON public.support_messages FOR INSERT WITH CHECK (((sender_id = auth.uid()) AND (EXISTS ( SELECT 1
+   FROM public.support_conversations
+  WHERE ((support_conversations.id = support_messages.conversation_id) AND (support_conversations.user_id = auth.uid()))))));
+
+
+--
+-- Name: support_conversations Users can create conversations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can create conversations" ON public.support_conversations FOR INSERT WITH CHECK ((user_id = auth.uid()));
+
+
+--
+-- Name: professional_scraper_requests Users can create scraper requests; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can create scraper requests" ON public.professional_scraper_requests FOR INSERT WITH CHECK ((user_id = auth.uid()));
+
+
+--
+-- Name: api_keys Users can delete their own API keys; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own API keys" ON public.api_keys FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: csv_uploads Users can delete their own CSV uploads; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own CSV uploads" ON public.csv_uploads FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: brand_aliases Users can delete their own brand aliases; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own brand aliases" ON public.brand_aliases FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: brands Users can delete their own brands; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own brands" ON public.brands FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: user_settings Users can delete their own company; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own company" ON public.user_settings FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: competitors Users can delete their own competitors; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own competitors" ON public.competitors FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: dismissed_duplicates Users can delete their own dismissed duplicates; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own dismissed duplicates" ON public.dismissed_duplicates FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: integrations Users can delete their own integrations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own integrations" ON public.integrations FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: products Users can delete their own products; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own products" ON public.products FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: scraper_ai_sessions Users can delete their own scraper AI sessions; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own scraper AI sessions" ON public.scraper_ai_sessions FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: scrapers Users can delete their own scrapers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own scrapers" ON public.scrapers FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: price_changes_suppliers Users can delete their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own supplier price changes" ON public.price_changes_suppliers FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: temp_suppliers_scraped_data Users can delete their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: suppliers Users can delete their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own suppliers" ON public.suppliers FOR DELETE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: api_keys Users can insert their own API keys; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own API keys" ON public.api_keys FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: csv_uploads Users can insert their own CSV uploads; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own CSV uploads" ON public.csv_uploads FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: brand_aliases Users can insert their own brand aliases; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own brand aliases" ON public.brand_aliases FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: brands Users can insert their own brands; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own brands" ON public.brands FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: user_settings Users can insert their own company; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own company" ON public.user_settings FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: competitors Users can insert their own competitors; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own competitors" ON public.competitors FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: dismissed_duplicates Users can insert their own dismissed duplicates; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own dismissed duplicates" ON public.dismissed_duplicates FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: integration_runs Users can insert their own integration runs; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own integration runs" ON public.integration_runs FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: integrations Users can insert their own integrations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own integrations" ON public.integrations FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: price_changes_competitors Users can insert their own price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own price changes" ON public.price_changes_competitors FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: products Users can insert their own products; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own products" ON public.products FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: scraper_ai_sessions Users can insert their own scraper AI sessions; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own scraper AI sessions" ON public.scraper_ai_sessions FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: scrapers Users can insert their own scrapers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own scrapers" ON public.scrapers FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: price_changes_suppliers Users can insert their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own supplier price changes" ON public.price_changes_suppliers FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: temp_suppliers_scraped_data Users can insert their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: suppliers Users can insert their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own suppliers" ON public.suppliers FOR INSERT WITH CHECK ((auth.uid() = user_id));
+
+
+--
+-- Name: scraper_run_timeouts Users can manage their own scraper run timeouts; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can manage their own scraper run timeouts" ON public.scraper_run_timeouts USING ((run_id IN ( SELECT sr.id
+   FROM public.scraper_runs sr
+  WHERE (sr.user_id = auth.uid()))));
+
+
+--
+-- Name: temp_integrations_scraped_data Users can only access their own integration products; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can only access their own integration products" ON public.temp_integrations_scraped_data USING ((auth.uid() = user_id));
+
+
+--
+-- Name: temp_competitors_scraped_data Users can only access their own scraped products; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can only access their own scraped products" ON public.temp_competitors_scraped_data USING ((auth.uid() = user_id));
+
+
+--
+-- Name: daily_price_competitiveness_snapshots Users can only access their own snapshots; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can only access their own snapshots" ON public.daily_price_competitiveness_snapshots USING ((auth.uid() = user_id));
+
+
+--
+-- Name: support_conversations Users can update own conversations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update own conversations" ON public.support_conversations FOR UPDATE USING ((user_id = auth.uid()));
+
+
+--
+-- Name: api_keys Users can update their own API keys; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own API keys" ON public.api_keys FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: csv_uploads Users can update their own CSV uploads; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own CSV uploads" ON public.csv_uploads FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: brands Users can update their own brands; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own brands" ON public.brands FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: user_settings Users can update their own company; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own company" ON public.user_settings FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: competitors Users can update their own competitors; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own competitors" ON public.competitors FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: integration_runs Users can update their own integration runs; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own integration runs" ON public.integration_runs FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: integrations Users can update their own integrations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own integrations" ON public.integrations FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: products Users can update their own products; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own products" ON public.products FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: user_profiles Users can update their own profile; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own profile" ON public.user_profiles FOR UPDATE USING ((auth.uid() = id));
+
+
+--
+-- Name: scraper_ai_sessions Users can update their own scraper AI sessions; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own scraper AI sessions" ON public.scraper_ai_sessions FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: scrapers Users can update their own scrapers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own scrapers" ON public.scrapers FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: price_changes_suppliers Users can update their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own supplier price changes" ON public.price_changes_suppliers FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: temp_suppliers_scraped_data Users can update their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: suppliers Users can update their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own suppliers" ON public.suppliers FOR UPDATE USING ((auth.uid() = user_id));
+
+
+--
+-- Name: support_messages Users can view messages in own conversations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view messages in own conversations" ON public.support_messages FOR SELECT USING ((EXISTS ( SELECT 1
+   FROM public.support_conversations
+  WHERE ((support_conversations.id = support_messages.conversation_id) AND (support_conversations.user_id = auth.uid())))));
+
+
+--
+-- Name: support_conversations Users can view own conversations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view own conversations" ON public.support_conversations FOR SELECT USING ((user_id = auth.uid()));
+
+
+--
+-- Name: professional_scraper_requests Users can view own scraper requests; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view own scraper requests" ON public.professional_scraper_requests FOR SELECT USING ((user_id = auth.uid()));
+
+
+--
+-- Name: api_keys Users can view their own API keys; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own API keys" ON public.api_keys FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: csv_uploads Users can view their own CSV uploads; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own CSV uploads" ON public.csv_uploads FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: brand_aliases Users can view their own brand aliases; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own brand aliases" ON public.brand_aliases FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: brands Users can view their own brands; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own brands" ON public.brands FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: user_settings Users can view their own company; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own company" ON public.user_settings FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: competitors Users can view their own competitors; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own competitors" ON public.competitors FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: dismissed_duplicates Users can view their own dismissed duplicates; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own dismissed duplicates" ON public.dismissed_duplicates FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: integration_runs Users can view their own integration runs; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own integration runs" ON public.integration_runs FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: integrations Users can view their own integrations; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own integrations" ON public.integrations FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: price_changes_competitors Users can view their own price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own price changes" ON public.price_changes_competitors FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: products Users can view their own products; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own products" ON public.products FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: user_profiles Users can view their own profile; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own profile" ON public.user_profiles FOR SELECT USING ((auth.uid() = id));
+
+
+--
+-- Name: scraper_ai_sessions Users can view their own scraper AI sessions; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own scraper AI sessions" ON public.scraper_ai_sessions FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: scrapers Users can view their own scrapers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own scrapers" ON public.scrapers FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: user_subscriptions Users can view their own subscriptions; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own subscriptions" ON public.user_subscriptions FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: price_changes_suppliers Users can view their own supplier price changes; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own supplier price changes" ON public.price_changes_suppliers FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: temp_suppliers_scraped_data Users can view their own supplier scraped data; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own supplier scraped data" ON public.temp_suppliers_scraped_data FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: suppliers Users can view their own suppliers; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own suppliers" ON public.suppliers FOR SELECT USING ((auth.uid() = user_id));
+
+
+--
+-- Name: admin_communication_log; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.admin_communication_log ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: admin_communication_log admin_communication_log_insert_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY admin_communication_log_insert_policy ON public.admin_communication_log FOR INSERT WITH CHECK ((EXISTS ( SELECT 1
+   FROM public.user_profiles
+  WHERE ((user_profiles.id = auth.uid()) AND (user_profiles.admin_role = ANY (ARRAY['super_admin'::text, 'support_admin'::text]))))));
+
+
+--
+-- Name: admin_communication_log admin_communication_log_select_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY admin_communication_log_select_policy ON public.admin_communication_log FOR SELECT USING ((EXISTS ( SELECT 1
+   FROM public.user_profiles
+  WHERE ((user_profiles.id = auth.uid()) AND (user_profiles.admin_role = ANY (ARRAY['super_admin'::text, 'support_admin'::text]))))));
+
+
+--
+-- Name: api_keys; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.api_keys ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: brand_aliases; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.brand_aliases ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: brands; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.brands ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: competitors; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.competitors ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: cron_job_logs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.cron_job_logs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: csv_uploads; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.csv_uploads ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: daily_price_competitiveness_snapshots; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.daily_price_competitiveness_snapshots ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: debug_logs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.debug_logs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: dismissed_duplicates; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.dismissed_duplicates ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: integration_runs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.integration_runs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: integrations; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.integrations ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: marketing_contacts; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.marketing_contacts ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: newsletter_subscriptions; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.newsletter_subscriptions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: price_changes_competitors; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.price_changes_competitors ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: price_changes_suppliers; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.price_changes_suppliers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: product_custom_field_values; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.product_custom_field_values ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: product_custom_fields; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.product_custom_fields ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: products; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: products_dismissed_duplicates; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.products_dismissed_duplicates ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: professional_scraper_requests; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.professional_scraper_requests ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: rate_limit_log; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.rate_limit_log ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraper_ai_sessions; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraper_ai_sessions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraper_run_timeouts; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraper_run_timeouts ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scraper_runs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scraper_runs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: scrapers; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scrapers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: stock_changes_competitors; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.stock_changes_competitors ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: stock_changes_suppliers; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.stock_changes_suppliers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: suppliers; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.suppliers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: support_conversations; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.support_conversations ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: support_messages; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.support_messages ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: temp_competitors_scraped_data; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.temp_competitors_scraped_data ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: temp_integrations_scraped_data; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.temp_integrations_scraped_data ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: temp_suppliers_scraped_data; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.temp_suppliers_scraped_data ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_profiles; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_settings; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_settings ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_subscriptions; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_subscriptions ENABLE ROW LEVEL SECURITY;
+
+--
+-- PostgreSQL database dump complete
+--
+

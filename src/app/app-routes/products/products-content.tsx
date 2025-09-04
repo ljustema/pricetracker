@@ -76,9 +76,13 @@ export default function ProductsContent({
   const ourProductsWithCompetitorPrices = complexFilters.our_products_with_competitor_prices;
   const ourProductsWithSupplierPrices = complexFilters.our_products_with_supplier_prices;
 
-  useEffect(() => {
-    // Function to fetch products based on current searchParams
-    const fetchProducts = async () => {
+  // Function to fetch products based on current searchParams with retry logic
+  const fetchProducts = async (retryCount = 0) => {
+    const maxRetries = 3;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const maxRetries = 3;
       setIsLoading(true);
       setError(null);
       try {
@@ -221,15 +225,47 @@ export default function ProductsContent({
 
       } catch (err) {
         console.error("Error fetching products content:", err);
-        setError(err instanceof Error ? err.message : "An unknown error occurred loading product data.");
+
+        // Check if this is a retryable error (timeout or connection issues)
+        const errorMessage = err instanceof Error ? err.message : "An unknown error occurred loading product data.";
+        const isRetryableError = errorMessage.includes('timed out') ||
+                                errorMessage.includes('504') ||
+                                errorMessage.includes('503') ||
+                                errorMessage.includes('connection') ||
+                                errorMessage.includes('timeout');
+
+        // Retry logic for timeout/connection errors
+        if (isRetryableError && retryCount < maxRetries) {
+          console.log(`Retrying products fetch (attempt ${retryCount + 1}/${maxRetries}) after error:`, errorMessage);
+          setError(`Loading products... (attempt ${retryCount + 1}/${maxRetries + 1})`);
+
+          // Exponential backoff: 1s, 2s, 4s
+          const delay = 1000 * Math.pow(2, retryCount);
+          setTimeout(() => {
+            fetchProducts(retryCount + 1);
+          }, delay);
+          return; // Don't set final error state yet
+        }
+
+        // Final error state (no more retries or non-retryable error)
+        if (isRetryableError) {
+          setError("Database connection timeout. This usually happens after periods of inactivity. Please refresh the page to try again.");
+        } else {
+          setError(errorMessage);
+        }
         setProducts([]); // Clear products on error
         setTotalProductCount(0);
-      } finally {
-        setIsLoading(false); // Stop loading regardless of outcome
+        setIsLoading(false); // Stop loading on final error
+      }
+
+      // Only set loading to false if we're not retrying
+      if (retryCount === 0) {
+        setIsLoading(false);
       }
     };
 
-    fetchProducts();
+  useEffect(() => {
+    fetchProducts(0); // Start with retry count 0
 
     // Dependency array: Use the extracted primitive values
   }, [
@@ -271,10 +307,22 @@ export default function ProductsContent({
 
   // --- Start: Error State ---
   if (error) {
+    const isRetrying = error.includes('attempt');
     return (
-      <div className="mb-6 rounded-lg bg-red-50 p-4 text-red-800">
-        <p className="font-medium">Error Loading Products</p>
+      <div className={`mb-6 rounded-lg p-4 ${isRetrying ? 'bg-yellow-50 text-yellow-800' : 'bg-red-50 text-red-800'}`}>
+        <p className="font-medium">{isRetrying ? 'Retrying...' : 'Error Loading Products'}</p>
         <p>{error}</p>
+        {!isRetrying && error.includes('timeout') && (
+          <div className="mt-3">
+            <p className="text-sm mb-2">💡 <strong>Tip:</strong> This usually happens after the database has been idle.</p>
+            <button
+              onClick={() => fetchProducts(0)}
+              className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 transition-colors text-sm"
+            >
+              Try Again
+            </button>
+          </div>
+        )}
       </div>
     );
   }

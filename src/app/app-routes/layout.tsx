@@ -7,6 +7,7 @@ import PageTitle from "@/components/layout/page-title";
 import MobileSidebar from "@/components/layout/mobile-sidebar";
 import { checkAdminAccess } from "@/lib/admin/auth";
 import { NotificationBadge } from "@/components/notifications/NotificationBadge";
+import DatabaseWarmupProvider from "@/components/database/DatabaseWarmupProvider";
 
 export default async function AppLayout({
   children,
@@ -26,6 +27,8 @@ export default async function AppLayout({
 
   return (
     <div className="flex min-h-screen bg-gray-50">
+      {/* Database Warmup Service - runs in background */}
+      <DatabaseWarmupProvider />
       {/* Sidebar */}
       <aside className="fixed inset-y-0 left-0 z-10 hidden w-64 flex-shrink-0 bg-indigo-700 shadow-lg md:flex md:flex-col">
         <div className="flex h-16 flex-shrink-0 items-center px-4">

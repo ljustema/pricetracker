@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Row Level Security policies
 -- =========================================================================
--- Generated: 2025-07-25 12:31:28
+-- Generated: 2025-09-04 14:04:57
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -88,6 +88,12 @@ CREATE POLICY "Users can create conversations" ON public.support_conversations F
 CREATE POLICY "Users can create scraper requests" ON public.professional_scraper_requests FOR INSERT WITH CHECK ((user_id = auth.uid()));
 
 --
+-- Name: api_keys Users can delete their own API keys; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can delete their own API keys" ON public.api_keys FOR DELETE USING ((auth.uid() = user_id));
+
+--
 -- Name: csv_uploads Users can delete their own CSV uploads; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -164,6 +170,12 @@ CREATE POLICY "Users can delete their own supplier scraped data" ON public.temp_
 --
 
 CREATE POLICY "Users can delete their own suppliers" ON public.suppliers FOR DELETE USING ((auth.uid() = user_id));
+
+--
+-- Name: api_keys Users can insert their own API keys; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can insert their own API keys" ON public.api_keys FOR INSERT WITH CHECK ((auth.uid() = user_id));
 
 --
 -- Name: csv_uploads Users can insert their own CSV uploads; Type: POLICY; Schema: public; Owner: -
@@ -288,6 +300,12 @@ CREATE POLICY "Users can only access their own snapshots" ON public.daily_price_
 CREATE POLICY "Users can update own conversations" ON public.support_conversations FOR UPDATE USING ((user_id = auth.uid()));
 
 --
+-- Name: api_keys Users can update their own API keys; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can update their own API keys" ON public.api_keys FOR UPDATE USING ((auth.uid() = user_id));
+
+--
 -- Name: csv_uploads Users can update their own CSV uploads; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -384,6 +402,12 @@ CREATE POLICY "Users can view own conversations" ON public.support_conversations
 --
 
 CREATE POLICY "Users can view own scraper requests" ON public.professional_scraper_requests FOR SELECT USING ((user_id = auth.uid()));
+
+--
+-- Name: api_keys Users can view their own API keys; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "Users can view their own API keys" ON public.api_keys FOR SELECT USING ((auth.uid() = user_id));
 
 --
 -- Name: csv_uploads Users can view their own CSV uploads; Type: POLICY; Schema: public; Owner: -

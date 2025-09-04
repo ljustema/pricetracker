@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Other database objects
 -- =========================================================================
--- Generated: 2025-07-25 12:31:28
+-- Generated: 2025-09-04 14:04:57
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
 
@@ -35,360 +35,16 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
--- Name: auth; Type: SCHEMA; Schema: -; Owner: -
+-- Name: public; Type: SCHEMA; Schema: -; Owner: -
 --
 
-CREATE SCHEMA auth;
+CREATE SCHEMA public;
 
 --
--- Name: extensions; Type: SCHEMA; Schema: -; Owner: -
+-- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
 --
 
-CREATE SCHEMA extensions;
-
---
--- Name: graphql; Type: SCHEMA; Schema: -; Owner: -
---
-
-CREATE SCHEMA graphql;
-
---
--- Name: graphql_public; Type: SCHEMA; Schema: -; Owner: -
---
-
-CREATE SCHEMA graphql_public;
-
---
--- Name: pgbouncer; Type: SCHEMA; Schema: -; Owner: -
---
-
-CREATE SCHEMA pgbouncer;
-
---
--- Name: pgsodium; Type: SCHEMA; Schema: -; Owner: -
---
-
-CREATE SCHEMA pgsodium;
-
---
--- Name: realtime; Type: SCHEMA; Schema: -; Owner: -
---
-
-CREATE SCHEMA realtime;
-
---
--- Name: storage; Type: SCHEMA; Schema: -; Owner: -
---
-
-CREATE SCHEMA storage;
-
---
--- Name: supabase_migrations; Type: SCHEMA; Schema: -; Owner: -
---
-
-CREATE SCHEMA supabase_migrations;
-
---
--- Name: vault; Type: SCHEMA; Schema: -; Owner: -
---
-
-CREATE SCHEMA vault;
-
---
--- Name: aal_level; Type: TYPE; Schema: auth; Owner: -
---
-
-CREATE TYPE auth.aal_level AS ENUM (
-    'aal1',
-    'aal2',
-    'aal3'
-);
-
---
--- Name: code_challenge_method; Type: TYPE; Schema: auth; Owner: -
---
-
-CREATE TYPE auth.code_challenge_method AS ENUM (
-    's256',
-    'plain'
-);
-
---
--- Name: factor_status; Type: TYPE; Schema: auth; Owner: -
---
-
-CREATE TYPE auth.factor_status AS ENUM (
-    'unverified',
-    'verified'
-);
-
---
--- Name: factor_type; Type: TYPE; Schema: auth; Owner: -
---
-
-CREATE TYPE auth.factor_type AS ENUM (
-    'totp',
-    'webauthn',
-    'phone'
-);
-
---
--- Name: one_time_token_type; Type: TYPE; Schema: auth; Owner: -
---
-
-CREATE TYPE auth.one_time_token_type AS ENUM (
-    'confirmation_token',
-    'reauthentication_token',
-    'recovery_token',
-    'email_change_token_new',
-    'email_change_token_current',
-    'phone_change_token'
-);
-
---
--- Name: action; Type: TYPE; Schema: realtime; Owner: -
---
-
-CREATE TYPE realtime.action AS ENUM (
-    'INSERT',
-    'UPDATE',
-    'DELETE',
-    'TRUNCATE',
-    'ERROR'
-);
-
---
--- Name: equality_op; Type: TYPE; Schema: realtime; Owner: -
---
-
-CREATE TYPE realtime.equality_op AS ENUM (
-    'eq',
-    'neq',
-    'lt',
-    'lte',
-    'gt',
-    'gte',
-    'in'
-);
-
---
--- Name: user_defined_filter; Type: TYPE; Schema: realtime; Owner: -
---
-
-CREATE TYPE realtime.user_defined_filter AS (
-	column_name text,
-	op realtime.equality_op,
-	value text
-);
-
---
--- Name: wal_column; Type: TYPE; Schema: realtime; Owner: -
---
-
-CREATE TYPE realtime.wal_column AS (
-	name text,
-	type_name text,
-	type_oid oid,
-	value jsonb,
-	is_pkey boolean,
-	is_selectable boolean
-);
-
---
--- Name: wal_rls; Type: TYPE; Schema: realtime; Owner: -
---
-
-CREATE TYPE realtime.wal_rls AS (
-	wal jsonb,
-	is_rls_enabled boolean,
-	subscription_ids uuid[],
-	errors text[]
-);
-
-alter default privileges in schema cron grant all on tables to postgres with grant option;
-
-alter default privileges in schema cron grant all on functions to postgres with grant option;
-
-alter default privileges in schema cron grant all on sequences to postgres with grant option;
-
-alter default privileges for user supabase_admin in schema cron grant all
-        on sequences to postgres with grant option;
-
-alter default privileges for user supabase_admin in schema cron grant all
-        on tables to postgres with grant option;
-
-alter default privileges for user supabase_admin in schema cron grant all
-        on functions to postgres with grant option;
-
-grant all privileges on all tables in schema cron to postgres with grant option;
-
-END IF;
-
-END;
-
-$$;
-
-BEGIN
-    func_is_graphql_resolve = (
-        SELECT n.proname = 'resolve'
-        FROM pg_event_trigger_ddl_commands() AS ev
-        LEFT JOIN pg_catalog.pg_proc AS n
-        ON ev.objid = n.oid
-    );
-
-IF func_is_graphql_resolve
-    THEN
-        -- Update public wrapper to pass all arguments through to the pg_graphql resolve func
-        DROP FUNCTION IF EXISTS graphql_public.graphql;
-
-$$;
-
--- This hook executes when `graphql.resolve` is created. That is not necessarily the last
-        -- function in the extension so we need to grant permissions on existing entities AND
-        -- update default permissions to any others that are created after `graphql.resolve`
-        grant usage on schema graphql to postgres, anon, authenticated, service_role;
-
-grant select on all tables in schema graphql to postgres, anon, authenticated, service_role;
-
-grant execute on all functions in schema graphql to postgres, anon, authenticated, service_role;
-
-grant all on all sequences in schema graphql to postgres, anon, authenticated, service_role;
-
-alter default privileges in schema graphql grant all on tables to postgres, anon, authenticated, service_role;
-
-alter default privileges in schema graphql grant all on functions to postgres, anon, authenticated, service_role;
-
-alter default privileges in schema graphql grant all on sequences to postgres, anon, authenticated, service_role;
-
--- Allow postgres role to allow granting usage on graphql and graphql_public schemas to custom roles
-        grant usage on schema graphql_public to postgres with grant option;
-
-grant usage on schema graphql to postgres with grant option;
-
-END IF;
-
-END;
-
-$_$;
-
-END IF;
-
-GRANT USAGE ON SCHEMA net TO supabase_functions_admin, postgres, anon, authenticated, service_role;
-
-IF EXISTS (
-      SELECT FROM pg_extension
-      WHERE extname = 'pg_net'
-      -- all versions in use on existing projects as of 2025-02-20
-      -- version 0.12.0 onwards don't need these applied
-      AND extversion IN ('0.2', '0.6', '0.7', '0.7.1', '0.8', '0.10.0', '0.11.0')
-    ) THEN
-      ALTER function net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) SECURITY DEFINER;
-
-ALTER function net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) SECURITY DEFINER;
-
-ALTER function net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) SET search_path = net;
-
-ALTER function net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) SET search_path = net;
-
-REVOKE ALL ON FUNCTION net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) FROM PUBLIC;
-
-REVOKE ALL ON FUNCTION net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) FROM PUBLIC;
-
-GRANT EXECUTE ON FUNCTION net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) TO supabase_functions_admin, postgres, anon, authenticated, service_role;
-
-GRANT EXECUTE ON FUNCTION net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) TO supabase_functions_admin, postgres, anon, authenticated, service_role;
-
-END IF;
-
-END IF;
-
-END;
-
-$$;
-
-END IF;
-
-END LOOP;
-
-END; $$;
-
-BEGIN
-  FOR obj IN SELECT * FROM pg_event_trigger_dropped_objects()
-  LOOP
-    IF obj.object_type IN (
-      'schema'
-    , 'table'
-    , 'foreign table'
-    , 'view'
-    , 'materialized view'
-    , 'function'
-    , 'trigger'
-    , 'type'
-    , 'rule'
-    )
-    AND obj.is_temporary IS false -- no pg_temp objects
-    THEN
-      NOTIFY pgrst, 'reload schema';
-
-END IF;
-
-END LOOP;
-
-END; $$;
-
-BEGIN
-    graphql_is_dropped = (
-        SELECT ev.schema_name = 'graphql_public'
-        FROM pg_event_trigger_dropped_objects() AS ev
-        WHERE ev.schema_name = 'graphql_public'
-    );
-
-BEGIN
-                server_version = (SELECT (SPLIT_PART((select version()), ' ', 2))::float);
-
-IF server_version >= 14 THEN
-                    RETURN jsonb_build_object(
-                        'errors', jsonb_build_array(
-                            jsonb_build_object(
-                                'message', 'pg_graphql extension is not enabled.'
-                            )
-                        )
-                    );
-
-ELSE
-                    RETURN jsonb_build_object(
-                        'errors', jsonb_build_array(
-                            jsonb_build_object(
-                                'message', 'pg_graphql is only available on projects running Postgres 14 onwards.'
-                            )
-                        )
-                    );
-
-END IF;
-
-END;
-
-$$;
-
-END IF;
-
-END;
-
-$_$;
-
-return query
-    select 
-        rolname::text, 
-        case when rolvaliduntil < now() 
-            then null 
-            else rolpassword::text 
-        end 
-    from pg_authid 
-    where rolname=$1 and rolcanlogin;
-
-end;
-
-$_$;
+COMMENT ON SCHEMA public IS 'standard public schema';
 
 END;
 
@@ -3007,293 +2663,10 @@ _limit := p_page_size;
 
 -- Validate sort column and set safe sort by
     _safe_sort_by := CASE 
-        WHEN p_sort_by IN ('name', 'sku', 'ean', 'created_at', 'updated_at', 'our_retail_price', 'our_wholesale_price') THEN p_sort_by
-        ELSE 'created_at'
-    END;
-
--- Build order clause
-    _order_clause := format('ORDER BY p.%I %s', _safe_sort_by, _sort_direction);
-
--- Try to convert brand to UUID if it looks like one, otherwise keep as text for name search
-    BEGIN
-        _brand_uuid := p_brand::uuid;
-
-EXCEPTION WHEN invalid_text_representation THEN
-        _brand_uuid := NULL;
-
-END;
-
--- Get total count using a CTE approach
-    WITH product_stock AS (
-        SELECT 
-            p.id as product_id,
-            COALESCE(MAX(sc.new_stock_quantity), 0) as max_stock_quantity,
-            BOOL_OR(sc.new_stock_status = 'in_stock' OR sc.new_stock_quantity > 0) as has_stock
-        FROM products p
-        LEFT JOIN stock_changes_competitors sc ON sc.product_id = p.id 
-            AND sc.user_id = p_user_id
-            AND sc.new_stock_quantity IS NOT NULL
-            AND sc.changed_at = (
-                SELECT MAX(sc2.changed_at) 
-                FROM stock_changes_competitors sc2 
-                WHERE sc2.product_id = p.id 
-                AND sc2.user_id = p_user_id
-                AND sc2.new_stock_quantity IS NOT NULL
-                AND COALESCE(sc2.competitor_id, sc2.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
-            )
-        WHERE p.user_id = p_user_id
-        GROUP BY p.id
-    ),
-    filtered_products AS (
-        SELECT p.id
-        FROM products p 
-        LEFT JOIN brands b ON p.brand_id = b.id
-        LEFT JOIN product_stock ps ON p.id = ps.product_id
-        WHERE p.user_id = p_user_id
-        AND (
-            p_brand IS NULL OR 
-            (_brand_uuid IS NOT NULL AND p.brand_id = _brand_uuid) OR
-            (_brand_uuid IS NULL AND b.name ILIKE '%' || p_brand || '%')
-        )
-        AND (p_category IS NULL OR p.category ILIKE '%' || p_category || '%')
-        AND (p_search IS NULL OR p.name ILIKE '%' || p_search || '%' OR p.sku ILIKE '%' || p_search || '%' OR p.ean ILIKE '%' || p_search || '%')
-        AND (p_is_active IS NULL OR p.is_active = p_is_active)
-        AND (p_competitor_ids IS NULL OR p.id IN (
-            SELECT DISTINCT pcc.product_id
-            FROM price_changes_competitors pcc
-            WHERE pcc.user_id = p_user_id
-            AND (pcc.competitor_id = ANY(p_competitor_ids) OR pcc.integration_id = ANY(p_competitor_ids))
-        ))
-        -- Add supplier filter
-        AND (p_supplier_ids IS NULL OR p.id IN (
-            SELECT DISTINCT pcs.product_id
-            FROM price_changes_suppliers pcs
-            WHERE pcs.user_id = p_user_id
-            AND (pcs.supplier_id = ANY(p_supplier_ids) OR pcs.integration_id = ANY(p_supplier_ids))
-        ))
-        -- Updated price filter logic to handle both has_price and not_our_products
-        AND (
-            (p_has_price IS NULL AND p_not_our_products IS NULL) OR  -- No price filter
-            (p_has_price = true AND p_not_our_products IS NULL AND p.our_retail_price IS NOT NULL) OR  -- Our products only
-            (p_has_price IS NULL AND p_not_our_products = true AND p.our_retail_price IS NULL) OR  -- Not our products only
-            (p_has_price = false AND p_not_our_products = false)  -- All products (both false)
-        )
-        -- Add stock filtering
-        AND (p_in_stock_only IS NULL OR p_in_stock_only = false OR ps.has_stock = true)
-        -- Add price comparison filters - only apply if the filter is true
-        AND (
-            (p_price_lower_than_competitors IS NULL OR p_price_lower_than_competitors = false) AND
-            (p_price_higher_than_competitors IS NULL OR p_price_higher_than_competitors = false)
-            OR
-            (
-                p_price_lower_than_competitors = true AND p.our_retail_price IS NOT NULL AND p.id IN (
-                    SELECT DISTINCT pcc.product_id
-                    FROM price_changes_competitors pcc
-                    WHERE pcc.user_id = p_user_id
-                    AND pcc.product_id = p.id
-                    AND pcc.new_competitor_price IS NOT NULL
-                    AND p.our_retail_price < pcc.new_competitor_price
-                )
-            )
-            OR
-            (
-                p_price_higher_than_competitors = true AND p.our_retail_price IS NOT NULL AND p.id IN (
-                    SELECT DISTINCT pcc.product_id
-                    FROM price_changes_competitors pcc
-                    WHERE pcc.user_id = p_user_id
-                    AND pcc.product_id = p.id
-                    AND pcc.new_competitor_price IS NOT NULL
-                    AND p.our_retail_price > pcc.new_competitor_price
-                )
-            )
-        )
-    )
-    SELECT COUNT(*) INTO _total_count FROM filtered_products;
-
--- Get the actual products data with all the complex joins and aggregations
-    EXECUTE format('
-        WITH product_stock AS (
-            SELECT 
-                p.id as product_id,
-                COALESCE(MAX(sc.new_stock_quantity), 0) as max_stock_quantity,
-                BOOL_OR(sc.new_stock_status = ''in_stock'' OR sc.new_stock_quantity > 0) as has_stock
-            FROM products p
-            LEFT JOIN stock_changes_competitors sc ON sc.product_id = p.id 
-                AND sc.user_id = $1
-                AND sc.new_stock_quantity IS NOT NULL
-                AND sc.changed_at = (
-                    SELECT MAX(sc2.changed_at) 
-                    FROM stock_changes_competitors sc2 
-                    WHERE sc2.product_id = p.id 
-                    AND sc2.user_id = $1
-                    AND sc2.new_stock_quantity IS NOT NULL
-                    AND COALESCE(sc2.competitor_id, sc2.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
-                )
-            WHERE p.user_id = $1
-            GROUP BY p.id
-        ),
-        products_with_prices AS (
-            SELECT 
-                p.id,
-                p.name,
-                p.sku,
-                p.ean,
-                p.brand_id,
-                p.category,
-                p.our_retail_price,
-                p.our_wholesale_price,
-                p.image_url,
-                p.our_url,
-                p.is_active,
-                p.created_at,
-                p.updated_at,
-                b.name as brand_name,
-                ps.has_stock,
-                ps.max_stock_quantity as stock_quantity,
-                COALESCE(
-                    json_agg(
-                        DISTINCT jsonb_build_object(
-                            ''competitor_id'', pcc.competitor_id,
-                            ''integration_id'', pcc.integration_id,
-                            ''competitor_name'', COALESCE(c.name, i.name),
-                            ''competitor_price'', pcc.new_competitor_price,
-                            ''competitor_url'', pcc.competitor_url,
-                            ''changed_at'', pcc.changed_at
-                        )
-                    ) FILTER (WHERE pcc.id IS NOT NULL), 
-                    ''[]''::json
-                ) as competitor_prices
-            FROM products p
-            LEFT JOIN brands b ON p.brand_id = b.id
-            LEFT JOIN product_stock ps ON p.id = ps.product_id
-            LEFT JOIN LATERAL (
-                SELECT DISTINCT ON (COALESCE(pcc_inner.competitor_id, pcc_inner.integration_id)) 
-                    pcc_inner.id,
-                    pcc_inner.competitor_id,
-                    pcc_inner.integration_id,
-                    pcc_inner.new_competitor_price,
-                    pcc_inner.competitor_url,
-                    pcc_inner.changed_at
-                FROM price_changes_competitors pcc_inner
-                WHERE pcc_inner.product_id = p.id 
-                AND pcc_inner.user_id = $1
-                AND pcc_inner.new_competitor_price IS NOT NULL
-                ORDER BY COALESCE(pcc_inner.competitor_id, pcc_inner.integration_id), pcc_inner.changed_at DESC
-            ) pcc ON true
-            LEFT JOIN competitors c ON pcc.competitor_id = c.id
-            LEFT JOIN integrations i ON pcc.integration_id = i.id
-            WHERE p.user_id = $1
-            AND (
-                $2 IS NULL OR 
-                ($9 IS NOT NULL AND p.brand_id = $9) OR
-                ($9 IS NULL AND b.name ILIKE ''%%'' || $2 || ''%%'')
-            )
-            AND ($3 IS NULL OR p.category ILIKE ''%%'' || $3 || ''%%'')
-            AND ($4 IS NULL OR p.name ILIKE ''%%'' || $4 || ''%%'' OR p.sku ILIKE ''%%'' || $4 || ''%%'' OR p.ean ILIKE ''%%'' || $4 || ''%%'')
-            AND ($5 IS NULL OR p.is_active = $5)
-            AND ($6 IS NULL OR p.id IN (
-                SELECT DISTINCT pcc.product_id
-                FROM price_changes_competitors pcc
-                WHERE pcc.user_id = $1
-                AND (pcc.competitor_id = ANY($6) OR pcc.integration_id = ANY($6))
-            ))
-            -- Add supplier filter
-            AND ($13 IS NULL OR p.id IN (
-                SELECT DISTINCT pcs.product_id
-                FROM price_changes_suppliers pcs
-                WHERE pcs.user_id = $1
-                AND (pcs.supplier_id = ANY($13) OR pcs.integration_id = ANY($13))
-            ))
-            -- Updated price filter logic to handle both has_price and not_our_products
-            AND (
-                ($7 IS NULL AND $12 IS NULL) OR  -- No price filter
-                ($7 = true AND $12 IS NULL AND p.our_retail_price IS NOT NULL) OR  -- Our products only
-                ($7 IS NULL AND $12 = true AND p.our_retail_price IS NULL) OR  -- Not our products only
-                ($7 = false AND $12 = false)  -- All products (both false)
-            )
-            AND ($8 IS NULL OR $8 = false OR ps.has_stock = true)
-            GROUP BY p.id, p.name, p.sku, p.ean, p.brand_id, p.category, p.our_retail_price, p.our_wholesale_price, p.image_url, p.our_url, p.is_active, p.created_at, p.updated_at, b.name, ps.has_stock, ps.max_stock_quantity
-            %s
-            LIMIT $10 OFFSET $11
-        )
-        SELECT COALESCE(json_agg(
-            json_build_object(
-                ''id'', pwp.id,
-                ''name'', pwp.name,
-                ''sku'', pwp.sku,
-                ''ean'', pwp.ean,
-                ''brand_id'', pwp.brand_id,
-                ''brand_name'', pwp.brand_name,
-                ''category'', pwp.category,
-                ''our_retail_price'', pwp.our_retail_price,
-                ''our_wholesale_price'', pwp.our_wholesale_price,
-                ''image_url'', pwp.image_url,
-                ''our_url'', pwp.our_url,
-                ''is_active'', pwp.is_active,
-                ''created_at'', pwp.created_at,
-                ''updated_at'', pwp.updated_at,
-                ''competitor_prices'', pwp.competitor_prices,
-                ''has_stock'', pwp.has_stock,
-                ''stock_quantity'', pwp.stock_quantity
-            )
-        ), ''[]''::json) FROM products_with_prices pwp
-    ', _order_clause)
-    INTO _products_data
-    USING p_user_id, p_brand, p_category, p_search, p_is_active, p_competitor_ids, p_has_price, p_in_stock_only, _brand_uuid, _limit, _offset, p_not_our_products, p_supplier_ids;
-
--- Build the final result
-    _result := json_build_object(
-        'data', COALESCE(_products_data, '[]'::json),
-        'totalCount', _total_count
-    );
-
-RETURN _result;
-
-END;
-
-$_$;
-
-_limit integer;
-
-_sort_direction text;
-
-_total_count integer;
-
-_result json;
-
-_safe_sort_by text;
-
-_order_clause text;
-
-_products_data json;
-
-_brand_uuid uuid;
-
-BEGIN
-    -- Calculate offset and limit
-    _offset := (p_page - 1) * p_page_size;
-
-_limit := p_page_size;
-
--- Validate and set sort direction
-    _sort_direction := CASE 
-        WHEN LOWER(p_sort_order) = 'asc' THEN 'ASC'
-        ELSE 'DESC'
-    END;
-
--- Validate sort column and set safe sort by - UPDATED to include stock_quantity and competitor_count
-    _safe_sort_by := CASE 
         WHEN p_sort_by IN ('name', 'sku', 'ean', 'created_at', 'updated_at', 'our_retail_price', 'our_wholesale_price', 'stock_quantity', 'competitor_count') THEN p_sort_by
         ELSE 'created_at'
     END;
 
--- Build order clause - UPDATED to handle special sorting columns
-    _order_clause := CASE 
-        WHEN _safe_sort_by = 'stock_quantity' THEN format('ORDER BY ps.max_stock_quantity %s NULLS LAST', _sort_direction)
-        WHEN _safe_sort_by = 'competitor_count' THEN format('ORDER BY (SELECT COUNT(DISTINCT COALESCE(pcc_count.competitor_id, pcc_count.integration_id)) FROM price_changes_competitors pcc_count WHERE pcc_count.product_id = p.id AND pcc_count.user_id = p.user_id AND pcc_count.new_competitor_price IS NOT NULL) %s', _sort_direction)
-        ELSE format('ORDER BY p.%I %s', _safe_sort_by, _sort_direction)
-    END;
-
 -- Try to convert brand to UUID if it looks like one, otherwise keep as text for name search
     BEGIN
         _brand_uuid := p_brand::uuid;
@@ -3303,32 +2676,38 @@ EXCEPTION WHEN invalid_text_representation THEN
 
 END;
 
--- Get total count using a CTE approach
-    WITH product_stock AS (
+-- Get total count using CORRECTED price comparison logic
+    WITH 
+    -- CORRECTED: Get latest prices per competitor/integration
+    latest_competitor_prices AS (
         SELECT 
-            p.id as product_id,
-            COALESCE(MAX(sc.new_stock_quantity), 0) as max_stock_quantity,
-            BOOL_OR(sc.new_stock_status = 'in_stock' OR sc.new_stock_quantity > 0) as has_stock
-        FROM products p
-        LEFT JOIN stock_changes_competitors sc ON sc.product_id = p.id 
-            AND sc.user_id = p_user_id
-            AND sc.new_stock_quantity IS NOT NULL
-            AND sc.changed_at = (
-                SELECT MAX(sc2.changed_at) 
-                FROM stock_changes_competitors sc2 
-                WHERE sc2.product_id = p.id 
-                AND sc2.user_id = p_user_id
-                AND sc2.new_stock_quantity IS NOT NULL
-                AND COALESCE(sc2.competitor_id, sc2.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
-            )
-        WHERE p.user_id = p_user_id
-        GROUP BY p.id
+            pcc.product_id,
+            pcc.new_competitor_price,
+            ROW_NUMBER() OVER(
+                PARTITION BY pcc.product_id, 
+                COALESCE(pcc.competitor_id, pcc.integration_id), 
+                CASE WHEN pcc.competitor_id IS NOT NULL THEN 'competitor' ELSE 'integration' END 
+                ORDER BY pcc.changed_at DESC
+            ) as rn
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND (pcc.competitor_id IS NOT NULL OR pcc.integration_id IS NOT NULL)
+    ),
+    -- Get minimum current price per product
+    product_min_current_prices AS (
+        SELECT 
+            lcp.product_id,
+            MIN(lcp.new_competitor_price) as min_current_competitor_price
+        FROM latest_competitor_prices lcp
+        WHERE lcp.rn = 1
+        GROUP BY lcp.product_id
     ),
     filtered_products AS (
         SELECT p.id
         FROM products p 
         LEFT JOIN brands b ON p.brand_id = b.id
-        LEFT JOIN product_stock ps ON p.id = ps.product_id
+        LEFT JOIN product_min_current_prices pmcp ON p.id = pmcp.product_id
         WHERE p.user_id = p_user_id
         AND (
             p_brand IS NULL OR 
@@ -3338,252 +2717,292 @@ END;
         AND (p_category IS NULL OR p.category ILIKE '%' || p_category || '%')
         AND (p_search IS NULL OR p.name ILIKE '%' || p_search || '%' OR p.sku ILIKE '%' || p_search || '%' OR p.ean ILIKE '%' || p_search || '%')
         AND (p_is_active IS NULL OR p.is_active = p_is_active)
-        AND (p_competitor_ids IS NULL OR p.id IN (
-            SELECT DISTINCT pcc.product_id
-            FROM price_changes_competitors pcc
-            WHERE pcc.user_id = p_user_id
-            AND (pcc.competitor_id = ANY(p_competitor_ids) OR pcc.integration_id = ANY(p_competitor_ids))
-        ))
-        -- Add supplier filter
-        AND (p_supplier_ids IS NULL OR p.id IN (
-            SELECT DISTINCT pcs.product_id
-            FROM price_changes_suppliers pcs
-            WHERE pcs.user_id = p_user_id
-            AND (pcs.supplier_id = ANY(p_supplier_ids) OR pcs.integration_id = ANY(p_supplier_ids))
-        ))
-        -- Updated price filter logic to handle all price filters
+        -- Simplified competitor filter
         AND (
-            -- No price filters active
+            p_competitor_ids IS NULL OR 
+            EXISTS (
+                SELECT 1 FROM price_changes_competitors pcc
+                WHERE pcc.user_id = p_user_id
+                AND pcc.product_id = p.id
+                AND (pcc.competitor_id = ANY(p_competitor_ids) OR pcc.integration_id = ANY(p_competitor_ids))
+            )
+        )
+        -- Simplified supplier filter
+        AND (
+            p_supplier_ids IS NULL OR 
+            EXISTS (
+                SELECT 1 FROM price_changes_suppliers pcs
+                WHERE pcs.user_id = p_user_id
+                AND pcs.product_id = p.id
+                AND (pcs.supplier_id = ANY(p_supplier_ids) OR pcs.integration_id = ANY(p_supplier_ids))
+            )
+        )
+        -- Price filter logic
+        AND (
             (p_has_price IS NULL AND p_not_our_products IS NULL AND p_our_products_with_competitor_prices IS NULL AND p_our_products_with_supplier_prices IS NULL) OR
-            -- Our products only
-            (p_has_price = true AND p_not_our_products IS NULL AND p_our_products_with_competitor_prices IS NULL AND p_our_products_with_supplier_prices IS NULL AND p.our_retail_price IS NOT NULL) OR
-            -- Not our products only
-            (p_has_price IS NULL AND p_not_our_products = true AND p_our_products_with_competitor_prices IS NULL AND p_our_products_with_supplier_prices IS NULL AND p.our_retail_price IS NULL) OR
-            -- Our products with competitor prices
-            (p_our_products_with_competitor_prices = true AND p.our_retail_price IS NOT NULL AND p.id IN (
-                SELECT DISTINCT pcc.product_id
-                FROM price_changes_competitors pcc
+            (p_has_price = true AND p.our_retail_price IS NOT NULL) OR
+            (p_not_our_products = true AND p.our_retail_price IS NULL) OR
+            (p_our_products_with_competitor_prices = true AND p.our_retail_price IS NOT NULL AND EXISTS (
+                SELECT 1 FROM price_changes_competitors pcc
                 WHERE pcc.user_id = p_user_id
                 AND pcc.product_id = p.id
                 AND pcc.new_competitor_price IS NOT NULL
                 AND pcc.competitor_id IS NOT NULL
             )) OR
-            -- Our products with supplier prices
-            (p_our_products_with_supplier_prices = true AND p.our_retail_price IS NOT NULL AND p.id IN (
-                SELECT DISTINCT pcs.product_id
-                FROM price_changes_suppliers pcs
+            (p_our_products_with_supplier_prices = true AND p.our_retail_price IS NOT NULL AND EXISTS (
+                SELECT 1 FROM price_changes_suppliers pcs
                 WHERE pcs.user_id = p_user_id
                 AND pcs.product_id = p.id
                 AND pcs.new_supplier_price IS NOT NULL
                 AND pcs.supplier_id IS NOT NULL
             ))
         )
-        -- Add stock filtering
-        AND (p_in_stock_only IS NULL OR p_in_stock_only = false OR ps.has_stock = true)
-        -- PRACTICAL: Price comparison filters
+        -- CORRECTED: Price comparison filters using CURRENT prices only
         AND (
-            -- No price comparison filters active
             (p_price_lower_than_competitors IS NULL OR p_price_lower_than_competitors = false) AND
             (p_price_higher_than_competitors IS NULL OR p_price_higher_than_competitors = false)
             OR
-            -- Price lower than or equal to lowest competitor (competitive pricing)
-            (p_price_lower_than_competitors = true AND p.our_retail_price IS NOT NULL AND p.our_retail_price <= (
-                SELECT MIN(pcc.new_competitor_price)
-                FROM price_changes_competitors pcc
-                WHERE pcc.user_id = p_user_id
-                AND pcc.product_id = p.id
-                AND pcc.new_competitor_price IS NOT NULL
-                AND pcc.competitor_id IS NOT NULL
-            ))
+            (p_price_lower_than_competitors = true AND p.our_retail_price IS NOT NULL AND pmcp.min_current_competitor_price IS NOT NULL AND p.our_retail_price <= pmcp.min_current_competitor_price)
             OR
-            -- Price higher than lowest competitor (need to reduce price)
-            (p_price_higher_than_competitors = true AND p.our_retail_price IS NOT NULL AND p.our_retail_price > (
-                SELECT MIN(pcc.new_competitor_price)
-                FROM price_changes_competitors pcc
-                WHERE pcc.user_id = p_user_id
-                AND pcc.product_id = p.id
-                AND pcc.new_competitor_price IS NOT NULL
-                AND pcc.competitor_id IS NOT NULL
-            ))
+            (p_price_higher_than_competitors = true AND p.our_retail_price IS NOT NULL AND pmcp.min_current_competitor_price IS NOT NULL AND p.our_retail_price > pmcp.min_current_competitor_price)
         )
     )
     SELECT COUNT(*) INTO _total_count FROM filtered_products;
 
--- Get the actual products data with all the complex joins and aggregations
-    EXECUTE format('
-        WITH product_stock AS (
-            SELECT 
-                p.id as product_id,
-                COALESCE(MAX(sc.new_stock_quantity), 0) as max_stock_quantity,
-                BOOL_OR(sc.new_stock_status = ''in_stock'' OR sc.new_stock_quantity > 0) as has_stock
-            FROM products p
-            LEFT JOIN stock_changes_competitors sc ON sc.product_id = p.id 
-                AND sc.user_id = $1
-                AND sc.new_stock_quantity IS NOT NULL
-                AND sc.changed_at = (
-                    SELECT MAX(sc2.changed_at) 
-                    FROM stock_changes_competitors sc2 
-                    WHERE sc2.product_id = p.id 
-                    AND sc2.user_id = $1
-                    AND sc2.new_stock_quantity IS NOT NULL
-                    AND COALESCE(sc2.competitor_id, sc2.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
-                )
-            WHERE p.user_id = $1
-            GROUP BY p.id
-        ),
-        products_with_prices AS (
-            SELECT 
-                p.id,
-                p.name,
-                p.sku,
-                p.ean,
-                p.brand_id,
-                p.category,
-                p.our_retail_price,
-                p.our_wholesale_price,
-                p.image_url,
-                p.our_url,
-                p.is_active,
-                p.created_at,
-                p.updated_at,
-                b.name as brand_name,
-                ps.has_stock,
-                ps.max_stock_quantity as stock_quantity,
-                COALESCE(
-                    json_agg(
-                        DISTINCT jsonb_build_object(
-                            ''competitor_id'', pcc.competitor_id,
-                            ''integration_id'', pcc.integration_id,
-                            ''competitor_name'', COALESCE(c.name, i.name),
-                            ''competitor_price'', pcc.new_competitor_price,
-                            ''competitor_url'', pcc.competitor_url,
-                            ''changed_at'', pcc.changed_at
-                        )
-                    ) FILTER (WHERE pcc.id IS NOT NULL), 
-                    ''[]''::json
-                ) as competitor_prices
-            FROM products p
-            LEFT JOIN brands b ON p.brand_id = b.id
-            LEFT JOIN product_stock ps ON p.id = ps.product_id
-            LEFT JOIN LATERAL (
-                SELECT DISTINCT ON (COALESCE(pcc_inner.competitor_id, pcc_inner.integration_id)) 
-                    pcc_inner.id,
-                    pcc_inner.competitor_id,
-                    pcc_inner.integration_id,
-                    pcc_inner.new_competitor_price,
-                    pcc_inner.competitor_url,
-                    pcc_inner.changed_at
-                FROM price_changes_competitors pcc_inner
-                WHERE pcc_inner.product_id = p.id 
-                AND pcc_inner.user_id = $1
-                AND pcc_inner.new_competitor_price IS NOT NULL
-                ORDER BY COALESCE(pcc_inner.competitor_id, pcc_inner.integration_id), pcc_inner.changed_at DESC
-            ) pcc ON true
-            LEFT JOIN competitors c ON pcc.competitor_id = c.id
-            LEFT JOIN integrations i ON pcc.integration_id = i.id
-            WHERE p.user_id = $1
-            AND (
-                $2 IS NULL OR 
-                ($9 IS NOT NULL AND p.brand_id = $9) OR
-                ($9 IS NULL AND b.name ILIKE ''%%'' || $2 || ''%%'')
+-- Get the actual products data with CORRECTED ORDER BY including proper NULL handling
+    WITH 
+    -- Same CTEs as above
+    latest_competitor_prices AS (
+        SELECT 
+            pcc.product_id,
+            pcc.new_competitor_price,
+            pcc.competitor_id,
+            pcc.integration_id,
+            pcc.competitor_url,
+            pcc.changed_at,
+            ROW_NUMBER() OVER(
+                PARTITION BY pcc.product_id, 
+                COALESCE(pcc.competitor_id, pcc.integration_id), 
+                CASE WHEN pcc.competitor_id IS NOT NULL THEN 'competitor' ELSE 'integration' END 
+                ORDER BY pcc.changed_at DESC
+            ) as rn
+        FROM price_changes_competitors pcc
+        WHERE pcc.user_id = p_user_id
+        AND pcc.new_competitor_price IS NOT NULL
+        AND (pcc.competitor_id IS NOT NULL OR pcc.integration_id IS NOT NULL)
+    ),
+    product_min_current_prices AS (
+        SELECT 
+            lcp.product_id,
+            MIN(lcp.new_competitor_price) as min_current_competitor_price
+        FROM latest_competitor_prices lcp
+        WHERE lcp.rn = 1
+        GROUP BY lcp.product_id
+    ),
+    -- Add stock data
+    product_stock AS (
+        SELECT 
+            p.id as product_id,
+            COALESCE(MAX(sc.new_stock_quantity), 0) as max_stock_quantity,
+            BOOL_OR(sc.new_stock_status = 'in_stock' OR sc.new_stock_quantity > 0) as has_stock
+        FROM products p
+        LEFT JOIN stock_changes_competitors sc ON sc.product_id = p.id 
+            AND sc.user_id = p_user_id
+            AND sc.new_stock_quantity IS NOT NULL
+            AND sc.changed_at = (
+                SELECT MAX(sc2.changed_at) 
+                FROM stock_changes_competitors sc2 
+                WHERE sc2.product_id = p.id 
+                AND sc2.user_id = p_user_id
+                AND sc2.new_stock_quantity IS NOT NULL
+                AND COALESCE(sc2.competitor_id, sc2.integration_id) = COALESCE(sc.competitor_id, sc.integration_id)
             )
-            AND ($3 IS NULL OR p.category ILIKE ''%%'' || $3 || ''%%'')
-            AND ($4 IS NULL OR p.name ILIKE ''%%'' || $4 || ''%%'' OR p.sku ILIKE ''%%'' || $4 || ''%%'' OR p.ean ILIKE ''%%'' || $4 || ''%%'')
-            AND ($5 IS NULL OR p.is_active = $5)
-            AND ($6 IS NULL OR p.id IN (
-                SELECT DISTINCT pcc.product_id
-                FROM price_changes_competitors pcc
-                WHERE pcc.user_id = $1
-                AND (pcc.competitor_id = ANY($6) OR pcc.integration_id = ANY($6))
-            ))
-            -- Add supplier filter
-            AND ($13 IS NULL OR p.id IN (
-                SELECT DISTINCT pcs.product_id
-                FROM price_changes_suppliers pcs
-                WHERE pcs.user_id = $1
-                AND (pcs.supplier_id = ANY($13) OR pcs.integration_id = ANY($13))
-            ))
-            -- Updated price filter logic to handle all price filters
-            AND (
-                -- No price filters active
-                ($7 IS NULL AND $12 IS NULL AND $14 IS NULL AND $15 IS NULL) OR
-                -- Our products only
-                ($7 = true AND $12 IS NULL AND $14 IS NULL AND $15 IS NULL AND p.our_retail_price IS NOT NULL) OR
-                -- Not our products only
-                ($7 IS NULL AND $12 = true AND $14 IS NULL AND $15 IS NULL AND p.our_retail_price IS NULL) OR
-                -- Our products with competitor prices
-                ($14 = true AND p.our_retail_price IS NOT NULL AND p.id IN (
-                    SELECT DISTINCT pcc.product_id
-                    FROM price_changes_competitors pcc
-                    WHERE pcc.user_id = $1
-                    AND pcc.product_id = p.id
-                    AND pcc.new_competitor_price IS NOT NULL
-                    AND pcc.competitor_id IS NOT NULL
-                )) OR
-                -- Our products with supplier prices
-                ($15 = true AND p.our_retail_price IS NOT NULL AND p.id IN (
-                    SELECT DISTINCT pcs.product_id
-                    FROM price_changes_suppliers pcs
-                    WHERE pcs.user_id = $1
-                    AND pcs.product_id = p.id
-                    AND pcs.new_supplier_price IS NOT NULL
-                    AND pcs.supplier_id IS NOT NULL
-                ))
-            )
-            AND ($8 IS NULL OR $8 = false OR ps.has_stock = true)
-            -- PRACTICAL: Price comparison filters in main query
-            AND (
-                -- No price comparison filters active
-                (($16 IS NULL OR $16 = false) AND ($17 IS NULL OR $17 = false))
-                OR
-                -- Price lower than or equal to lowest competitor (competitive pricing)
-                ($16 = true AND p.our_retail_price IS NOT NULL AND p.our_retail_price <= (
-                    SELECT MIN(pcc.new_competitor_price)
-                    FROM price_changes_competitors pcc
-                    WHERE pcc.user_id = $1
-                    AND pcc.product_id = p.id
-                    AND pcc.new_competitor_price IS NOT NULL
-                    AND pcc.competitor_id IS NOT NULL
-                ))
-                OR
-                -- Price higher than lowest competitor (need to reduce price)
-                ($17 = true AND p.our_retail_price IS NOT NULL AND p.our_retail_price > (
-                    SELECT MIN(pcc.new_competitor_price)
-                    FROM price_changes_competitors pcc
-                    WHERE pcc.user_id = $1
-                    AND pcc.product_id = p.id
-                    AND pcc.new_competitor_price IS NOT NULL
-                    AND pcc.competitor_id IS NOT NULL
-                ))
-            )
-            GROUP BY p.id, p.name, p.sku, p.ean, p.brand_id, p.category, p.our_retail_price, p.our_wholesale_price, p.image_url, p.our_url, p.is_active, p.created_at, p.updated_at, b.name, ps.has_stock, ps.max_stock_quantity
-            %s
-            LIMIT $10 OFFSET $11
+        WHERE p.user_id = p_user_id
+        GROUP BY p.id
+    ),
+    -- Add competitor count with proper NULL handling
+    product_competitor_count AS (
+        SELECT 
+            lcp.product_id,
+            COUNT(DISTINCT COALESCE(lcp.competitor_id, lcp.integration_id)) as competitor_count
+        FROM latest_competitor_prices lcp
+        WHERE lcp.rn = 1
+        GROUP BY lcp.product_id
+    ),
+    products_with_prices AS (
+        SELECT 
+            p.id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand_id,
+            p.category,
+            p.our_retail_price,
+            p.our_wholesale_price,
+            p.image_url,
+            p.our_url,
+            p.is_active,
+            p.created_at,
+            p.updated_at,
+            b.name as brand_name,
+            COALESCE(ps.has_stock, false) as has_stock,
+            COALESCE(ps.max_stock_quantity, 0) as stock_quantity,
+            COALESCE(pcc.competitor_count, 0) as competitor_count,
+            COALESCE(
+                json_agg(
+                    DISTINCT jsonb_build_object(
+                        'competitor_id', lcp.competitor_id,
+                        'integration_id', lcp.integration_id,
+                        'competitor_name', COALESCE(c.name, i.name),
+                        'competitor_price', lcp.new_competitor_price,
+                        'competitor_url', lcp.competitor_url,
+                        'changed_at', lcp.changed_at
+                    )
+                ) FILTER (WHERE lcp.rn = 1), 
+                '[]'::json
+            ) as competitor_prices
+        FROM products p
+        LEFT JOIN brands b ON p.brand_id = b.id
+        LEFT JOIN product_min_current_prices pmcp ON p.id = pmcp.product_id
+        LEFT JOIN product_stock ps ON p.id = ps.product_id
+        LEFT JOIN product_competitor_count pcc ON p.id = pcc.product_id
+        LEFT JOIN latest_competitor_prices lcp ON p.id = lcp.product_id AND lcp.rn = 1
+        LEFT JOIN competitors c ON lcp.competitor_id = c.id
+        LEFT JOIN integrations i ON lcp.integration_id = i.id
+        WHERE p.user_id = p_user_id
+        AND (
+            p_brand IS NULL OR 
+            (_brand_uuid IS NOT NULL AND p.brand_id = _brand_uuid) OR
+            (_brand_uuid IS NULL AND b.name ILIKE '%' || p_brand || '%')
         )
-        SELECT COALESCE(json_agg(
-            json_build_object(
-                ''id'', pwp.id,
-                ''name'', pwp.name,
-                ''sku'', pwp.sku,
-                ''ean'', pwp.ean,
-                ''brand_id'', pwp.brand_id,
-                ''brand_name'', pwp.brand_name,
-                ''category'', pwp.category,
-                ''our_retail_price'', pwp.our_retail_price,
-                ''our_wholesale_price'', pwp.our_wholesale_price,
-                ''image_url'', pwp.image_url,
-                ''our_url'', pwp.our_url,
-                ''is_active'', pwp.is_active,
-                ''created_at'', pwp.created_at,
-                ''updated_at'', pwp.updated_at,
-                ''competitor_prices'', pwp.competitor_prices,
-                ''has_stock'', pwp.has_stock,
-                ''stock_quantity'', pwp.stock_quantity
+        AND (p_category IS NULL OR p.category ILIKE '%' || p_category || '%')
+        AND (p_search IS NULL OR p.name ILIKE '%' || p_search || '%' OR p.sku ILIKE '%' || p_search || '%' OR p.ean ILIKE '%' || p_search || '%')
+        AND (p_is_active IS NULL OR p.is_active = p_is_active)
+        AND (
+            p_competitor_ids IS NULL OR 
+            EXISTS (
+                SELECT 1 FROM price_changes_competitors pcc
+                WHERE pcc.user_id = p_user_id
+                AND pcc.product_id = p.id
+                AND (pcc.competitor_id = ANY(p_competitor_ids) OR pcc.integration_id = ANY(p_competitor_ids))
             )
-        ), ''[]''::json) FROM products_with_prices pwp
-    ', _order_clause)
-    INTO _products_data
-    USING p_user_id, p_brand, p_category, p_search, p_is_active, p_competitor_ids, p_has_price, p_in_stock_only, _brand_uuid, _limit, _offset, p_not_our_products, p_supplier_ids, p_our_products_with_competitor_prices, p_our_products_with_supplier_prices, p_price_lower_than_competitors, p_price_higher_than_competitors;
+        )
+        AND (
+            p_supplier_ids IS NULL OR 
+            EXISTS (
+                SELECT 1 FROM price_changes_suppliers pcs
+                WHERE pcs.user_id = p_user_id
+                AND pcs.product_id = p.id
+                AND (pcs.supplier_id = ANY(p_supplier_ids) OR pcs.integration_id = ANY(p_supplier_ids))
+            )
+        )
+        AND (
+            (p_has_price IS NULL AND p_not_our_products IS NULL AND p_our_products_with_competitor_prices IS NULL AND p_our_products_with_supplier_prices IS NULL) OR
+            (p_has_price = true AND p.our_retail_price IS NOT NULL) OR
+            (p_not_our_products = true AND p.our_retail_price IS NULL) OR
+            (p_our_products_with_competitor_prices = true AND p.our_retail_price IS NOT NULL AND EXISTS (
+                SELECT 1 FROM price_changes_competitors pcc
+                WHERE pcc.user_id = p_user_id
+                AND pcc.product_id = p.id
+                AND pcc.new_competitor_price IS NOT NULL
+                AND pcc.competitor_id IS NOT NULL
+            )) OR
+            (p_our_products_with_supplier_prices = true AND p.our_retail_price IS NOT NULL AND EXISTS (
+                SELECT 1 FROM price_changes_suppliers pcs
+                WHERE pcs.user_id = p_user_id
+                AND pcs.product_id = p.id
+                AND pcs.new_supplier_price IS NOT NULL
+                AND pcs.supplier_id IS NOT NULL
+            ))
+        )
+        AND (
+            (p_price_lower_than_competitors IS NULL OR p_price_lower_than_competitors = false) AND
+            (p_price_higher_than_competitors IS NULL OR p_price_higher_than_competitors = false)
+            OR
+            (p_price_lower_than_competitors = true AND p.our_retail_price IS NOT NULL AND pmcp.min_current_competitor_price IS NOT NULL AND p.our_retail_price <= pmcp.min_current_competitor_price)
+            OR
+            (p_price_higher_than_competitors = true AND p.our_retail_price IS NOT NULL AND pmcp.min_current_competitor_price IS NOT NULL AND p.our_retail_price > pmcp.min_current_competitor_price)
+        )
+        GROUP BY p.id, p.name, p.sku, p.ean, p.brand_id, p.category, p.our_retail_price, p.our_wholesale_price, p.image_url, p.our_url, p.is_active, p.created_at, p.updated_at, b.name, ps.has_stock, ps.max_stock_quantity, pcc.competitor_count
+        ORDER BY 
+            CASE 
+                WHEN _safe_sort_by = 'name' AND _sort_direction = 'ASC' THEN p.name
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'name' AND _sort_direction = 'DESC' THEN p.name
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'sku' AND _sort_direction = 'ASC' THEN p.sku
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'sku' AND _sort_direction = 'DESC' THEN p.sku
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'ean' AND _sort_direction = 'ASC' THEN p.ean
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'ean' AND _sort_direction = 'DESC' THEN p.ean
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'created_at' AND _sort_direction = 'ASC' THEN p.created_at
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'created_at' AND _sort_direction = 'DESC' THEN p.created_at
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'updated_at' AND _sort_direction = 'ASC' THEN p.updated_at
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'updated_at' AND _sort_direction = 'DESC' THEN p.updated_at
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'our_retail_price' AND _sort_direction = 'ASC' THEN p.our_retail_price
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'our_retail_price' AND _sort_direction = 'DESC' THEN p.our_retail_price
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'our_wholesale_price' AND _sort_direction = 'ASC' THEN p.our_wholesale_price
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'our_wholesale_price' AND _sort_direction = 'DESC' THEN p.our_wholesale_price
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'stock_quantity' AND _sort_direction = 'ASC' THEN ps.max_stock_quantity
+            END ASC NULLS LAST,
+            CASE 
+                WHEN _safe_sort_by = 'stock_quantity' AND _sort_direction = 'DESC' THEN ps.max_stock_quantity
+            END DESC NULLS LAST,
+            -- FIXED: Proper handling of competitor_count with NULLS LAST for DESC
+            CASE 
+                WHEN _safe_sort_by = 'competitor_count' AND _sort_direction = 'ASC' THEN NULLIF(pcc.competitor_count, 0)
+            END ASC NULLS LAST,
+            CASE 
+                WHEN _safe_sort_by = 'competitor_count' AND _sort_direction = 'DESC' THEN NULLIF(pcc.competitor_count, 0)
+            END DESC NULLS LAST
+        LIMIT _limit OFFSET _offset
+    )
+    SELECT COALESCE(json_agg(
+        json_build_object(
+            'id', pwp.id,
+            'name', pwp.name,
+            'sku', pwp.sku,
+            'ean', pwp.ean,
+            'brand_id', pwp.brand_id,
+            'brand_name', pwp.brand_name,
+            'category', pwp.category,
+            'our_retail_price', pwp.our_retail_price,
+            'our_wholesale_price', pwp.our_wholesale_price,
+            'image_url', pwp.image_url,
+            'our_url', pwp.our_url,
+            'is_active', pwp.is_active,
+            'created_at', pwp.created_at,
+            'updated_at', pwp.updated_at,
+            'competitor_prices', pwp.competitor_prices,
+            'has_stock', pwp.has_stock,
+            'stock_quantity', pwp.stock_quantity
+        )
+    ), '[]'::json) INTO _products_data FROM products_with_prices pwp;
 
 -- Build the final result
     _result := json_build_object(
@@ -3595,7 +3014,7 @@ RETURN _result;
 
 END;
 
-$_$;
+$$;
 
 date_filter_end TIMESTAMP := COALESCE(p_end_date, NOW());
 
@@ -6684,6 +6103,15 @@ END;
 
 $$;
 
+-- Update last_used_at if key is valid
+    UPDATE api_keys 
+    SET last_used_at = NOW() 
+    WHERE api_key = p_api_key AND is_active = true;
+
+END;
+
+$$;
+
 has_ean BOOLEAN := FALSE;
 
 has_brand_sku BOOLEAN := FALSE;
@@ -6812,819 +6240,6 @@ RETURN TRUE;
 END;
 
 $$;
-
--- I, U, D, T: insert, update ...
-action realtime.action = (
-    case wal ->> 'action'
-        when 'I' then 'INSERT'
-        when 'U' then 'UPDATE'
-        when 'D' then 'DELETE'
-        else 'ERROR'
-    end
-);
-
--- Is row level security enabled for the table
-is_rls_enabled bool = relrowsecurity from pg_class where oid = entity_;
-
-subscriptions realtime.subscription[] = array_agg(subs)
-    from
-        realtime.subscription subs
-    where
-        subs.entity = entity_;
-
--- Subscription vars
-roles regrole[] = array_agg(distinct us.claims_role::text)
-    from
-        unnest(subscriptions) us;
-
-working_role regrole;
-
-claimed_role regrole;
-
-claims jsonb;
-
-subscription_id uuid;
-
-subscription_has_access bool;
-
-visible_to_subscription_ids uuid[] = '{}';
-
--- structured info for wal's columns
-columns realtime.wal_column[];
-
--- previous identity values for update/delete
-old_columns realtime.wal_column[];
-
-error_record_exceeds_max_size boolean = octet_length(wal::text) > max_record_bytes;
-
--- Primary jsonb output for record
-output jsonb;
-
-begin
-perform set_config('role', null, true);
-
-columns =
-    array_agg(
-        (
-            x->>'name',
-            x->>'type',
-            x->>'typeoid',
-            realtime.cast(
-                (x->'value') #>> '{}',
-                coalesce(
-                    (x->>'typeoid')::regtype, -- null when wal2json version <= 2.4
-                    (x->>'type')::regtype
-                )
-            ),
-            (pks ->> 'name') is not null,
-            true
-        )::realtime.wal_column
-    )
-    from
-        jsonb_array_elements(wal -> 'columns') x
-        left join jsonb_array_elements(wal -> 'pk') pks
-            on (x ->> 'name') = (pks ->> 'name');
-
-old_columns =
-    array_agg(
-        (
-            x->>'name',
-            x->>'type',
-            x->>'typeoid',
-            realtime.cast(
-                (x->'value') #>> '{}',
-                coalesce(
-                    (x->>'typeoid')::regtype, -- null when wal2json version <= 2.4
-                    (x->>'type')::regtype
-                )
-            ),
-            (pks ->> 'name') is not null,
-            true
-        )::realtime.wal_column
-    )
-    from
-        jsonb_array_elements(wal -> 'identity') x
-        left join jsonb_array_elements(wal -> 'pk') pks
-            on (x ->> 'name') = (pks ->> 'name');
-
-for working_role in select * from unnest(roles) loop
-
-    -- Update `is_selectable` for columns and old_columns
-    columns =
-        array_agg(
-            (
-                c.name,
-                c.type_name,
-                c.type_oid,
-                c.value,
-                c.is_pkey,
-                pg_catalog.has_column_privilege(working_role, entity_, c.name, 'SELECT')
-            )::realtime.wal_column
-        )
-        from
-            unnest(columns) c;
-
-old_columns =
-            array_agg(
-                (
-                    c.name,
-                    c.type_name,
-                    c.type_oid,
-                    c.value,
-                    c.is_pkey,
-                    pg_catalog.has_column_privilege(working_role, entity_, c.name, 'SELECT')
-                )::realtime.wal_column
-            )
-            from
-                unnest(old_columns) c;
-
-if action <> 'DELETE' and count(1) = 0 from unnest(columns) c where c.is_pkey then
-        return next (
-            jsonb_build_object(
-                'schema', wal ->> 'schema',
-                'table', wal ->> 'table',
-                'type', action
-            ),
-            is_rls_enabled,
-            -- subscriptions is already filtered by entity
-            (select array_agg(s.subscription_id) from unnest(subscriptions) as s where claims_role = working_role),
-            array['Error 400: Bad Request, no primary key']
-        )::realtime.wal_rls;
-
--- The claims role does not have SELECT permission to the primary key of entity
-    elsif action <> 'DELETE' and sum(c.is_selectable::int) <> count(1) from unnest(columns) c where c.is_pkey then
-        return next (
-            jsonb_build_object(
-                'schema', wal ->> 'schema',
-                'table', wal ->> 'table',
-                'type', action
-            ),
-            is_rls_enabled,
-            (select array_agg(s.subscription_id) from unnest(subscriptions) as s where claims_role = working_role),
-            array['Error 401: Unauthorized']
-        )::realtime.wal_rls;
-
-else
-        output = jsonb_build_object(
-            'schema', wal ->> 'schema',
-            'table', wal ->> 'table',
-            'type', action,
-            'commit_timestamp', to_char(
-                ((wal ->> 'timestamp')::timestamptz at time zone 'utc'),
-                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
-            ),
-            'columns', (
-                select
-                    jsonb_agg(
-                        jsonb_build_object(
-                            'name', pa.attname,
-                            'type', pt.typname
-                        )
-                        order by pa.attnum asc
-                    )
-                from
-                    pg_attribute pa
-                    join pg_type pt
-                        on pa.atttypid = pt.oid
-                where
-                    attrelid = entity_
-                    and attnum > 0
-                    and pg_catalog.has_column_privilege(working_role, entity_, pa.attname, 'SELECT')
-            )
-        )
-        -- Add "record" key for insert and update
-        || case
-            when action in ('INSERT', 'UPDATE') then
-                jsonb_build_object(
-                    'record',
-                    (
-                        select
-                            jsonb_object_agg(
-                                -- if unchanged toast, get column name and value from old record
-                                coalesce((c).name, (oc).name),
-                                case
-                                    when (c).name is null then (oc).value
-                                    else (c).value
-                                end
-                            )
-                        from
-                            unnest(columns) c
-                            full outer join unnest(old_columns) oc
-                                on (c).name = (oc).name
-                        where
-                            coalesce((c).is_selectable, (oc).is_selectable)
-                            and ( not error_record_exceeds_max_size or (octet_length((c).value::text) <= 64))
-                    )
-                )
-            else '{}'::jsonb
-        end
-        -- Add "old_record" key for update and delete
-        || case
-            when action = 'UPDATE' then
-                jsonb_build_object(
-                        'old_record',
-                        (
-                            select jsonb_object_agg((c).name, (c).value)
-                            from unnest(old_columns) c
-                            where
-                                (c).is_selectable
-                                and ( not error_record_exceeds_max_size or (octet_length((c).value::text) <= 64))
-                        )
-                    )
-            when action = 'DELETE' then
-                jsonb_build_object(
-                    'old_record',
-                    (
-                        select jsonb_object_agg((c).name, (c).value)
-                        from unnest(old_columns) c
-                        where
-                            (c).is_selectable
-                            and ( not error_record_exceeds_max_size or (octet_length((c).value::text) <= 64))
-                            and ( not is_rls_enabled or (c).is_pkey ) -- if RLS enabled, we can't secure deletes so filter to pkey
-                    )
-                )
-            else '{}'::jsonb
-        end;
-
--- Create the prepared statement
-        if is_rls_enabled and action <> 'DELETE' then
-            if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
-                deallocate walrus_rls_stmt;
-
-end if;
-
-execute realtime.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
-
-end if;
-
-visible_to_subscription_ids = '{}';
-
-for subscription_id, claims in (
-                select
-                    subs.subscription_id,
-                    subs.claims
-                from
-                    unnest(subscriptions) subs
-                where
-                    subs.entity = entity_
-                    and subs.claims_role = working_role
-                    and (
-                        realtime.is_visible_through_filters(columns, subs.filters)
-                        or (
-                          action = 'DELETE'
-                          and realtime.is_visible_through_filters(old_columns, subs.filters)
-                        )
-                    )
-        ) loop
-
-            if not is_rls_enabled or action = 'DELETE' then
-                visible_to_subscription_ids = visible_to_subscription_ids || subscription_id;
-
-else
-                -- Check if RLS allows the role to see the record
-                perform
-                    -- Trim leading and trailing quotes from working_role because set_config
-                    -- doesn't recognize the role as valid if they are included
-                    set_config('role', trim(both '"' from working_role::text), true),
-                    set_config('request.jwt.claims', claims::text, true);
-
-execute 'execute walrus_rls_stmt' into subscription_has_access;
-
-if subscription_has_access then
-                    visible_to_subscription_ids = visible_to_subscription_ids || subscription_id;
-
-end if;
-
-end if;
-
-end loop;
-
-perform set_config('role', null, true);
-
-return next (
-            output,
-            is_rls_enabled,
-            visible_to_subscription_ids,
-            case
-                when error_record_exceeds_max_size then array['Error 413: Payload Too Large']
-                else '{}'
-            end
-        )::realtime.wal_rls;
-
-end if;
-
-end loop;
-
-perform set_config('role', null, true);
-
-end;
-
-$$;
-
-BEGIN
-    IF level = 'STATEMENT' THEN
-        RAISE EXCEPTION 'function can only be triggered for each row, not for each statement';
-
-END IF;
-
--- Check the operation type and handle accordingly
-    IF operation = 'INSERT' OR operation = 'UPDATE' OR operation = 'DELETE' THEN
-        row_data := jsonb_build_object('old_record', OLD, 'record', NEW, 'operation', operation, 'table', table_name, 'schema', table_schema);
-
-PERFORM realtime.send (row_data, event_name, topic_name);
-
-ELSE
-        RAISE EXCEPTION 'Unexpected operation type: %', operation;
-
-END IF;
-
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE EXCEPTION 'Failed to process the row: %', SQLERRM;
-
-END;
-
-$$;
-
-begin
-      execute format('select to_jsonb(%L::'|| type_::text || ')', val)  into res;
-
-return res;
-
-end
-    $$;
-
-res boolean;
-
-begin
-          execute format(
-              'select %L::'|| type_::text || ' ' || op_symbol
-              || ' ( %L::'
-              || (
-                  case
-                      when op = 'in' then type_::text || '[]'
-                      else type_::text end
-              )
-              || ')', val_1, val_2) into res;
-
-return res;
-
-end;
-
-$$;
-
-$_$;
-
--- Attempt to insert the message
-    INSERT INTO realtime.messages (payload, event, topic, private, extension)
-    VALUES (payload, event, topic, private, 'broadcast');
-
-EXCEPTION
-    WHEN OTHERS THEN
-      -- Capture and notify the error
-      PERFORM pg_notify(
-          'realtime:system',
-          jsonb_build_object(
-              'error', SQLERRM,
-              'function', 'realtime.send',
-              'event', event,
-              'topic', topic,
-              'private', private
-          )::text
-      );
-
-END;
-
-END;
-
-$$;
-
-filter realtime.user_defined_filter;
-
-col_type regtype;
-
-in_val jsonb;
-
-begin
-        for filter in select * from unnest(new.filters) loop
-            -- Filtered column is valid
-            if not filter.column_name = any(col_names) then
-                raise exception 'invalid column for filter %', filter.column_name;
-
-end if;
-
--- Type is sanitized and safe for string interpolation
-            col_type = (
-                select atttypid::regtype
-                from pg_catalog.pg_attribute
-                where attrelid = new.entity
-                      and attname = filter.column_name
-            );
-
-if col_type is null then
-                raise exception 'failed to lookup type for column %', filter.column_name;
-
-end if;
-
--- Set maximum number of entries for in filter
-            if filter.op = 'in'::realtime.equality_op then
-                in_val = realtime.cast(filter.value, (col_type::text || '[]')::regtype);
-
-if coalesce(jsonb_array_length(in_val), 0) > 100 then
-                    raise exception 'too many values for `in` filter. Maximum 100';
-
-end if;
-
-else
-                -- raises an exception if value is not coercable to type
-                perform realtime.cast(filter.value, col_type);
-
-end if;
-
-end loop;
-
--- Apply consistent order to filters so the unique constraint on
-        -- (subscription_id, entity, filters) can't be tricked by a different filter order
-        new.filters = coalesce(
-            array_agg(f order by f.column_name, f.op, f.value),
-            '{}'
-        ) from unnest(new.filters) f;
-
-return new;
-
-end;
-
-$$;
-
-$$;
-
--- hack to rollback the successful insert
-  RAISE sqlstate 'PT200' using
-  message = 'ROLLBACK',
-  detail = 'rollback successful insert';
-
-END
-$$;
-
-_filename text;
-
-BEGIN
-	select string_to_array(name, '/') into _parts;
-
-select _parts[array_length(_parts,1)] into _filename;
-
--- @todo return the last part instead of 2
-	return reverse(split_part(reverse(_filename), '.', 1));
-
-END
-$$;
-
-BEGIN
-	select string_to_array(name, '/') into _parts;
-
-return _parts[array_length(_parts,1)];
-
-END
-$$;
-
-BEGIN
-	select string_to_array(name, '/') into _parts;
-
-return _parts[1:array_length(_parts,1)-1];
-
-END
-$$;
-
-END
-$$;
-
-END;
-
-$_$;
-
-END;
-
-$_$;
-
-END;
-
-$$;
-
-v_sort_order text;
-
-begin
-  case
-    when sortcolumn = 'name' then
-      v_order_by = 'name';
-
-when sortcolumn = 'updated_at' then
-      v_order_by = 'updated_at';
-
-when sortcolumn = 'created_at' then
-      v_order_by = 'created_at';
-
-when sortcolumn = 'last_accessed_at' then
-      v_order_by = 'last_accessed_at';
-
-else
-      v_order_by = 'name';
-
-end case;
-
-case
-    when sortorder = 'asc' then
-      v_sort_order = 'asc';
-
-when sortorder = 'desc' then
-      v_sort_order = 'desc';
-
-else
-      v_sort_order = 'asc';
-
-end case;
-
-v_order_by = v_order_by || ' ' || v_sort_order;
-
-return query execute
-    'with folders as (
-       select path_tokens[$1] as folder
-       from storage.objects
-         where objects.name ilike $2 || $3 || ''%''
-           and bucket_id = $4
-           and array_length(objects.path_tokens, 1) <> $1
-       group by folder
-       order by folder ' || v_sort_order || '
-     )
-     (select folder as "name",
-            null as id,
-            null as updated_at,
-            null as created_at,
-            null as last_accessed_at,
-            null as metadata from folders)
-     union all
-     (select path_tokens[$1] as "name",
-            id,
-            updated_at,
-            created_at,
-            last_accessed_at,
-            metadata
-     from storage.objects
-     where objects.name ilike $2 || $3 || ''%''
-       and bucket_id = $4
-       and array_length(objects.path_tokens, 1) = $1
-     order by ' || v_order_by || ')
-     limit $5
-     offset $6' using levels, prefix, search, bucketname, limits, offsets;
-
-end;
-
-$_$;
-
-RETURN NEW;
-
-END;
-
-$$;
-
---
--- Name: audit_logs_instance_id_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX audit_logs_instance_id_idx ON auth.audit_log_entries USING btree (instance_id);
-
---
--- Name: confirmation_token_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE UNIQUE INDEX confirmation_token_idx ON auth.users USING btree (confirmation_token) WHERE ((confirmation_token)::text !~ '^[0-9 ]*$'::text);
-
---
--- Name: email_change_token_current_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE UNIQUE INDEX email_change_token_current_idx ON auth.users USING btree (email_change_token_current) WHERE ((email_change_token_current)::text !~ '^[0-9 ]*$'::text);
-
---
--- Name: email_change_token_new_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE UNIQUE INDEX email_change_token_new_idx ON auth.users USING btree (email_change_token_new) WHERE ((email_change_token_new)::text !~ '^[0-9 ]*$'::text);
-
---
--- Name: factor_id_created_at_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX factor_id_created_at_idx ON auth.mfa_factors USING btree (user_id, created_at);
-
---
--- Name: flow_state_created_at_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX flow_state_created_at_idx ON auth.flow_state USING btree (created_at DESC);
-
---
--- Name: identities_email_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX identities_email_idx ON auth.identities USING btree (email text_pattern_ops);
-
---
--- Name: INDEX identities_email_idx; Type: COMMENT; Schema: auth; Owner: -
---
-
-COMMENT ON INDEX auth.identities_email_idx IS 'Auth: Ensures indexed queries on the email column';
-
---
--- Name: identities_user_id_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX identities_user_id_idx ON auth.identities USING btree (user_id);
-
---
--- Name: idx_auth_code; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX idx_auth_code ON auth.flow_state USING btree (auth_code);
-
---
--- Name: idx_user_id_auth_method; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX idx_user_id_auth_method ON auth.flow_state USING btree (user_id, authentication_method);
-
---
--- Name: mfa_challenge_created_at_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX mfa_challenge_created_at_idx ON auth.mfa_challenges USING btree (created_at DESC);
-
---
--- Name: mfa_factors_user_friendly_name_unique; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE UNIQUE INDEX mfa_factors_user_friendly_name_unique ON auth.mfa_factors USING btree (friendly_name, user_id) WHERE (TRIM(BOTH FROM friendly_name) <> ''::text);
-
---
--- Name: mfa_factors_user_id_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX mfa_factors_user_id_idx ON auth.mfa_factors USING btree (user_id);
-
---
--- Name: one_time_tokens_relates_to_hash_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX one_time_tokens_relates_to_hash_idx ON auth.one_time_tokens USING hash (relates_to);
-
---
--- Name: one_time_tokens_token_hash_hash_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX one_time_tokens_token_hash_hash_idx ON auth.one_time_tokens USING hash (token_hash);
-
---
--- Name: one_time_tokens_user_id_token_type_key; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE UNIQUE INDEX one_time_tokens_user_id_token_type_key ON auth.one_time_tokens USING btree (user_id, token_type);
-
---
--- Name: reauthentication_token_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE UNIQUE INDEX reauthentication_token_idx ON auth.users USING btree (reauthentication_token) WHERE ((reauthentication_token)::text !~ '^[0-9 ]*$'::text);
-
---
--- Name: recovery_token_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE UNIQUE INDEX recovery_token_idx ON auth.users USING btree (recovery_token) WHERE ((recovery_token)::text !~ '^[0-9 ]*$'::text);
-
---
--- Name: refresh_tokens_instance_id_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX refresh_tokens_instance_id_idx ON auth.refresh_tokens USING btree (instance_id);
-
---
--- Name: refresh_tokens_instance_id_user_id_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX refresh_tokens_instance_id_user_id_idx ON auth.refresh_tokens USING btree (instance_id, user_id);
-
---
--- Name: refresh_tokens_parent_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX refresh_tokens_parent_idx ON auth.refresh_tokens USING btree (parent);
-
---
--- Name: refresh_tokens_session_id_revoked_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX refresh_tokens_session_id_revoked_idx ON auth.refresh_tokens USING btree (session_id, revoked);
-
---
--- Name: refresh_tokens_updated_at_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX refresh_tokens_updated_at_idx ON auth.refresh_tokens USING btree (updated_at DESC);
-
---
--- Name: saml_providers_sso_provider_id_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX saml_providers_sso_provider_id_idx ON auth.saml_providers USING btree (sso_provider_id);
-
---
--- Name: saml_relay_states_created_at_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX saml_relay_states_created_at_idx ON auth.saml_relay_states USING btree (created_at DESC);
-
---
--- Name: saml_relay_states_for_email_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX saml_relay_states_for_email_idx ON auth.saml_relay_states USING btree (for_email);
-
---
--- Name: saml_relay_states_sso_provider_id_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX saml_relay_states_sso_provider_id_idx ON auth.saml_relay_states USING btree (sso_provider_id);
-
---
--- Name: sessions_not_after_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX sessions_not_after_idx ON auth.sessions USING btree (not_after DESC);
-
---
--- Name: sessions_user_id_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX sessions_user_id_idx ON auth.sessions USING btree (user_id);
-
---
--- Name: sso_domains_domain_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE UNIQUE INDEX sso_domains_domain_idx ON auth.sso_domains USING btree (lower(domain));
-
---
--- Name: sso_domains_sso_provider_id_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX sso_domains_sso_provider_id_idx ON auth.sso_domains USING btree (sso_provider_id);
-
---
--- Name: sso_providers_resource_id_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE UNIQUE INDEX sso_providers_resource_id_idx ON auth.sso_providers USING btree (lower(resource_id));
-
---
--- Name: unique_phone_factor_per_user; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE UNIQUE INDEX unique_phone_factor_per_user ON auth.mfa_factors USING btree (user_id, phone);
-
---
--- Name: user_id_created_at_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX user_id_created_at_idx ON auth.sessions USING btree (user_id, created_at);
-
---
--- Name: users_email_partial_key; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE UNIQUE INDEX users_email_partial_key ON auth.users USING btree (email) WHERE (is_sso_user = false);
-
---
--- Name: INDEX users_email_partial_key; Type: COMMENT; Schema: auth; Owner: -
---
-
-COMMENT ON INDEX auth.users_email_partial_key IS 'Auth: A partial unique index that applies only when is_sso_user is false';
-
---
--- Name: users_instance_id_email_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX users_instance_id_email_idx ON auth.users USING btree (instance_id, lower((email)::text));
-
---
--- Name: users_instance_id_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX users_instance_id_idx ON auth.users USING btree (instance_id);
-
---
--- Name: users_is_anonymous_idx; Type: INDEX; Schema: auth; Owner: -
---
-
-CREATE INDEX users_is_anonymous_idx ON auth.users USING btree (is_anonymous);
 
 --
 -- Name: idx_admin_communication_log_admin_user_id; Type: INDEX; Schema: public; Owner: -
@@ -8579,76 +7194,6 @@ CREATE INDEX idx_user_profiles_is_suspended ON public.user_profiles USING btree 
 --
 
 CREATE INDEX idx_user_profiles_subscription_tier ON public.user_profiles USING btree (subscription_tier);
-
---
--- Name: ix_realtime_subscription_entity; Type: INDEX; Schema: realtime; Owner: -
---
-
-CREATE INDEX ix_realtime_subscription_entity ON realtime.subscription USING btree (entity);
-
---
--- Name: subscription_subscription_id_entity_filters_key; Type: INDEX; Schema: realtime; Owner: -
---
-
-CREATE UNIQUE INDEX subscription_subscription_id_entity_filters_key ON realtime.subscription USING btree (subscription_id, entity, filters);
-
---
--- Name: bname; Type: INDEX; Schema: storage; Owner: -
---
-
-CREATE UNIQUE INDEX bname ON storage.buckets USING btree (name);
-
---
--- Name: bucketid_objname; Type: INDEX; Schema: storage; Owner: -
---
-
-CREATE UNIQUE INDEX bucketid_objname ON storage.objects USING btree (bucket_id, name);
-
---
--- Name: idx_multipart_uploads_list; Type: INDEX; Schema: storage; Owner: -
---
-
-CREATE INDEX idx_multipart_uploads_list ON storage.s3_multipart_uploads USING btree (bucket_id, key, created_at);
-
---
--- Name: idx_objects_bucket_id_name; Type: INDEX; Schema: storage; Owner: -
---
-
-CREATE INDEX idx_objects_bucket_id_name ON storage.objects USING btree (bucket_id, name COLLATE "C");
-
---
--- Name: name_prefix_search; Type: INDEX; Schema: storage; Owner: -
---
-
-CREATE INDEX name_prefix_search ON storage.objects USING btree (name text_pattern_ops);
-
---
--- Name: supabase_realtime; Type: PUBLICATION; Schema: -; Owner: -
---
-
-CREATE PUBLICATION supabase_realtime WITH (publish = 'insert, update, delete, truncate');
-
---
--- Name: issue_graphql_placeholder; Type: EVENT TRIGGER; Schema: -; Owner: -
---
-
-CREATE EVENT TRIGGER issue_graphql_placeholder ON sql_drop
-         WHEN TAG IN ('DROP EXTENSION')
-   EXECUTE FUNCTION extensions.set_graphql_placeholder();
-
---
--- Name: pgrst_ddl_watch; Type: EVENT TRIGGER; Schema: -; Owner: -
---
-
-CREATE EVENT TRIGGER pgrst_ddl_watch ON ddl_command_end
-   EXECUTE FUNCTION extensions.pgrst_ddl_watch();
-
---
--- Name: pgrst_drop_watch; Type: EVENT TRIGGER; Schema: -; Owner: -
---
-
-CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
-   EXECUTE FUNCTION extensions.pgrst_drop_watch();
 
 --
 -- PostgreSQL database dump complete

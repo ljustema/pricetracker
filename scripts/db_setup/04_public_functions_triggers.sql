@@ -1,229 +1,9 @@
 -- =========================================================================
 -- Functions and triggers
 -- =========================================================================
--- Generated: 2025-07-25 12:31:28
+-- Generated: 2025-09-04 14:04:57
 -- This file is part of the PriceTracker database setup
 -- =========================================================================
-
---
--- Name: email(); Type: FUNCTION; Schema: auth; Owner: -
---
-
-CREATE FUNCTION auth.email() RETURNS text
-    LANGUAGE sql STABLE
-    AS $$
-  select 
-  coalesce(
-    nullif(current_setting('request.jwt.claim.email', true), ''),
-    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email')
-  )::text
-$$;
-
---
--- Name: FUNCTION email(); Type: COMMENT; Schema: auth; Owner: -
---
-
-COMMENT ON FUNCTION auth.email() IS 'Deprecated. Use auth.jwt() -> ''email'' instead.';
-
---
--- Name: jwt(); Type: FUNCTION; Schema: auth; Owner: -
---
-
-CREATE FUNCTION auth.jwt() RETURNS jsonb
-    LANGUAGE sql STABLE
-    AS $$
-  select 
-    coalesce(
-        nullif(current_setting('request.jwt.claim', true), ''),
-        nullif(current_setting('request.jwt.claims', true), '')
-    )::jsonb
-$$;
-
---
--- Name: role(); Type: FUNCTION; Schema: auth; Owner: -
---
-
-CREATE FUNCTION auth.role() RETURNS text
-    LANGUAGE sql STABLE
-    AS $$
-  select 
-  coalesce(
-    nullif(current_setting('request.jwt.claim.role', true), ''),
-    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')
-  )::text
-$$;
-
---
--- Name: FUNCTION role(); Type: COMMENT; Schema: auth; Owner: -
---
-
-COMMENT ON FUNCTION auth.role() IS 'Deprecated. Use auth.jwt() -> ''role'' instead.';
-
---
--- Name: uid(); Type: FUNCTION; Schema: auth; Owner: -
---
-
-CREATE FUNCTION auth.uid() RETURNS uuid
-    LANGUAGE sql STABLE
-    AS $$
-  select 
-  coalesce(
-    nullif(current_setting('request.jwt.claim.sub', true), ''),
-    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
-  )::uuid
-$$;
-
---
--- Name: FUNCTION uid(); Type: COMMENT; Schema: auth; Owner: -
---
-
-COMMENT ON FUNCTION auth.uid() IS 'Deprecated. Use auth.jwt() -> ''sub'' instead.';
-
---
--- Name: grant_pg_cron_access(); Type: FUNCTION; Schema: extensions; Owner: -
---
-
-CREATE FUNCTION extensions.grant_pg_cron_access() RETURNS event_trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  IF EXISTS (
-    SELECT
-    FROM pg_event_trigger_ddl_commands() AS ev
-    JOIN pg_extension AS ext
-    ON ev.objid = ext.oid
-    WHERE ext.extname = 'pg_cron'
-  )
-  THEN
-    grant usage on schema cron to postgres with grant option;
-
---
--- Name: FUNCTION grant_pg_cron_access(); Type: COMMENT; Schema: extensions; Owner: -
---
-
-COMMENT ON FUNCTION extensions.grant_pg_cron_access() IS 'Grants access to pg_cron';
-
---
--- Name: grant_pg_graphql_access(); Type: FUNCTION; Schema: extensions; Owner: -
---
-
-CREATE FUNCTION extensions.grant_pg_graphql_access() RETURNS event_trigger
-    LANGUAGE plpgsql
-    AS $_$
-DECLARE
-    func_is_graphql_resolve bool;
-
-create or replace function graphql_public.graphql(
-            "operationName" text default null,
-            query text default null,
-            variables jsonb default null,
-            extensions jsonb default null
-        )
-            returns jsonb
-            language sql
-        as $$
-            select graphql.resolve(
-                query := query,
-                variables := coalesce(variables, '{}'),
-                "operationName" := "operationName",
-                extensions := extensions
-            );
-
---
--- Name: FUNCTION grant_pg_graphql_access(); Type: COMMENT; Schema: extensions; Owner: -
---
-
-COMMENT ON FUNCTION extensions.grant_pg_graphql_access() IS 'Grants access to pg_graphql';
-
---
--- Name: grant_pg_net_access(); Type: FUNCTION; Schema: extensions; Owner: -
---
-
-CREATE FUNCTION extensions.grant_pg_net_access() RETURNS event_trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  IF EXISTS (
-    SELECT 1
-    FROM pg_event_trigger_ddl_commands() AS ev
-    JOIN pg_extension AS ext
-    ON ev.objid = ext.oid
-    WHERE ext.extname = 'pg_net'
-  )
-  THEN
-    IF NOT EXISTS (
-      SELECT 1
-      FROM pg_roles
-      WHERE rolname = 'supabase_functions_admin'
-    )
-    THEN
-      CREATE USER supabase_functions_admin NOINHERIT CREATEROLE LOGIN NOREPLICATION;
-
---
--- Name: FUNCTION grant_pg_net_access(); Type: COMMENT; Schema: extensions; Owner: -
---
-
-COMMENT ON FUNCTION extensions.grant_pg_net_access() IS 'Grants access to pg_net';
-
---
--- Name: pgrst_ddl_watch(); Type: FUNCTION; Schema: extensions; Owner: -
---
-
-CREATE FUNCTION extensions.pgrst_ddl_watch() RETURNS event_trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-  cmd record;
-
---
--- Name: pgrst_drop_watch(); Type: FUNCTION; Schema: extensions; Owner: -
---
-
-CREATE FUNCTION extensions.pgrst_drop_watch() RETURNS event_trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-  obj record;
-
---
--- Name: set_graphql_placeholder(); Type: FUNCTION; Schema: extensions; Owner: -
---
-
-CREATE FUNCTION extensions.set_graphql_placeholder() RETURNS event_trigger
-    LANGUAGE plpgsql
-    AS $_$
-    DECLARE
-    graphql_is_dropped bool;
-
-IF graphql_is_dropped
-    THEN
-        create or replace function graphql_public.graphql(
-            "operationName" text default null,
-            query text default null,
-            variables jsonb default null,
-            extensions jsonb default null
-        )
-            returns jsonb
-            language plpgsql
-        as $$
-            DECLARE
-                server_version float;
-
---
--- Name: FUNCTION set_graphql_placeholder(); Type: COMMENT; Schema: extensions; Owner: -
---
-
-COMMENT ON FUNCTION extensions.set_graphql_placeholder() IS 'Reintroduces placeholder function for graphql_public.graphql';
-
---
--- Name: get_auth(text); Type: FUNCTION; Schema: pgbouncer; Owner: -
---
-
-CREATE FUNCTION pgbouncer.get_auth(p_usename text) RETURNS TABLE(username text, password text)
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $_$
-begin
-    raise debug 'PgBouncer auth request: %', p_usename;
 
 --
 -- Name: append_log_to_scraper_run(uuid, jsonb); Type: FUNCTION; Schema: public; Owner: -
@@ -2556,8 +2336,8 @@ CREATE FUNCTION public.get_priority_products_for_repricing(p_user_id uuid, p_com
     AS $$
 BEGIN
     RETURN QUERY
-    WITH recent_competitor_prices AS (
-        -- Get recent competitor prices (last 30 days)
+    WITH latest_competitor_prices AS (
+        -- Get latest price per competitor (CORRECT LOGIC)
         SELECT DISTINCT ON (pcc.product_id, pcc.competitor_id)
             pcc.product_id,
             pcc.competitor_id,
@@ -2567,24 +2347,23 @@ BEGIN
         WHERE pcc.user_id = p_user_id
         AND pcc.new_competitor_price IS NOT NULL
         AND pcc.competitor_id IS NOT NULL
-        AND pcc.changed_at >= NOW() - INTERVAL '30 days'
         AND (p_competitor_id IS NULL OR pcc.competitor_id = p_competitor_id)
         ORDER BY pcc.product_id, pcc.competitor_id, pcc.changed_at DESC
     ),
     competitor_prices_with_names AS (
-        -- Add competitor names and rank by price
+        -- Add competitor names and rank by current price
         SELECT 
-            rcp.product_id,
-            rcp.competitor_id,
-            rcp.new_competitor_price,
+            lcp.product_id,
+            lcp.competitor_id,
+            lcp.new_competitor_price,
             c.name as competitor_name,
-            ROW_NUMBER() OVER (PARTITION BY rcp.product_id ORDER BY rcp.new_competitor_price ASC) as price_rank
-        FROM recent_competitor_prices rcp
-        JOIN competitors c ON rcp.competitor_id = c.id
+            ROW_NUMBER() OVER (PARTITION BY lcp.product_id ORDER BY lcp.new_competitor_price ASC) as price_rank
+        FROM latest_competitor_prices lcp
+        JOIN competitors c ON lcp.competitor_id = c.id
         WHERE c.user_id = p_user_id
     ),
     product_analysis AS (
-        -- Analyze each product against competitors
+        -- Analyze each product against current competitor prices
         SELECT 
             p.id as product_id,
             p.name as product_name,
@@ -2592,9 +2371,9 @@ BEGIN
             p.brand as product_brand,
             p.ean as product_ean,
             p.our_retail_price,
-            MIN(cpn.new_competitor_price) as min_competitor_price,
+            MIN(cpn.new_competitor_price) as min_current_competitor_price,
             COUNT(DISTINCT cpn.competitor_id) as competitor_count,
-            -- Get the competitor name with the lowest price (rank 1)
+            -- Get the competitor name with the lowest current price (rank 1)
             MAX(CASE WHEN cpn.price_rank = 1 THEN cpn.competitor_name END) as lowest_price_competitor
         FROM products p
         JOIN competitor_prices_with_names cpn ON p.id = cpn.product_id
@@ -2603,7 +2382,7 @@ BEGIN
         AND p.our_retail_price IS NOT NULL
         AND (p_brand_filter IS NULL OR p.brand ILIKE '%' || p_brand_filter || '%')
         GROUP BY p.id, p.name, p.sku, p.brand, p.ean, p.our_retail_price
-        HAVING p.our_retail_price > MIN(cpn.new_competitor_price) -- Only where we're more expensive
+        HAVING p.our_retail_price > MIN(cpn.new_competitor_price) -- Only where we're more expensive than current prices
     )
     SELECT 
         pa.product_id,
@@ -2612,14 +2391,14 @@ BEGIN
         pa.product_brand,
         pa.product_ean,
         ROUND(pa.our_retail_price, 2) as our_price,
-        ROUND(pa.min_competitor_price, 2) as lowest_competitor_price,
-        ROUND(pa.our_retail_price - pa.min_competitor_price, 2) as price_difference,
-        ROUND(((pa.our_retail_price - pa.min_competitor_price) / pa.our_retail_price * 100), 2) as price_difference_percentage,
-        ROUND(pa.our_retail_price - pa.min_competitor_price, 2) as potential_savings,
+        ROUND(pa.min_current_competitor_price, 2) as lowest_competitor_price,
+        ROUND(pa.our_retail_price - pa.min_current_competitor_price, 2) as price_difference,
+        ROUND(((pa.our_retail_price - pa.min_current_competitor_price) / pa.our_retail_price * 100), 2) as price_difference_percentage,
+        ROUND(pa.our_retail_price - pa.min_current_competitor_price, 2) as potential_savings,
         pa.competitor_count::INTEGER,
         COALESCE(pa.lowest_price_competitor, 'Unknown') as most_competitive_competitor_name
     FROM product_analysis pa
-    ORDER BY (pa.our_retail_price - pa.min_competitor_price) DESC
+    ORDER BY (pa.our_retail_price - pa.min_current_competitor_price) DESC
     LIMIT p_limit
     OFFSET p_offset;
 
@@ -2748,30 +2527,14 @@ BEGIN
     LIMIT p_limit;
 
 --
--- Name: get_products_filtered(uuid, integer, integer, text, text, text, text, text, boolean, uuid[], boolean, boolean, boolean, boolean, boolean, uuid[]); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 16, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_not_our_products boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean, p_in_stock_only boolean DEFAULT NULL::boolean, p_supplier_ids uuid[] DEFAULT NULL::uuid[]) RETURNS json
-    LANGUAGE plpgsql
-    AS $_$
-DECLARE
-    _offset integer;
-
---
 -- Name: get_products_filtered(uuid, integer, integer, text, text, text, text, text, boolean, uuid[], boolean, boolean, boolean, boolean, boolean, uuid[], boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 16, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_not_our_products boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean, p_in_stock_only boolean DEFAULT NULL::boolean, p_supplier_ids uuid[] DEFAULT NULL::uuid[], p_our_products_with_competitor_prices boolean DEFAULT NULL::boolean, p_our_products_with_supplier_prices boolean DEFAULT NULL::boolean) RETURNS json
+CREATE FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_in_stock_only boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean, p_not_our_products boolean DEFAULT NULL::boolean, p_supplier_ids uuid[] DEFAULT NULL::uuid[], p_our_products_with_competitor_prices boolean DEFAULT NULL::boolean, p_our_products_with_supplier_prices boolean DEFAULT NULL::boolean) RETURNS json
     LANGUAGE plpgsql
-    AS $_$
+    AS $$
 DECLARE
     _offset integer;
-
---
--- Name: FUNCTION get_products_filtered(p_user_id uuid, p_page integer, p_page_size integer, p_sort_by text, p_sort_order text, p_brand text, p_category text, p_search text, p_is_active boolean, p_competitor_ids uuid[], p_has_price boolean, p_not_our_products boolean, p_price_lower_than_competitors boolean, p_price_higher_than_competitors boolean, p_in_stock_only boolean, p_supplier_ids uuid[], p_our_products_with_competitor_prices boolean, p_our_products_with_supplier_prices boolean); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.get_products_filtered(p_user_id uuid, p_page integer, p_page_size integer, p_sort_by text, p_sort_order text, p_brand text, p_category text, p_search text, p_is_active boolean, p_competitor_ids uuid[], p_has_price boolean, p_not_our_products boolean, p_price_lower_than_competitors boolean, p_price_higher_than_competitors boolean, p_in_stock_only boolean, p_supplier_ids uuid[], p_our_products_with_competitor_prices boolean, p_our_products_with_supplier_prices boolean) IS 'Gets filtered products with pagination, including new combined filters for price matching analysis';
 
 --
 -- Name: get_sales_analysis_data(uuid, uuid, timestamp without time zone, timestamp without time zone, text); Type: FUNCTION; Schema: public; Owner: -
@@ -3925,6 +3688,21 @@ BEGIN
     NEW.updated_at = NOW();
 
 --
+-- Name: validate_api_key(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.validate_api_key(p_api_key text) RETURNS TABLE(user_id uuid, is_valid boolean)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        ak.user_id,
+        (ak.is_active AND ak.api_key = p_api_key) as is_valid
+    FROM api_keys ak
+    WHERE ak.api_key = p_api_key;
+
+--
 -- Name: validate_temp_competitors_data(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -3971,466 +3749,6 @@ BEGIN
     -- Basic URL validation
     IF url_text IS NULL OR url_text = '' THEN
         RETURN FALSE;
-
---
--- Name: apply_rls(jsonb, integer); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime.apply_rls(wal jsonb, max_record_bytes integer DEFAULT (1024 * 1024)) RETURNS SETOF realtime.wal_rls
-    LANGUAGE plpgsql
-    AS $$
-declare
--- Regclass of the table e.g. public.notes
-entity_ regclass = (quote_ident(wal ->> 'schema') || '.' || quote_ident(wal ->> 'table'))::regclass;
-
---
--- Name: broadcast_changes(text, text, text, text, text, record, record, text); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime.broadcast_changes(topic_name text, event_name text, operation text, table_name text, table_schema text, new record, old record, level text DEFAULT 'ROW'::text) RETURNS void
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-    -- Declare a variable to hold the JSONB representation of the row
-    row_data jsonb := '{}'::jsonb;
-
---
--- Name: build_prepared_statement_sql(text, regclass, realtime.wal_column[]); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime.build_prepared_statement_sql(prepared_statement_name text, entity regclass, columns realtime.wal_column[]) RETURNS text
-    LANGUAGE sql
-    AS $$
-      /*
-      Builds a sql string that, if executed, creates a prepared statement to
-      tests retrive a row from *entity* by its primary key columns.
-      Example
-          select realtime.build_prepared_statement_sql('public.notes', '{"id"}'::text[], '{"bigint"}'::text[])
-      */
-          select
-      'prepare ' || prepared_statement_name || ' as
-          select
-              exists(
-                  select
-                      1
-                  from
-                      ' || entity || '
-                  where
-                      ' || string_agg(quote_ident(pkc.name) || '=' || quote_nullable(pkc.value #>> '{}') , ' and ') || '
-              )'
-          from
-              unnest(columns) pkc
-          where
-              pkc.is_pkey
-          group by
-              entity
-      $$;
-
---
--- Name: cast(text, regtype); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime."cast"(val text, type_ regtype) RETURNS jsonb
-    LANGUAGE plpgsql IMMUTABLE
-    AS $$
-    declare
-      res jsonb;
-
---
--- Name: check_equality_op(realtime.equality_op, regtype, text, text); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime.check_equality_op(op realtime.equality_op, type_ regtype, val_1 text, val_2 text) RETURNS boolean
-    LANGUAGE plpgsql IMMUTABLE
-    AS $$
-      /*
-      Casts *val_1* and *val_2* as type *type_* and check the *op* condition for truthiness
-      */
-      declare
-          op_symbol text = (
-              case
-                  when op = 'eq' then '='
-                  when op = 'neq' then '!='
-                  when op = 'lt' then '<'
-                  when op = 'lte' then '<='
-                  when op = 'gt' then '>'
-                  when op = 'gte' then '>='
-                  when op = 'in' then '= any'
-                  else 'UNKNOWN OP'
-              end
-          );
-
---
--- Name: is_visible_through_filters(realtime.wal_column[], realtime.user_defined_filter[]); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime.is_visible_through_filters(columns realtime.wal_column[], filters realtime.user_defined_filter[]) RETURNS boolean
-    LANGUAGE sql IMMUTABLE
-    AS $_$
-    /*
-    Should the record be visible (true) or filtered out (false) after *filters* are applied
-    */
-        select
-            -- Default to allowed when no filters present
-            $2 is null -- no filters. this should not happen because subscriptions has a default
-            or array_length($2, 1) is null -- array length of an empty array is null
-            or bool_and(
-                coalesce(
-                    realtime.check_equality_op(
-                        op:=f.op,
-                        type_:=coalesce(
-                            col.type_oid::regtype, -- null when wal2json version <= 2.4
-                            col.type_name::regtype
-                        ),
-                        -- cast jsonb to text
-                        val_1:=col.value #>> '{}',
-                        val_2:=f.value
-                    ),
-                    false -- if null, filter does not match
-                )
-            )
-        from
-            unnest(filters) f
-            join unnest(columns) col
-                on f.column_name = col.name;
-
---
--- Name: list_changes(name, name, integer, integer); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime.list_changes(publication name, slot_name name, max_changes integer, max_record_bytes integer) RETURNS SETOF realtime.wal_rls
-    LANGUAGE sql
-    SET log_min_messages TO 'fatal'
-    AS $$
-      with pub as (
-        select
-          concat_ws(
-            ',',
-            case when bool_or(pubinsert) then 'insert' else null end,
-            case when bool_or(pubupdate) then 'update' else null end,
-            case when bool_or(pubdelete) then 'delete' else null end
-          ) as w2j_actions,
-          coalesce(
-            string_agg(
-              realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass),
-              ','
-            ) filter (where ppt.tablename is not null and ppt.tablename not like '% %'),
-            ''
-          ) w2j_add_tables
-        from
-          pg_publication pp
-          left join pg_publication_tables ppt
-            on pp.pubname = ppt.pubname
-        where
-          pp.pubname = publication
-        group by
-          pp.pubname
-        limit 1
-      ),
-      w2j as (
-        select
-          x.*, pub.w2j_add_tables
-        from
-          pub,
-          pg_logical_slot_get_changes(
-            slot_name, null, max_changes,
-            'include-pk', 'true',
-            'include-transaction', 'false',
-            'include-timestamp', 'true',
-            'include-type-oids', 'true',
-            'format-version', '2',
-            'actions', pub.w2j_actions,
-            'add-tables', pub.w2j_add_tables
-          ) x
-      )
-      select
-        xyz.wal,
-        xyz.is_rls_enabled,
-        xyz.subscription_ids,
-        xyz.errors
-      from
-        w2j,
-        realtime.apply_rls(
-          wal := w2j.data::jsonb,
-          max_record_bytes := max_record_bytes
-        ) xyz(wal, is_rls_enabled, subscription_ids, errors)
-      where
-        w2j.w2j_add_tables <> ''
-        and xyz.subscription_ids[1] is not null
-    $$;
-
---
--- Name: quote_wal2json(regclass); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime.quote_wal2json(entity regclass) RETURNS text
-    LANGUAGE sql IMMUTABLE STRICT
-    AS $$
-      select
-        (
-          select string_agg('' || ch,'')
-          from unnest(string_to_array(nsp.nspname::text, null)) with ordinality x(ch, idx)
-          where
-            not (x.idx = 1 and x.ch = '"')
-            and not (
-              x.idx = array_length(string_to_array(nsp.nspname::text, null), 1)
-              and x.ch = '"'
-            )
-        )
-        || '.'
-        || (
-          select string_agg('' || ch,'')
-          from unnest(string_to_array(pc.relname::text, null)) with ordinality x(ch, idx)
-          where
-            not (x.idx = 1 and x.ch = '"')
-            and not (
-              x.idx = array_length(string_to_array(nsp.nspname::text, null), 1)
-              and x.ch = '"'
-            )
-          )
-      from
-        pg_class pc
-        join pg_namespace nsp
-          on pc.relnamespace = nsp.oid
-      where
-        pc.oid = entity
-    $$;
-
---
--- Name: send(jsonb, text, text, boolean); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime.send(payload jsonb, event text, topic text, private boolean DEFAULT true) RETURNS void
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  BEGIN
-    -- Set the topic configuration
-    EXECUTE format('SET LOCAL realtime.topic TO %L', topic);
-
---
--- Name: subscription_check_filters(); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime.subscription_check_filters() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-    /*
-    Validates that the user defined filters for a subscription:
-    - refer to valid columns that the claimed role may access
-    - values are coercable to the correct column type
-    */
-    declare
-        col_names text[] = coalesce(
-                array_agg(c.column_name order by c.ordinal_position),
-                '{}'::text[]
-            )
-            from
-                information_schema.columns c
-            where
-                format('%I.%I', c.table_schema, c.table_name)::regclass = new.entity
-                and pg_catalog.has_column_privilege(
-                    (new.claims ->> 'role'),
-                    format('%I.%I', c.table_schema, c.table_name)::regclass,
-                    c.column_name,
-                    'SELECT'
-                );
-
---
--- Name: to_regrole(text); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime.to_regrole(role_name text) RETURNS regrole
-    LANGUAGE sql IMMUTABLE
-    AS $$ select role_name::regrole $$;
-
---
--- Name: topic(); Type: FUNCTION; Schema: realtime; Owner: -
---
-
-CREATE FUNCTION realtime.topic() RETURNS text
-    LANGUAGE sql STABLE
-    AS $$
-select nullif(current_setting('realtime.topic', true), '')::text;
-
---
--- Name: can_insert_object(text, text, uuid, jsonb); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.can_insert_object(bucketid text, name text, owner uuid, metadata jsonb) RETURNS void
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  INSERT INTO "storage"."objects" ("bucket_id", "name", "owner", "metadata") VALUES (bucketid, name, owner, metadata);
-
---
--- Name: extension(text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.extension(name text) RETURNS text
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-_parts text[];
-
---
--- Name: filename(text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.filename(name text) RETURNS text
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-_parts text[];
-
---
--- Name: foldername(text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.foldername(name text) RETURNS text[]
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-_parts text[];
-
---
--- Name: get_size_by_bucket(); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.get_size_by_bucket() RETURNS TABLE(size bigint, bucket_id text)
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    return query
-        select sum((metadata->>'size')::int) as size, obj.bucket_id
-        from "storage".objects as obj
-        group by obj.bucket_id;
-
---
--- Name: list_multipart_uploads_with_delimiter(text, text, text, integer, text, text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.list_multipart_uploads_with_delimiter(bucket_id text, prefix_param text, delimiter_param text, max_keys integer DEFAULT 100, next_key_token text DEFAULT ''::text, next_upload_token text DEFAULT ''::text) RETURNS TABLE(key text, id text, created_at timestamp with time zone)
-    LANGUAGE plpgsql
-    AS $_$
-BEGIN
-    RETURN QUERY EXECUTE
-        'SELECT DISTINCT ON(key COLLATE "C") * from (
-            SELECT
-                CASE
-                    WHEN position($2 IN substring(key from length($1) + 1)) > 0 THEN
-                        substring(key from 1 for length($1) + position($2 IN substring(key from length($1) + 1)))
-                    ELSE
-                        key
-                END AS key, id, created_at
-            FROM
-                storage.s3_multipart_uploads
-            WHERE
-                bucket_id = $5 AND
-                key ILIKE $1 || ''%'' AND
-                CASE
-                    WHEN $4 != '''' AND $6 = '''' THEN
-                        CASE
-                            WHEN position($2 IN substring(key from length($1) + 1)) > 0 THEN
-                                substring(key from 1 for length($1) + position($2 IN substring(key from length($1) + 1))) COLLATE "C" > $4
-                            ELSE
-                                key COLLATE "C" > $4
-                            END
-                    ELSE
-                        true
-                END AND
-                CASE
-                    WHEN $6 != '''' THEN
-                        id COLLATE "C" > $6
-                    ELSE
-                        true
-                    END
-            ORDER BY
-                key COLLATE "C" ASC, created_at ASC) as e order by key COLLATE "C" LIMIT $3'
-        USING prefix_param, delimiter_param, max_keys, next_key_token, bucket_id, next_upload_token;
-
---
--- Name: list_objects_with_delimiter(text, text, text, integer, text, text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.list_objects_with_delimiter(bucket_id text, prefix_param text, delimiter_param text, max_keys integer DEFAULT 100, start_after text DEFAULT ''::text, next_token text DEFAULT ''::text) RETURNS TABLE(name text, id uuid, metadata jsonb, updated_at timestamp with time zone)
-    LANGUAGE plpgsql
-    AS $_$
-BEGIN
-    RETURN QUERY EXECUTE
-        'SELECT DISTINCT ON(name COLLATE "C") * from (
-            SELECT
-                CASE
-                    WHEN position($2 IN substring(name from length($1) + 1)) > 0 THEN
-                        substring(name from 1 for length($1) + position($2 IN substring(name from length($1) + 1)))
-                    ELSE
-                        name
-                END AS name, id, metadata, updated_at
-            FROM
-                storage.objects
-            WHERE
-                bucket_id = $5 AND
-                name ILIKE $1 || ''%'' AND
-                CASE
-                    WHEN $6 != '''' THEN
-                    name COLLATE "C" > $6
-                ELSE true END
-                AND CASE
-                    WHEN $4 != '''' THEN
-                        CASE
-                            WHEN position($2 IN substring(name from length($1) + 1)) > 0 THEN
-                                substring(name from 1 for length($1) + position($2 IN substring(name from length($1) + 1))) COLLATE "C" > $4
-                            ELSE
-                                name COLLATE "C" > $4
-                            END
-                    ELSE
-                        true
-                END
-            ORDER BY
-                name COLLATE "C" ASC) as e order by name COLLATE "C" LIMIT $3'
-        USING prefix_param, delimiter_param, max_keys, next_token, bucket_id, start_after;
-
---
--- Name: operation(); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.operation() RETURNS text
-    LANGUAGE plpgsql STABLE
-    AS $$
-BEGIN
-    RETURN current_setting('storage.operation', true);
-
---
--- Name: search(text, text, integer, integer, integer, text, text, text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.search(prefix text, bucketname text, limits integer DEFAULT 100, levels integer DEFAULT 1, offsets integer DEFAULT 0, search text DEFAULT ''::text, sortcolumn text DEFAULT 'name'::text, sortorder text DEFAULT 'asc'::text) RETURNS TABLE(name text, id uuid, updated_at timestamp with time zone, created_at timestamp with time zone, last_accessed_at timestamp with time zone, metadata jsonb)
-    LANGUAGE plpgsql STABLE
-    AS $_$
-declare
-  v_order_by text;
-
---
--- Name: update_updated_at_column(); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.update_updated_at_column() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    NEW.updated_at = now();
-
---
--- Name: users create_nextauth_user_trigger; Type: TRIGGER; Schema: auth; Owner: -
---
-
-CREATE TRIGGER create_nextauth_user_trigger AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.create_user_for_nextauth();
-
---
--- Name: users create_profile_trigger; Type: TRIGGER; Schema: auth; Owner: -
---
-
-CREATE TRIGGER create_profile_trigger AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.create_profile_for_user();
 
 --
 -- Name: temp_competitors_scraped_data auto_process_temp_competitors_trigger; Type: TRIGGER; Schema: public; Owner: -
@@ -4557,24 +3875,4 @@ CREATE TRIGGER validate_temp_integrations_trigger BEFORE INSERT ON public.temp_i
 --
 
 CREATE TRIGGER validate_temp_suppliers_trigger BEFORE INSERT ON public.temp_suppliers_scraped_data FOR EACH ROW EXECUTE FUNCTION public.validate_temp_suppliers_data();
-
---
--- Name: subscription tr_check_filters; Type: TRIGGER; Schema: realtime; Owner: -
---
-
-CREATE TRIGGER tr_check_filters BEFORE INSERT OR UPDATE ON realtime.subscription FOR EACH ROW EXECUTE FUNCTION realtime.subscription_check_filters();
-
---
--- Name: objects update_objects_updated_at; Type: TRIGGER; Schema: storage; Owner: -
---
-
-CREATE TRIGGER update_objects_updated_at BEFORE UPDATE ON storage.objects FOR EACH ROW EXECUTE FUNCTION storage.update_updated_at_column();
-
---
--- Name: issue_pg_graphql_access; Type: EVENT TRIGGER; Schema: -; Owner: -
---
-
-CREATE EVENT TRIGGER issue_pg_graphql_access ON ddl_command_end
-         WHEN TAG IN ('CREATE FUNCTION')
-   EXECUTE FUNCTION extensions.grant_pg_graphql_access();
 
