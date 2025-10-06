@@ -132,53 +132,77 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
     // Declare finalResult outside the if blocks
     let finalResult;
 
-    // For first page, use a simpler query to avoid timeout
-    if (rpcParams.p_page === 1) {
-      console.log('🚀 [PRODUCTS API] Using optimized query for first page');
-      const { data: rpcResult, error } = await supabase.rpc('get_products_filtered_fast', rpcParams);
-      console.log('🔍 [PRODUCTS API] Fast RPC call completed in:', Date.now() - rpcStartTime, 'ms');
+    try {
+      // For first page, use a simpler query to avoid timeout
+      if (rpcParams.p_page === 1) {
+        console.log('🚀 [PRODUCTS API] Using optimized query for first page');
+        const { data: rpcResult, error } = await supabase.rpc('get_products_filtered_fast', rpcParams);
+        console.log('🔍 [PRODUCTS API] Fast RPC call completed in:', Date.now() - rpcStartTime, 'ms');
 
-      if (error) {
-        console.log('⚠️ [PRODUCTS API] Fast query failed:', error.message, '- falling back to full query');
-        const { data: fallbackResult, error: fallbackError } = await supabase.rpc('get_products_filtered', rpcParams);
-        console.log('🔍 [PRODUCTS API] Fallback RPC call completed in:', Date.now() - rpcStartTime, 'ms');
+        if (error) {
+          console.log('⚠️ [PRODUCTS API] Fast query failed:', error.message, '- falling back to full query');
+          const { data: fallbackResult, error: fallbackError } = await supabase.rpc('get_products_filtered', rpcParams);
+          console.log('🔍 [PRODUCTS API] Fallback RPC call completed in:', Date.now() - rpcStartTime, 'ms');
 
-        if (fallbackError) {
-          console.error("❌ [PRODUCTS API] Error calling get_products_filtered RPC:", fallbackError);
-          console.error("❌ [PRODUCTS API] Total request time before error:", Date.now() - startTime, 'ms');
-
-          // Handle timeout errors specifically
-          if (fallbackError.code === '57014') {
-            return NextResponse.json(
-              {
-                error: "The product query timed out. This usually happens after periods of inactivity. Please try again.",
-                details: "The database query took too long to complete. This is common after the database has been idle.",
-                code: fallbackError.code,
-                retryable: true
-              },
-              { status: 504 } // Gateway Timeout status
-            );
+          if (fallbackError) {
+            throw fallbackError;
           }
 
-          return NextResponse.json(
-            { error: `Database error: ${fallbackError.message}` },
-            { status: 500 }
-          );
+          finalResult = fallbackResult;
+        } else {
+          finalResult = rpcResult;
+        }
+      } else {
+        const { data: rpcResult, error } = await supabase.rpc('get_products_filtered', rpcParams);
+        console.log('🔍 [PRODUCTS API] Full RPC call completed in:', Date.now() - rpcStartTime, 'ms');
+
+        if (error) {
+          throw error;
         }
 
-        finalResult = fallbackResult;
-      } else {
         finalResult = rpcResult;
       }
-    } else {
-      const { data: rpcResult, error } = await supabase.rpc('get_products_filtered', rpcParams);
-      console.log('🔍 [PRODUCTS API] Full RPC call completed in:', Date.now() - rpcStartTime, 'ms');
+    } catch (error: unknown) {
+      console.error("❌ [PRODUCTS API] Error calling RPC:", error);
+      console.error("❌ [PRODUCTS API] Total request time before error:", Date.now() - startTime, 'ms');
 
-      if (error) {
-        throw error;
+      // Type guard for error object
+      const dbError = error as { code?: string; message?: string };
+
+      // Handle timeout errors specifically
+      if (dbError.code === '57014') {
+        return NextResponse.json(
+          {
+            error: "The product query timed out. This usually happens after periods of inactivity. Please try again.",
+            details: "The database query took too long to complete. This is common after the database has been idle.",
+            code: dbError.code,
+            retryable: true
+          },
+          { status: 504 } // Gateway Timeout status
+        );
       }
 
-      finalResult = rpcResult;
+      // Handle connection errors
+      if (dbError.code === '08006' || dbError.code === '08000') {
+        return NextResponse.json(
+          {
+            error: "Database connection error. Please try again in a moment.",
+            details: "The database connection was interrupted. This is common after periods of inactivity.",
+            code: dbError.code,
+            retryable: true
+          },
+          { status: 503 } // Service Unavailable
+        );
+      }
+
+      return NextResponse.json(
+        {
+          error: `Database error: ${dbError.message || 'Unknown error'}`,
+          code: dbError.code || 'UNKNOWN',
+          retryable: false
+        },
+        { status: 500 }
+      );
     }
 
     if (typeof finalResult === 'undefined') {

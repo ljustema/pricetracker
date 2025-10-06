@@ -262,9 +262,33 @@ export default function ProductsContent({
         console.error("❌ [FRONTEND] Error fetching products content:", err);
         console.error("❌ [FRONTEND] Total time before error:", Date.now() - fetchStartTime, 'ms');
 
+        // Parse error response if it's a fetch error
+        let errorMessage = "An unknown error occurred loading product data.";
+        let errorCode = null;
+        let isRetryable = false;
+
+        if (err instanceof Error) {
+          try {
+            // Try to parse the error message if it contains JSON
+            if (err.message.includes('{')) {
+              const jsonMatch = err.message.match(/\{.*\}/);
+              if (jsonMatch) {
+                const errorData = JSON.parse(jsonMatch[0]);
+                errorMessage = errorData.error || errorData.message || err.message;
+                errorCode = errorData.code;
+                isRetryable = errorData.retryable || false;
+              }
+            } else {
+              errorMessage = err.message;
+            }
+          } catch (_parseError) {
+            errorMessage = err.message;
+          }
+        }
+
         // Check if this is a retryable error (timeout or connection issues)
-        const errorMessage = err instanceof Error ? err.message : "An unknown error occurred loading product data.";
-        const isRetryableError = errorMessage.includes('timed out') ||
+        const isRetryableError = isRetryable ||
+                                errorMessage.includes('timed out') ||
                                 errorMessage.includes('504') ||
                                 errorMessage.includes('503') ||
                                 errorMessage.includes('connection') ||
@@ -287,7 +311,11 @@ export default function ProductsContent({
         if (isRetryableError) {
           setError("Database connection timeout. This usually happens after periods of inactivity. Please refresh the page to try again.");
         } else {
-          setError(errorMessage);
+          // Show more user-friendly error message
+          const userFriendlyMessage = errorCode ?
+            `Error loading products (${errorCode}): ${errorMessage}` :
+            `Error loading products: ${errorMessage}`;
+          setError(userFriendlyMessage);
         }
         setProducts([]); // Clear products on error
         setTotalProductCount(0);
