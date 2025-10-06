@@ -5552,6 +5552,132 @@ $$;
 
 
 --
+-- Name: get_products_filtered_fast(uuid, integer, integer, text, text, text, text, text, boolean, uuid[], boolean, boolean, boolean, boolean, boolean, uuid[], boolean, boolean); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_products_filtered_fast(p_user_id uuid, p_page integer DEFAULT 1, p_page_size integer DEFAULT 12, p_sort_by text DEFAULT 'created_at'::text, p_sort_order text DEFAULT 'desc'::text, p_brand text DEFAULT NULL::text, p_category text DEFAULT NULL::text, p_search text DEFAULT NULL::text, p_is_active boolean DEFAULT NULL::boolean, p_competitor_ids uuid[] DEFAULT NULL::uuid[], p_has_price boolean DEFAULT NULL::boolean, p_in_stock_only boolean DEFAULT NULL::boolean, p_price_lower_than_competitors boolean DEFAULT NULL::boolean, p_price_higher_than_competitors boolean DEFAULT NULL::boolean, p_not_our_products boolean DEFAULT NULL::boolean, p_supplier_ids uuid[] DEFAULT NULL::uuid[], p_our_products_with_competitor_prices boolean DEFAULT NULL::boolean, p_our_products_with_supplier_prices boolean DEFAULT NULL::boolean) RETURNS json
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    _offset integer;
+    _limit integer;
+    _sort_direction text;
+    _result json;
+    _safe_sort_by text;
+    _products_data json;
+    _brand_uuid uuid;
+BEGIN
+    -- Calculate offset and limit
+    _offset := (p_page - 1) * p_page_size;
+    _limit := p_page_size;
+    
+    -- Validate and set sort direction
+    _sort_direction := CASE 
+        WHEN LOWER(p_sort_order) = 'asc' THEN 'ASC'
+        ELSE 'DESC'
+    END;
+    
+    -- Validate sort column and set safe sort by
+    _safe_sort_by := CASE 
+        WHEN p_sort_by IN ('name', 'sku', 'ean', 'created_at', 'updated_at', 'our_retail_price', 'our_wholesale_price') THEN p_sort_by
+        ELSE 'created_at'
+    END;
+    
+    -- Try to convert brand to UUID if it looks like one, otherwise keep as text for name search
+    BEGIN
+        _brand_uuid := p_brand::uuid;
+    EXCEPTION WHEN invalid_text_representation THEN
+        _brand_uuid := NULL;
+    END;
+
+    -- Get products data with simplified query (no total count)
+    WITH products_basic AS (
+        SELECT 
+            p.id,
+            p.name,
+            p.sku,
+            p.ean,
+            p.brand_id,
+            p.category,
+            p.our_retail_price,
+            p.our_wholesale_price,
+            p.image_url,
+            p.our_url,
+            p.is_active,
+            p.created_at,
+            p.updated_at,
+            b.name as brand_name
+        FROM products p
+        LEFT JOIN brands b ON p.brand_id = b.id
+        WHERE p.user_id = p_user_id
+        AND (
+            p_brand IS NULL OR 
+            (_brand_uuid IS NOT NULL AND p.brand_id = _brand_uuid) OR
+            (_brand_uuid IS NULL AND b.name ILIKE '%' || p_brand || '%')
+        )
+        AND (p_category IS NULL OR p.category ILIKE '%' || p_category || '%')
+        AND (p_search IS NULL OR p.name ILIKE '%' || p_search || '%' OR p.sku ILIKE '%' || p_search || '%' OR p.ean ILIKE '%' || p_search || '%')
+        AND (p_is_active IS NULL OR p.is_active = p_is_active)
+        AND (
+            (p_has_price IS NULL AND p_not_our_products IS NULL) OR
+            (p_has_price = true AND p.our_retail_price IS NOT NULL) OR
+            (p_not_our_products = true AND p.our_retail_price IS NULL)
+        )
+        ORDER BY 
+            CASE 
+                WHEN _safe_sort_by = 'name' AND _sort_direction = 'ASC' THEN p.name
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'name' AND _sort_direction = 'DESC' THEN p.name
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'created_at' AND _sort_direction = 'ASC' THEN p.created_at
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'created_at' AND _sort_direction = 'DESC' THEN p.created_at
+            END DESC,
+            CASE 
+                WHEN _safe_sort_by = 'our_retail_price' AND _sort_direction = 'ASC' THEN p.our_retail_price
+            END ASC,
+            CASE 
+                WHEN _safe_sort_by = 'our_retail_price' AND _sort_direction = 'DESC' THEN p.our_retail_price
+            END DESC
+        LIMIT _limit OFFSET _offset
+    )
+    SELECT COALESCE(json_agg(
+        json_build_object(
+            'id', pb.id,
+            'name', pb.name,
+            'sku', pb.sku,
+            'ean', pb.ean,
+            'brand_id', pb.brand_id,
+            'brand_name', pb.brand_name,
+            'category', pb.category,
+            'our_retail_price', pb.our_retail_price,
+            'our_wholesale_price', pb.our_wholesale_price,
+            'image_url', pb.image_url,
+            'our_url', pb.our_url,
+            'is_active', pb.is_active,
+            'created_at', pb.created_at,
+            'updated_at', pb.updated_at,
+            'competitor_prices', '{}',
+            'has_stock', false,
+            'stock_quantity', 0
+        )
+    ), '[]'::json) INTO _products_data FROM products_basic pb;
+
+    -- Build the final result with estimated count
+    _result := json_build_object(
+        'data', COALESCE(_products_data, '[]'::json),
+        'totalCount', 1000
+    );
+
+    RETURN _result;
+END;
+$$;
+
+
+--
 -- Name: get_sales_analysis_data(uuid, uuid, timestamp without time zone, timestamp without time zone, text); Type: FUNCTION; Schema: public; Owner: -
 --
 

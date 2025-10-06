@@ -2,7 +2,7 @@
 
 import type { ComplexFiltersState } from './products-client-wrapper'; // Import filter state type
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Competitor } from "@/lib/services/competitor-service"; // Import Competitor type
 import type { Product, StockChange } from "@/lib/services/product-service"; // Import the shared type
 import ProductCard from "@/components/products/product-card";
@@ -35,11 +35,17 @@ export default function ProductsContent({
   onComplexFilterChange, // Receive callback
 }: ProductsContentProps) {
 
+  console.log('🏗️ [FRONTEND] ProductsContent component rendered at:', new Date().toISOString());
+
   // Use state for dynamic data
   const [products, setProducts] = useState<Product[]>([]);
   const [totalProductCount, setTotalProductCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true); // Start loading initially
   const [error, setError] = useState<string | null>(null);
+
+  // Ref to track if we're currently fetching to prevent duplicate requests
+  const isFetchingRef = useRef(false);
+  const lastFetchParamsRef = useRef<string>('');
   const [stockData, setStockData] = useState<Map<string, StockChange[]>>(new Map());
 
   // Use initial props for static data passed from server
@@ -58,52 +64,72 @@ export default function ProductsContent({
 
   // --- Start: Product Fetching Logic (Moved to useEffect) ---
   // # Reason: Extract parameters for data fetching from the complexFilters state and URL params.
-  const pageParam = currentUrlSearchParams.get('page') || '1'; // Get page from URL for fetching
-  const sortParam = currentUrlSearchParams.get('sort') || 'created_at'; // Get sort from URL for fetching
-  const sortOrderParam = currentUrlSearchParams.get('sortOrder') || 'desc'; // Get sortOrder from URL for fetching
-  const refreshParam = currentUrlSearchParams.get('refresh'); // Get refresh parameter for cache busting
-  const brandFilter = complexFilters.brand || undefined;
-  const categoryFilter = undefined; // Keep if used by API, derive from complexFilters if needed
-  const searchQuery = complexFilters.search || undefined;
-  const showInactive = complexFilters.inactive;
-  const sourceFilter = complexFilters.competitor && complexFilters.competitor.length > 0 ? complexFilters.competitor : undefined; // Using competitor filter for both competitors and integrations
-  const supplierFilter = complexFilters.supplier && complexFilters.supplier.length > 0 ? complexFilters.supplier : undefined; // New supplier filter
-  const hasPriceFilter = complexFilters.has_price;
-  const notOurProductsFilter = complexFilters.not_our_products;
-  const priceLowerThanCompetitors = complexFilters.price_lower_than_competitors;
-  const priceHigherThanCompetitors = complexFilters.price_higher_than_competitors;
-  const inStockOnly = complexFilters.in_stock_only;
-  const ourProductsWithCompetitorPrices = complexFilters.our_products_with_competitor_prices;
-  const ourProductsWithSupplierPrices = complexFilters.our_products_with_supplier_prices;
+  // Memoize URL parameters to prevent unnecessary re-renders
+  const urlParams = useMemo(() => ({
+    page: currentUrlSearchParams.get('page') || '1',
+    sort: currentUrlSearchParams.get('sort') || 'created_at',
+    sortOrder: currentUrlSearchParams.get('sortOrder') || 'desc',
+    refresh: currentUrlSearchParams.get('refresh')
+  }), [currentUrlSearchParams]);
+
+  // Note: We now use urlParams directly in fetchProducts instead of destructuring
+
+  // Memoize filter parameters to prevent unnecessary re-renders
+  const filterParams = useMemo(() => ({
+    brand: complexFilters.brand || undefined,
+    category: undefined, // Keep if used by API, derive from complexFilters if needed
+    search: complexFilters.search || undefined,
+    showInactive: complexFilters.inactive,
+    source: complexFilters.competitor && complexFilters.competitor.length > 0 ? complexFilters.competitor : undefined, // Using competitor filter for both competitors and integrations
+    supplier: complexFilters.supplier && complexFilters.supplier.length > 0 ? complexFilters.supplier : undefined, // New supplier filter
+    hasPrice: complexFilters.has_price,
+    notOurProducts: complexFilters.not_our_products,
+    priceLowerThanCompetitors: complexFilters.price_lower_than_competitors,
+    priceHigherThanCompetitors: complexFilters.price_higher_than_competitors,
+    inStockOnly: complexFilters.in_stock_only,
+    ourProductsWithCompetitorPrices: complexFilters.our_products_with_competitor_prices,
+    ourProductsWithSupplierPrices: complexFilters.our_products_with_supplier_prices
+  }), [complexFilters]);
+
+  // Note: We now use filterParams directly in fetchProducts instead of destructuring
 
   // Function to fetch products based on current searchParams with retry logic
   const fetchProducts = useCallback(async (retryCount = 0) => {
     const _maxRetries = 3;
+    const fetchStartTime = Date.now();
+
+    console.log('🚀 [FRONTEND] fetchProducts called at:', new Date().toISOString(), 'retryCount:', retryCount);
+
+    // Create a unique key for current parameters to prevent duplicate requests
+    const currentParamsKey = JSON.stringify({ urlParams, filterParams, itemsPerPage });
+
+    // If we're already fetching with the same parameters, skip
+    if (isFetchingRef.current && lastFetchParamsRef.current === currentParamsKey && retryCount === 0) {
+      console.log('🚫 [FRONTEND] Skipping duplicate request');
+      return;
+    }
+
+    console.log('📊 [FRONTEND] Starting fetch with params:', { urlParams, filterParams, itemsPerPage });
+
+    isFetchingRef.current = true;
+    lastFetchParamsRef.current = currentParamsKey;
     setIsLoading(true);
     setError(null);
     try {
-        // Use the extracted dependency variables
-        const page = parseInt(pageParam, 10);
-        // itemsPerPage is defined outside useEffect
-        const sortBy = sortParam;
-        const sortOrder = sortOrderParam;
-        const brand = brandFilter;
-        const category = categoryFilter; // Keep if used by API
-        const search = searchQuery;
-        const isActive = !showInactive; // API expects isActive, derive from showInactive
-        const sourceId = sourceFilter; // Use sourceId instead of competitor
-        const supplierId = supplierFilter; // Use supplierId for supplier filter
-        const has_price = hasPriceFilter;
-        const not_our_products = notOurProductsFilter;
+        // Use the extracted dependency variables from memoized objects
+        const page = parseInt(urlParams.page, 10);
+        const sortBy = urlParams.sort;
+        const sortOrder = urlParams.sortOrder;
+        const brand = filterParams.brand;
+        const category = filterParams.category; // Keep if used by API
+        const search = filterParams.search;
+        const isActive = !filterParams.showInactive; // API expects isActive, derive from showInactive
+        const sourceId = filterParams.source; // Use sourceId instead of competitor
+        const supplierId = filterParams.supplier; // Use supplierId for supplier filter
+        const has_price = filterParams.hasPrice;
+        const not_our_products = filterParams.notOurProducts;
 
-        // Debug logging for filter issues
-        console.log('Filter Debug:', {
-          has_price,
-          not_our_products,
-          sourceId,
-          supplierId,
-          complexFilters: complexFilters
-        });
+
 
         // Fetch Paginated Products from API Route using POST
         const apiUrl = '/api/products'; // Base URL for the POST request
@@ -122,11 +148,11 @@ export default function ProductsContent({
           supplierId: supplierId, // Add new supplier filter parameter
           has_price: has_price, // Send boolean based on filter state
           not_our_products: not_our_products, // Add new filter for products without our price
-          price_lower_than_competitors: priceLowerThanCompetitors, // Add new price comparison filter
-          price_higher_than_competitors: priceHigherThanCompetitors, // Add new price comparison filter
-          in_stock_only: inStockOnly, // Add new stock filter
-          our_products_with_competitor_prices: ourProductsWithCompetitorPrices, // Add new combined filter
-          our_products_with_supplier_prices: ourProductsWithSupplierPrices, // Add new combined filter
+          price_lower_than_competitors: filterParams.priceLowerThanCompetitors, // Add new price comparison filter
+          price_higher_than_competitors: filterParams.priceHigherThanCompetitors, // Add new price comparison filter
+          in_stock_only: filterParams.inStockOnly, // Add new stock filter
+          our_products_with_competitor_prices: filterParams.ourProductsWithCompetitorPrices, // Add new combined filter
+          our_products_with_supplier_prices: filterParams.ourProductsWithSupplierPrices, // Add new combined filter
         };
 
         // Use the cookieHeader passed down from the parent Server Component
@@ -159,8 +185,12 @@ export default function ProductsContent({
 
 
         // Add a cache-busting parameter to the URL if refreshParam is present
-        const cacheBuster = refreshParam ? `?t=${refreshParam}` : '';
+        const cacheBuster = urlParams.refresh ? `?t=${urlParams.refresh}` : '';
 
+        console.log('🌐 [FRONTEND] Making fetch request to:', `${apiUrl}${cacheBuster}`);
+        console.log('🌐 [FRONTEND] Request payload:', JSON.stringify(payload, null, 2));
+
+        const fetchRequestStart = Date.now();
         const response = await fetch(`${apiUrl}${cacheBuster}`, { // Use base URL with cache buster
           method: 'POST', // Specify POST method
           headers: fetchHeaders,
@@ -168,12 +198,19 @@ export default function ProductsContent({
           cache: 'no-store',
         });
 
+        console.log('🌐 [FRONTEND] Fetch request completed in:', Date.now() - fetchRequestStart, 'ms');
+        console.log('🌐 [FRONTEND] Response status:', response.status, response.statusText);
+
         if (!response.ok) {
           const errorData = await response.json();
+          console.error('❌ [FRONTEND] API Error:', response.status, errorData);
           throw new Error(`API Error (${response.status}): ${errorData.error || response.statusText}`);
         }
 
+        const responseParseStart = Date.now();
         const { data: apiProducts, totalCount: apiTotalCount } = await response.json();
+        console.log('📊 [FRONTEND] Response parsed in:', Date.now() - responseParseStart, 'ms');
+        console.log('📊 [FRONTEND] Received', apiProducts?.length || 0, 'products, total count:', apiTotalCount);
 
         // IMPORTANT: Transform competitor_prices from API response if needed
         // Assuming API returns the object format { competitor_id: price }
@@ -219,8 +256,11 @@ export default function ProductsContent({
           }
         }
 
+        console.log('✅ [FRONTEND] Products fetch completed successfully in:', Date.now() - fetchStartTime, 'ms');
+
       } catch (err) {
-        console.error("Error fetching products content:", err);
+        console.error("❌ [FRONTEND] Error fetching products content:", err);
+        console.error("❌ [FRONTEND] Total time before error:", Date.now() - fetchStartTime, 'ms');
 
         // Check if this is a retryable error (timeout or connection issues)
         const errorMessage = err instanceof Error ? err.message : "An unknown error occurred loading product data.";
@@ -256,32 +296,18 @@ export default function ProductsContent({
       // Ensure loading is stopped if not retrying
       if (retryCount === 0) {
         setIsLoading(false);
+        isFetchingRef.current = false;
       }
     }
   }, [
-    pageParam,
-    sortParam,
-    sortOrderParam,
-    refreshParam,
-    brandFilter,
-    categoryFilter,
-    searchQuery,
-    showInactive,
-    sourceFilter,
-    supplierFilter,
-    hasPriceFilter,
-    notOurProductsFilter,
-    priceLowerThanCompetitors,
-    priceHigherThanCompetitors,
-    inStockOnly,
-    ourProductsWithCompetitorPrices,
-    ourProductsWithSupplierPrices,
+    urlParams,
+    filterParams,
     itemsPerPage,
-    cookieHeader,
-    complexFilters
+    cookieHeader
   ]);
 
   useEffect(() => {
+    console.log('🎯 [FRONTEND] useEffect triggered, calling fetchProducts');
     fetchProducts(0); // Start with retry count 0
   }, [fetchProducts]);
 
@@ -328,9 +354,9 @@ export default function ProductsContent({
         <div className="mb-6">
           <div className="mb-4 flex items-center justify-between">
             <p className="text-sm text-gray-500">
-              Showing <span className="font-medium">{(parseInt(pageParam, 10) - 1) * itemsPerPage + 1}</span> to{" "}
+              Showing <span className="font-medium">{(parseInt(urlParams.page, 10) - 1) * itemsPerPage + 1}</span> to{" "}
               <span className="font-medium">
-                {Math.min(parseInt(pageParam, 10) * itemsPerPage, totalProducts)}
+                {Math.min(parseInt(urlParams.page, 10) * itemsPerPage, totalProducts)}
               </span>{" "}
               of <span className="font-medium">{totalProducts}</span> results
             </p>
@@ -386,7 +412,7 @@ export default function ProductsContent({
           <Pagination
             totalItems={totalProducts}
             itemsPerPage={itemsPerPage}
-            currentPage={parseInt(pageParam, 10)}
+            currentPage={parseInt(urlParams.page, 10)}
           />
         </>
       ) : ( // Show "No products" only if not loading and no error occurred

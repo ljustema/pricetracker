@@ -29,17 +29,25 @@ interface RawProductData {
 
 // GET handler to fetch all products for the current user
 export async function POST(request: NextRequest) { // Changed from GET to POST
+  const startTime = Date.now();
+  console.log('🚀 [PRODUCTS API] Request started at:', new Date().toISOString());
+
   try {
     // Get the current user from the session
+    console.log('🔐 [PRODUCTS API] Getting session...');
     const session = await getServerSession(authOptions);
+    console.log('🔐 [PRODUCTS API] Session obtained in:', Date.now() - startTime, 'ms');
 
     // Check if the user is authenticated
     if (!session?.user) {
+      console.log('❌ [PRODUCTS API] Unauthorized - no session user');
       return NextResponse.json(
         { error: "Unauthorized" },
         { status: 401 }
       );
     }
+
+    console.log('👤 [PRODUCTS API] User authenticated:', session.user.id);
 
     // Create a Supabase client with the service role key to bypass RLS
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -61,7 +69,9 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
 
     // --- Start: Product Fetching Logic using RPC ---
 
+    console.log('📝 [PRODUCTS API] Parsing request body...');
     const body = await request.json(); // Read parameters from request body
+    console.log('📝 [PRODUCTS API] Request body parsed:', JSON.stringify(body, null, 2));
 
     // Prepare parameters for the RPC call, converting types as needed
     const rpcParams = {
@@ -111,54 +121,84 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
     };
 
     // Set a longer statement timeout for complex product queries (especially after cold starts)
+    console.log('⏱️ [PRODUCTS API] Setting statement timeout to 45 seconds...');
     await supabase.rpc('set_statement_timeout', { p_milliseconds: 45000 }); // 45 seconds
+    console.log('⏱️ [PRODUCTS API] Statement timeout set');
 
-    // Execute the RPC call
-    const { data: rpcResult, error } = await supabase.rpc('get_products_filtered', rpcParams);
+    // Execute the RPC call with optimized approach for first page
+    console.log('🔍 [PRODUCTS API] Calling get_products_filtered RPC with params:', JSON.stringify(rpcParams, null, 2));
+    const rpcStartTime = Date.now();
 
-    if (error) {
-      console.error("Error calling get_products_filtered RPC:", error);
+    // Declare finalResult outside the if blocks
+    let finalResult;
 
-      // Handle timeout errors specifically
-      if (error.code === '57014') {
-        return NextResponse.json(
-          {
-            error: "The product query timed out. This usually happens after periods of inactivity. Please try again.",
-            details: "The database query took too long to complete. This is common after the database has been idle.",
-            code: error.code,
-            retryable: true
-          },
-          { status: 504 } // Gateway Timeout status
-        );
+    // For first page, use a simpler query to avoid timeout
+    if (rpcParams.p_page === 1) {
+      console.log('🚀 [PRODUCTS API] Using optimized query for first page');
+      const { data: rpcResult, error } = await supabase.rpc('get_products_filtered_fast', rpcParams);
+      console.log('🔍 [PRODUCTS API] Fast RPC call completed in:', Date.now() - rpcStartTime, 'ms');
+
+      if (error) {
+        console.log('⚠️ [PRODUCTS API] Fast query failed:', error.message, '- falling back to full query');
+        const { data: fallbackResult, error: fallbackError } = await supabase.rpc('get_products_filtered', rpcParams);
+        console.log('🔍 [PRODUCTS API] Fallback RPC call completed in:', Date.now() - rpcStartTime, 'ms');
+
+        if (fallbackError) {
+          console.error("❌ [PRODUCTS API] Error calling get_products_filtered RPC:", fallbackError);
+          console.error("❌ [PRODUCTS API] Total request time before error:", Date.now() - startTime, 'ms');
+
+          // Handle timeout errors specifically
+          if (fallbackError.code === '57014') {
+            return NextResponse.json(
+              {
+                error: "The product query timed out. This usually happens after periods of inactivity. Please try again.",
+                details: "The database query took too long to complete. This is common after the database has been idle.",
+                code: fallbackError.code,
+                retryable: true
+              },
+              { status: 504 } // Gateway Timeout status
+            );
+          }
+
+          return NextResponse.json(
+            { error: `Database error: ${fallbackError.message}` },
+            { status: 500 }
+          );
+        }
+
+        finalResult = fallbackResult;
+      } else {
+        finalResult = rpcResult;
+      }
+    } else {
+      const { data: rpcResult, error } = await supabase.rpc('get_products_filtered', rpcParams);
+      console.log('🔍 [PRODUCTS API] Full RPC call completed in:', Date.now() - rpcStartTime, 'ms');
+
+      if (error) {
+        throw error;
       }
 
-      // Handle connection errors
-      if (error.code === '08006' || error.code === '08000') {
-        return NextResponse.json(
-          {
-            error: "Database connection error. Please try again in a moment.",
-            details: "The database connection was interrupted. This is common after periods of inactivity.",
-            code: error.code,
-            retryable: true
-          },
-          { status: 503 } // Service Unavailable
-        );
-      }
+      finalResult = rpcResult;
+    }
+
+    if (typeof finalResult === 'undefined') {
+      console.error("❌ [PRODUCTS API] No result obtained from RPC calls");
+      console.error("❌ [PRODUCTS API] Total request time before error:", Date.now() - startTime, 'ms');
 
       return NextResponse.json(
-        {
-          error: "Database error: " + error.message,
-          code: error.code,
-          retryable: false
-        },
+        { error: "Failed to fetch products" },
         { status: 500 }
       );
     }
 
+    console.log('✅ [PRODUCTS API] RPC call successful, processing result...');
+
+
+
     // The RPC function returns a JSON object like { "data": [], "totalCount": 0 }
     // Extract data and count from the result
-    const rawData = rpcResult?.data || [];
-    const count = rpcResult?.totalCount || 0;
+    const rawData = finalResult?.data || [];
+    const count = finalResult?.totalCount || 0;
 
     // Transform the data to match the expected Product interface format
     const transformedData = rawData.map((product: RawProductData) => {
