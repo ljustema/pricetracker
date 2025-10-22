@@ -133,35 +133,16 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
     let finalResult;
 
     try {
-      // For first page, use a simpler query to avoid timeout
-      if (rpcParams.p_page === 1) {
-        console.log('🚀 [PRODUCTS API] Using optimized query for first page');
-        const { data: rpcResult, error } = await supabase.rpc('get_products_filtered_fast', rpcParams);
-        console.log('🔍 [PRODUCTS API] Fast RPC call completed in:', Date.now() - rpcStartTime, 'ms');
+      // Use the optimized get_products_filtered function for all pages
+      console.log('🚀 [PRODUCTS API] Calling get_products_filtered for page', rpcParams.p_page);
+      const { data: rpcResult, error } = await supabase.rpc('get_products_filtered', rpcParams);
+      console.log('🔍 [PRODUCTS API] RPC call completed in:', Date.now() - rpcStartTime, 'ms');
 
-        if (error) {
-          console.log('⚠️ [PRODUCTS API] Fast query failed:', error.message, '- falling back to full query');
-          const { data: fallbackResult, error: fallbackError } = await supabase.rpc('get_products_filtered', rpcParams);
-          console.log('🔍 [PRODUCTS API] Fallback RPC call completed in:', Date.now() - rpcStartTime, 'ms');
-
-          if (fallbackError) {
-            throw fallbackError;
-          }
-
-          finalResult = fallbackResult;
-        } else {
-          finalResult = rpcResult;
-        }
-      } else {
-        const { data: rpcResult, error } = await supabase.rpc('get_products_filtered', rpcParams);
-        console.log('🔍 [PRODUCTS API] Full RPC call completed in:', Date.now() - rpcStartTime, 'ms');
-
-        if (error) {
-          throw error;
-        }
-
-        finalResult = rpcResult;
+      if (error) {
+        throw error;
       }
+
+      finalResult = rpcResult;
     } catch (error: unknown) {
       console.error("❌ [PRODUCTS API] Error calling RPC:", error);
       console.error("❌ [PRODUCTS API] Total request time before error:", Date.now() - startTime, 'ms');
