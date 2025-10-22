@@ -8,8 +8,10 @@ import { ensureUUID } from '@/lib/utils/uuid';
 interface CompetitorPriceItem {
   competitor_id?: string;
   integration_id?: string;
-  competitor_price: number | null;
+  new_competitor_price: number | null;
   competitor_name?: string;
+  competitor_url?: string;
+  changed_at?: string;
 }
 
 interface SourcePriceItem {
@@ -211,11 +213,8 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       const competitor_prices: { [key: string]: number } = {};
       if (Array.isArray(product.competitor_prices)) {
         product.competitor_prices.forEach((item: CompetitorPriceItem) => {
-          if (item.competitor_id && item.competitor_price !== null && item.competitor_price !== undefined) {
-            competitor_prices[item.competitor_id] = item.competitor_price;
-          }
-          if (item.integration_id && item.competitor_price !== null && item.competitor_price !== undefined) {
-            competitor_prices[item.integration_id] = item.competitor_price;
+          if (item.competitor_id && item.new_competitor_price !== null && item.new_competitor_price !== undefined) {
+            competitor_prices[item.competitor_id] = item.new_competitor_price;
           }
         });
       }
@@ -224,14 +223,13 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
       const source_prices: { [key: string]: { price: number; source_type: 'competitor' | 'integration'; source_name: string; } } = {};
       if (Array.isArray(product.competitor_prices)) {
         product.competitor_prices.forEach((item: CompetitorPriceItem) => {
-          if (item.competitor_price !== null && item.competitor_price !== undefined) {
-            const sourceId = item.competitor_id || item.integration_id;
-            const sourceType = item.competitor_id ? 'competitor' : 'integration';
-            if (sourceId && item.competitor_name) {
+          if (item.new_competitor_price !== null && item.new_competitor_price !== undefined) {
+            const sourceId = item.competitor_id;
+            if (sourceId) {
               source_prices[sourceId] = {
-                price: item.competitor_price,
-                source_type: sourceType,
-                source_name: item.competitor_name
+                price: item.new_competitor_price,
+                source_type: 'competitor',
+                source_name: item.competitor_name || 'Unknown'
               };
             }
           }
