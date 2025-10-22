@@ -30,8 +30,10 @@ export async function POST(_request: NextRequest) {
     console.log(`🔄 [REFRESH PRICES] Starting refresh for user ${session.user.id}`);
     const startTime = Date.now();
 
-    // Call the database function to refresh the materialized view
-    const { error } = await supabase.rpc('refresh_latest_competitor_prices_mv');
+    // Call the database function to refresh the materialized view with extended timeout
+    const { error } = await supabase.rpc('refresh_latest_competitor_prices_mv', {}, {
+      timeout: 300000 // 5 minutes timeout
+    });
 
     if (error) {
       console.error('❌ [REFRESH PRICES] Error refreshing prices:', error);
@@ -47,7 +49,7 @@ export async function POST(_request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: 'Prices refreshed successfully',
-      refreshTime: `${refreshTime}ms`,
+      refreshTime: `${(refreshTime / 1000).toFixed(2)}s`,
       timestamp: new Date().toISOString()
     });
 
