@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth/auth-options';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin-client';
-import { ensureUUID } from '@/lib/utils/uuid-utils';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth/options';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 /**
  * POST /api/products/refresh-prices
@@ -15,7 +14,7 @@ import { ensureUUID } from '@/lib/utils/uuid-utils';
  * - 401: Unauthorized
  * - 500: Server error
  */
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   try {
     // Check authentication
     const session = await getServerSession(authOptions);
@@ -26,14 +25,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const userId = ensureUUID(session.user.id);
-    const supabase = createSupabaseAdminClient();
+    const supabase = await createSupabaseServerClient();
 
-    console.log(`🔄 [REFRESH PRICES] Starting refresh for user ${userId}`);
+    console.log(`🔄 [REFRESH PRICES] Starting refresh for user ${session.user.id}`);
     const startTime = Date.now();
 
     // Call the database function to refresh the materialized view
-    const { data, error } = await supabase.rpc('refresh_latest_competitor_prices_mv');
+    const { error } = await supabase.rpc('refresh_latest_competitor_prices_mv');
 
     if (error) {
       console.error('❌ [REFRESH PRICES] Error refreshing prices:', error);
