@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { UploadIcon, PlusIcon, GitMergeIcon, DownloadIcon } from "lucide-react";
+import { UploadIcon, PlusIcon, GitMergeIcon, DownloadIcon, RefreshCwIcon } from "lucide-react";
 import CSVUploadForm from "./csv-upload-form";
 import CSVExportDialog from "./csv-export-dialog";
 import { useSearchParams } from "next/navigation";
@@ -10,6 +10,8 @@ export default function ProductsHeader() {
   const [showCSVUploadForm, setShowCSVUploadForm] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [counts, setCounts] = useState({ duplicates: 0 });
   const [isLoadingCounts, setIsLoadingCounts] = useState(true);
   const searchParams = useSearchParams();
@@ -26,6 +28,47 @@ export default function ProductsHeader() {
       console.error('Error fetching counts:', error);
     } finally {
       setIsLoadingCounts(false);
+    }
+  };
+
+  // Function to refresh competitor prices
+  const handleRefreshPrices = async () => {
+    setIsRefreshingPrices(true);
+    setRefreshMessage(null);
+
+    try {
+      const response = await fetch('/api/products/refresh-prices', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.details || 'Failed to refresh prices');
+      }
+
+      const data = await response.json();
+      setRefreshMessage({
+        type: 'success',
+        text: `✅ Prices updated successfully (${data.refreshTime})`
+      });
+
+      // Clear message after 3 seconds
+      setTimeout(() => setRefreshMessage(null), 3000);
+
+      // Reload the page to show updated prices
+      window.location.reload();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setRefreshMessage({
+        type: 'error',
+        text: `❌ Failed to refresh prices: ${errorMessage}`
+      });
+      console.error('Error refreshing prices:', error);
+    } finally {
+      setIsRefreshingPrices(false);
     }
   };
 
@@ -115,6 +158,15 @@ export default function ProductsHeader() {
           <h1 className="text-3xl font-bold">Products</h1>
           <div className="flex space-x-3">
             <button
+              onClick={handleRefreshPrices}
+              disabled={isRefreshingPrices}
+              className="flex items-center rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
+              title="Refresh competitor prices from the latest data"
+            >
+              <RefreshCwIcon className={`h-4 w-4 mr-2 ${isRefreshingPrices ? 'animate-spin' : ''}`} />
+              {isRefreshingPrices ? "Updating..." : "Update Prices"}
+            </button>
+            <button
               onClick={() => setShowExportDialog(true)}
               disabled={isExporting}
               className="flex items-center rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
@@ -159,6 +211,17 @@ export default function ProductsHeader() {
             isExporting={isExporting}
             setIsExporting={setIsExporting}
           />
+        </div>
+      )}
+
+      {/* Refresh message notification */}
+      {refreshMessage && (
+        <div className={`mt-4 p-3 rounded-md text-sm font-medium ${
+          refreshMessage.type === 'success'
+            ? 'bg-green-50 text-green-800 border border-green-200'
+            : 'bg-red-50 text-red-800 border border-red-200'
+        }`}>
+          {refreshMessage.text}
         </div>
       )}
     </div>
