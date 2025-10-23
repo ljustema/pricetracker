@@ -192,8 +192,7 @@ export async function POST(request: NextRequest) {
       .eq('user_id', userId);
 
     if (brandsError) {
-      console.error('Error deleting brands:', brandsError);
-      // Don't fail the request for this, just log it
+      // Error deleting brands - continue anyway
     }
 
     // Step 12: Clean up remaining temp tables
@@ -207,7 +206,6 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error in delete all products API:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

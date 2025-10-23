@@ -108,7 +108,6 @@ export async function POST(request: NextRequest) {
         .select("count");
 
       if (productsError) {
-        console.error("Error deleting products:", productsError);
         return NextResponse.json(
           { error: "Failed to delete products. This may be due to foreign key constraints." },
           { status: 500 }

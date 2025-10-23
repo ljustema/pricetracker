@@ -29,8 +29,9 @@ export async function POST(_request: NextRequest) {
     const startTime = Date.now();
 
     try {
-      // Set a longer statement timeout (5 minutes = 300000 ms)
-      await supabase.rpc('set_statement_timeout', { p_milliseconds: 300000 });
+      // Set a longer statement timeout (15 minutes = 900000 ms)
+      // Materialized view refresh can take a long time with many products
+      await supabase.rpc('set_statement_timeout', { p_milliseconds: 900000 });
 
       // Call the database function to refresh the materialized view
       const { error } = await supabase.rpc('refresh_latest_competitor_prices_mv', {});

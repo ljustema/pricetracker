@@ -113,7 +113,6 @@ export async function POST(request: NextRequest) {
       );
 
       if (error) {
-        console.error(`Error fetching products for CSV export (page ${currentPage}):`, error);
         return NextResponse.json(
           { error: `Failed to fetch products: ${error.message}` },
           { status: 500 }
@@ -152,7 +151,7 @@ export async function POST(request: NextRequest) {
       .order('field_name');
 
     if (customFieldsError) {
-      console.error('Error fetching custom fields:', customFieldsError);
+      // Error fetching custom fields - continue without them
     }
 
     // Get custom field values for all products
@@ -200,7 +199,6 @@ export async function POST(request: NextRequest) {
       const { data: batchCustomFieldValues, error: customFieldError } = await query;
 
       if (customFieldError) {
-        console.error('Error fetching custom field values for batch:', customFieldError);
         continue; // Continue with next batch even if one fails
       }
 
@@ -283,7 +281,6 @@ export async function POST(request: NextRequest) {
               });
 
             if (competitorError) {
-              console.error('Error fetching competitor prices for batch:', competitorError);
               continue;
             }
 
@@ -299,8 +296,6 @@ export async function POST(request: NextRequest) {
               }) =>
                 price.competitor_id && !price.integration_id
               );
-
-              console.log(`Fetched ${allCompetitorPrices.length} total price records, filtered to ${competitorPrices.length} competitor prices`);
 
               // Group by product_id
               competitorPrices.forEach((price: {
@@ -318,9 +313,8 @@ export async function POST(request: NextRequest) {
               });
             }
           }
-          console.log(`Competitor prices grouped for ${competitorPricesMap.size} products`);
         } catch (error) {
-          console.error('Error fetching competitor prices:', error);
+          // Error fetching competitor prices
         }
       }
 
@@ -338,7 +332,6 @@ export async function POST(request: NextRequest) {
               });
 
             if (supplierError) {
-              console.error('Error fetching supplier prices for batch:', supplierError);
               continue;
             }
 
@@ -354,8 +347,6 @@ export async function POST(request: NextRequest) {
               }) =>
                 price.supplier_id && !price.integration_id
               );
-
-              console.log(`Fetched ${allSupplierPrices.length} total supplier price records, filtered to ${supplierPrices.length} supplier prices`);
 
               // Group by product_id
               supplierPrices.forEach((price: {
@@ -373,33 +364,29 @@ export async function POST(request: NextRequest) {
               });
             }
           }
-          console.log(`Supplier prices grouped for ${supplierPricesMap.size} products`);
         } catch (error) {
-          console.error('Error fetching supplier prices:', error);
+          // Error fetching supplier prices
         }
       }
 
-      // Get competitor stock using batch function in smaller chunks to avoid 1000 record limit
+      // Get competitor stock using individual queries
       if (body.includeCompetitorStock) {
         try {
-          const stockBatchSize = 500; // Smaller batch size to avoid hitting 1000 record limit
-          for (let i = 0; i < productIds.length; i += stockBatchSize) {
-            const batchIds = productIds.slice(i, i + stockBatchSize);
-
-            const { data: allCompetitorStock, error: competitorStockError } = await supabase
-              .rpc('get_latest_competitor_stock_batch', {
+          // Fetch stock data for each product
+          for (const productId of productIds) {
+            const { data: productStock, error: stockError } = await supabase
+              .rpc('get_latest_competitor_stock', {
                 p_user_id: userId,
-                p_product_ids: batchIds
+                p_product_id: productId
               });
 
-            if (competitorStockError) {
-              console.error('Error fetching competitor stock for batch:', competitorStockError);
+            if (stockError) {
               continue;
             }
 
-            if (allCompetitorStock) {
+            if (productStock) {
               // Filter out our own integration stock - only include actual competitor stock
-              const competitorStock = allCompetitorStock.filter((stock: {
+              const competitorStock = productStock.filter((stock: {
                 competitor_id?: string;
                 integration_id?: string;
                 product_id: string;
@@ -410,8 +397,6 @@ export async function POST(request: NextRequest) {
               }) =>
                 stock.competitor_id && !stock.integration_id
               );
-
-              console.log(`Fetched ${allCompetitorStock.length} total competitor stock records, filtered to ${competitorStock.length} competitor stock`);
 
               // Group by product_id
               competitorStock.forEach((stock: {
@@ -430,9 +415,8 @@ export async function POST(request: NextRequest) {
               });
             }
           }
-          console.log(`Competitor stock grouped for ${competitorStockMap.size} products`);
         } catch (error) {
-          console.error('Error fetching competitor stock:', error);
+          // Error fetching competitor stock
         }
       }
 
@@ -450,7 +434,6 @@ export async function POST(request: NextRequest) {
               });
 
             if (supplierStockError) {
-              console.error('Error fetching supplier stock for batch:', supplierStockError);
               continue;
             }
 
@@ -468,8 +451,6 @@ export async function POST(request: NextRequest) {
               }) =>
                 stock.supplier_id && !stock.integration_id
               );
-
-              console.log(`Fetched ${allSupplierStock.length} total supplier stock records, filtered to ${supplierStock.length} supplier stock`);
 
               // Group by product_id
               supplierStock.forEach((stock: {
@@ -489,9 +470,8 @@ export async function POST(request: NextRequest) {
               });
             }
           }
-          console.log(`Supplier stock grouped for ${supplierStockMap.size} products`);
         } catch (error) {
-          console.error('Error fetching supplier stock:', error);
+          // Error fetching supplier stock
         }
       }
     }
@@ -718,7 +698,6 @@ export async function POST(request: NextRequest) {
       headers: headers_response
     });
   } catch (error) {
-    console.error("Error generating products CSV:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unknown error" },
       { status: 500 }

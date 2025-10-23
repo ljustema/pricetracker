@@ -110,7 +110,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(validationResult);
 
   } catch (error) {
-    console.error("Error in POST /api/scrapers/validate-script:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error occurred during validation request.";
     // Ensure the response adheres to ValidationResponse structure even on errors
     const errorResponse: ValidationResponse = {

@@ -20,7 +20,6 @@ export async function POST(_req: NextRequest) {
     const { data, error } = await supabase.rpc('cleanup_stalled_integration_runs');
     
     if (error) {
-      console.error('Error calling cleanup function:', error);
       return NextResponse.json(
         { error: 'Failed to cleanup stalled integration runs' },
         { status: 500 }
@@ -69,7 +68,6 @@ export async function GET(_req: NextRequest) {
       .order('started_at', { ascending: true });
 
     if (error) {
-      console.error('Error fetching integration runs:', error);
       return NextResponse.json(
         { error: 'Failed to fetch integration runs' },
         { status: 500 }

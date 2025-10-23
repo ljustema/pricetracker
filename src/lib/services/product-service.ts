@@ -666,6 +666,7 @@ export async function getLatestCompetitorStock(
 
 /**
  * Get stock changes for multiple products in a single batch query
+ * Falls back to individual queries since batch function doesn't exist
  */
 export async function getLatestCompetitorStockBatch(
   userId: string,
@@ -675,20 +676,23 @@ export async function getLatestCompetitorStockBatch(
   const uuid = ensureUUID(userId);
 
   try {
-    const { data, error } = await supabase
-      .rpc('get_latest_competitor_stock_batch', {
-        p_user_id: uuid,
-        p_product_ids: productIds
-      });
+    // Fetch stock data for each product individually
+    const allStockData: StockChange[] = [];
 
-    if (error) {
-      console.error("Error fetching batch stock:", error);
-      return [];
+    for (const productId of productIds) {
+      const { data, error } = await supabase
+        .rpc('get_latest_competitor_stock', {
+          p_user_id: uuid,
+          p_product_id: productId
+        });
+
+      if (!error && data) {
+        allStockData.push(...data);
+      }
     }
 
-    return data || [];
+    return allStockData;
   } catch (error) {
-    console.error("Unexpected error fetching batch stock:", error);
     return [];
   }
 }
