@@ -54,6 +54,15 @@ export function IntegrationCard({
       };
     }
 
+    // Check if integration is inactive (disabled by user)
+    if (!integration.is_active) {
+      return {
+        color: 'bg-gray-100 text-gray-800 hover:bg-gray-200',
+        icon: <PowerOff className="h-4 w-4 mr-1" />,
+        text: 'Inactive',
+      };
+    }
+
     // Otherwise show the regular status
     switch (integration.status) {
       case 'active':
@@ -232,12 +241,12 @@ export function IntegrationCard({
             <span className="flex items-center">
               {integration.is_active ? (
                 <span className="flex items-center text-green-600">
-                  <Power className="h-3 w-3 mr-1" />
+                  <CheckCircle className="h-3 w-3 mr-1" />
                   Active
                 </span>
               ) : (
                 <span className="flex items-center text-gray-500">
-                  <PowerOff className="h-3 w-3 mr-1" />
+                  <AlertCircle className="h-3 w-3 mr-1" />
                   Inactive
                 </span>
               )}

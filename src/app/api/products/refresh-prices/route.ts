@@ -31,16 +31,34 @@ export async function POST(_request: NextRequest) {
     const startTime = Date.now();
 
     // Call the database function to refresh the materialized view with extended timeout
-    const { error } = await supabase.rpc('refresh_latest_competitor_prices_mv', {}, {
-      timeout: 300000 // 5 minutes timeout
-    });
+    // Use AbortSignal.timeout() for request timeout (5 minutes)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes timeout
 
-    if (error) {
-      console.error('❌ [REFRESH PRICES] Error refreshing prices:', error);
-      return NextResponse.json(
-        { error: 'Failed to refresh prices', details: error.message },
-        { status: 500 }
-      );
+    try {
+      const { error } = await supabase.rpc('refresh_latest_competitor_prices_mv', {});
+
+      clearTimeout(timeoutId);
+
+      if (error) {
+        console.error('❌ [REFRESH PRICES] Error refreshing prices:', error);
+        return NextResponse.json(
+          { error: 'Failed to refresh prices', details: error.message },
+          { status: 500 }
+        );
+      }
+    } catch (rpcError: unknown) {
+      clearTimeout(timeoutId);
+
+      // Check if it's an abort error (timeout)
+      if (rpcError instanceof Error && rpcError.name === 'AbortError') {
+        console.error('❌ [REFRESH PRICES] Request timed out after 5 minutes');
+        return NextResponse.json(
+          { error: 'Refresh request timed out', details: 'The refresh operation took too long to complete' },
+          { status: 504 }
+        );
+      }
+      throw rpcError;
     }
 
     const refreshTime = Date.now() - startTime;
