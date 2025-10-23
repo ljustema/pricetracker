@@ -32,7 +32,6 @@ interface RawProductData {
 // GET handler to fetch all products for the current user
 export async function POST(request: NextRequest) { // Changed from GET to POST
   const startTime = Date.now();
-  console.log('🚀 [PRODUCTS API] Request started at:', new Date().toISOString());
 
   try {
     // Get the current user from the session
@@ -123,22 +122,16 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
     };
 
     // Set a longer statement timeout for complex product queries (especially after cold starts)
-    console.log('⏱️ [PRODUCTS API] Setting statement timeout to 45 seconds...');
     await supabase.rpc('set_statement_timeout', { p_milliseconds: 45000 }); // 45 seconds
-    console.log('⏱️ [PRODUCTS API] Statement timeout set');
 
     // Execute the RPC call with optimized approach for first page
-    console.log('🔍 [PRODUCTS API] Calling get_products_filtered RPC with params:', JSON.stringify(rpcParams, null, 2));
-    const rpcStartTime = Date.now();
 
     // Declare finalResult outside the if blocks
     let finalResult;
 
     try {
       // Use the optimized get_products_filtered function for all pages
-      console.log('🚀 [PRODUCTS API] Calling get_products_filtered for page', rpcParams.p_page);
       const { data: rpcResult, error } = await supabase.rpc('get_products_filtered', rpcParams);
-      console.log('🔍 [PRODUCTS API] RPC call completed in:', Date.now() - rpcStartTime, 'ms');
 
       if (error) {
         throw error;
@@ -146,8 +139,6 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
 
       finalResult = rpcResult;
     } catch (error: unknown) {
-      console.error("❌ [PRODUCTS API] Error calling RPC:", error);
-      console.error("❌ [PRODUCTS API] Total request time before error:", Date.now() - startTime, 'ms');
 
       // Type guard for error object
       const dbError = error as { code?: string; message?: string };
@@ -189,16 +180,11 @@ export async function POST(request: NextRequest) { // Changed from GET to POST
     }
 
     if (typeof finalResult === 'undefined') {
-      console.error("❌ [PRODUCTS API] No result obtained from RPC calls");
-      console.error("❌ [PRODUCTS API] Total request time before error:", Date.now() - startTime, 'ms');
-
       return NextResponse.json(
         { error: "Failed to fetch products" },
         { status: 500 }
       );
     }
-
-    console.log('✅ [PRODUCTS API] RPC call successful, processing result...');
 
 
 

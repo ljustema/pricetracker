@@ -209,10 +209,10 @@ const SCRIPT_TIMEOUT_SECONDS = 7200; // Timeout for script execution (2 hours) -
 const DB_BATCH_SIZE = 100; // How many products to buffer before saving to DB
 const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 
-console.log(`Starting TypeScript Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
-
-// Simple memory logging
+// Simple memory logging (disabled for production)
 function logMemoryUsage(context: string) {
+  // Memory logging disabled
+  return;
   const memUsage = process.memoryUsage();
   const memMB = {
     rss: Math.round(memUsage.rss / 1024 / 1024),
@@ -241,25 +241,18 @@ async function fetchAndProcessJob() {
   try {
     // RACE CONDITION PROTECTION: Skip if already processing a job
     if (isProcessingJob) {
-      console.log(`Skipping poll - already processing job ${currentJobId}`);
       return;
     }
 
     // Periodically check for long periods of inactivity and log health status
     const currentTime = Date.now();
     if (currentTime - lastHealthCheckTime > HEALTH_CHECK_INTERVAL_MS) {
-      const inactivityDuration = (currentTime - lastJobTime) / 1000; // Convert to seconds
-      console.log(`Worker health check: ${inactivityDuration.toFixed(1)} seconds since last job processed. Worker is still running.`);
-
-      // Simple memory monitoring during health checks
-      logMemoryUsage('Health check');
-
+      // Health check logging disabled
       lastHealthCheckTime = currentTime;
     }
 
     // Only log polling message once every minute to reduce noise
     if (currentTime - lastPollMessageTime > 60000) { // 1 minute
-      console.log('Polling for pending jobs...');
       lastPollMessageTime = currentTime;
     }
 
@@ -1762,43 +1755,40 @@ async function saveScrapedProducts(runId: string, userId: string, scraperId: str
 // Main polling loop
 function startPolling() {
   // Run once immediately, then set interval
-  fetchAndProcessJob().catch(err => console.error("Initial poll failed:", err));
+  fetchAndProcessJob().catch(err => {
+    // Error logging disabled
+  });
 
   const intervalId = setInterval(() => {
-    fetchAndProcessJob().catch(err => console.error("Polling cycle failed:", err));
+    fetchAndProcessJob().catch(err => {
+      // Error logging disabled
+    });
   }, POLLING_INTERVAL_MS);
 
   // Graceful shutdown handling (optional but recommended)
   const shutdown = () => {
-    console.log('Shutting down worker...');
     clearInterval(intervalId);
     // Add any other cleanup logic here (e.g., close DB connections if needed)
     process.exit(0);
   };
 
   process.on('SIGINT', () => {
-    console.log('SIGINT received.');
     shutdown();
    });
   process.on('SIGTERM', () => {
-     console.log('SIGTERM received.');
      shutdown();
   });
 } // End of startPolling function
 
 // --- Initialization ---
 async function initializeWorker() {
-  console.log('🚀 Initializing TypeScript Worker...');
-
   // Test Supabase connection before starting the main loop
   const connectionOk = await testSupabaseConnection();
 
   if (!connectionOk) {
-    console.error('❌ Failed to establish Supabase connection. Worker will not start.');
     process.exit(1);
   }
 
-  console.log('✅ Worker initialization complete. Starting polling loop...');
   startPolling(); // Start the worker polling loop
 }
 

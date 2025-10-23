@@ -35,8 +35,6 @@ export default function ProductsContent({
   onComplexFilterChange, // Receive callback
 }: ProductsContentProps) {
 
-  console.log('🏗️ [FRONTEND] ProductsContent component rendered at:', new Date().toISOString());
-
   // Use state for dynamic data
   const [products, setProducts] = useState<Product[]>([]);
   const [totalProductCount, setTotalProductCount] = useState(0);
@@ -98,14 +96,11 @@ export default function ProductsContent({
     const _maxRetries = 3;
     const fetchStartTime = Date.now();
 
-    console.log('🚀 [FRONTEND] fetchProducts called at:', new Date().toISOString(), 'retryCount:', retryCount);
-
     // Create a unique key for current parameters to prevent duplicate requests
     const currentParamsKey = JSON.stringify({ urlParams, filterParams, itemsPerPage });
 
     // If we're already fetching with the same parameters, skip
     if (isFetchingRef.current && lastFetchParamsRef.current === currentParamsKey && retryCount === 0) {
-      console.log('🚫 [FRONTEND] Skipping duplicate request');
       return;
     }
 
@@ -187,10 +182,6 @@ export default function ProductsContent({
         // Add a cache-busting parameter to the URL if refreshParam is present
         const cacheBuster = urlParams.refresh ? `?t=${urlParams.refresh}` : '';
 
-        console.log('🌐 [FRONTEND] Making fetch request to:', `${apiUrl}${cacheBuster}`);
-        console.log('🌐 [FRONTEND] Request payload:', JSON.stringify(payload, null, 2));
-
-        const fetchRequestStart = Date.now();
         const response = await fetch(`${apiUrl}${cacheBuster}`, { // Use base URL with cache buster
           method: 'POST', // Specify POST method
           headers: fetchHeaders,
@@ -198,19 +189,12 @@ export default function ProductsContent({
           cache: 'no-store',
         });
 
-        console.log('🌐 [FRONTEND] Fetch request completed in:', Date.now() - fetchRequestStart, 'ms');
-        console.log('🌐 [FRONTEND] Response status:', response.status, response.statusText);
-
         if (!response.ok) {
           const errorData = await response.json();
-          console.error('❌ [FRONTEND] API Error:', response.status, errorData);
           throw new Error(`API Error (${response.status}): ${errorData.error || response.statusText}`);
         }
 
-        const responseParseStart = Date.now();
         const { data: apiProducts, totalCount: apiTotalCount } = await response.json();
-        console.log('📊 [FRONTEND] Response parsed in:', Date.now() - responseParseStart, 'ms');
-        console.log('📊 [FRONTEND] Received', apiProducts?.length || 0, 'products, total count:', apiTotalCount);
 
         // IMPORTANT: Transform competitor_prices from API response if needed
         // Assuming API returns the object format { competitor_id: price }
@@ -256,11 +240,7 @@ export default function ProductsContent({
           }
         }
 
-        console.log('✅ [FRONTEND] Products fetch completed successfully in:', Date.now() - fetchStartTime, 'ms');
-
       } catch (err) {
-        console.error("❌ [FRONTEND] Error fetching products content:", err);
-        console.error("❌ [FRONTEND] Total time before error:", Date.now() - fetchStartTime, 'ms');
 
         // Parse error response if it's a fetch error
         let errorMessage = "An unknown error occurred loading product data.";
@@ -335,7 +315,6 @@ export default function ProductsContent({
   ]);
 
   useEffect(() => {
-    console.log('🎯 [FRONTEND] useEffect triggered, calling fetchProducts');
     fetchProducts(0); // Start with retry count 0
   }, [fetchProducts]);
 

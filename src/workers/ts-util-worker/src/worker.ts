@@ -21,11 +21,8 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !supabaseServiceRoleKey) {
-  console.error('Missing Supabase URL or Service Role Key environment variables.');
   process.exit(1);
 }
-
-console.log('Using Supabase URL:', supabaseUrl);
 
 // Using unknown for database types as specific types are not available
 const supabase = createClient<unknown>(supabaseUrl, supabaseServiceRoleKey);
@@ -64,8 +61,6 @@ interface ClaimedIntegrationJobData {
 
 const POLLING_INTERVAL_MS = 30000; // Poll every 30 seconds (reduced from 5 seconds)
 const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
-
-console.log(`Starting TypeScript Utility Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
 
 // Interface for sync results
 interface _SyncResult {
