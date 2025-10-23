@@ -30,15 +30,15 @@ export async function POST(_request: NextRequest) {
     console.log(`🔄 [REFRESH PRICES] Starting refresh for user ${session.user.id}`);
     const startTime = Date.now();
 
-    // Call the database function to refresh the materialized view with extended timeout
-    // Use AbortSignal.timeout() for request timeout (5 minutes)
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes timeout
-
     try {
-      const { error } = await supabase.rpc('refresh_latest_competitor_prices_mv', {});
+      // First, set a longer statement timeout (5 minutes = 300000 ms)
+      console.log('⏱️ [REFRESH PRICES] Setting statement timeout to 5 minutes...');
+      await supabase.rpc('set_statement_timeout', { p_milliseconds: 300000 });
+      console.log('✅ [REFRESH PRICES] Statement timeout set');
 
-      clearTimeout(timeoutId);
+      // Call the database function to refresh the materialized view
+      console.log('🔄 [REFRESH PRICES] Calling refresh_latest_competitor_prices_mv...');
+      const { error } = await supabase.rpc('refresh_latest_competitor_prices_mv', {});
 
       if (error) {
         console.error('❌ [REFRESH PRICES] Error refreshing prices:', error);
@@ -48,13 +48,14 @@ export async function POST(_request: NextRequest) {
         );
       }
     } catch (rpcError: unknown) {
-      clearTimeout(timeoutId);
+      console.error('❌ [REFRESH PRICES] Error during refresh:', rpcError);
 
-      // Check if it's an abort error (timeout)
-      if (rpcError instanceof Error && rpcError.name === 'AbortError') {
-        console.error('❌ [REFRESH PRICES] Request timed out after 5 minutes');
+      // Check if it's a timeout error
+      const errorMessage = rpcError instanceof Error ? rpcError.message : 'Unknown error';
+      if (errorMessage.includes('statement timeout') || errorMessage.includes('canceling statement')) {
+        console.error('❌ [REFRESH PRICES] Request timed out');
         return NextResponse.json(
-          { error: 'Refresh request timed out', details: 'The refresh operation took too long to complete' },
+          { error: 'Refresh request timed out', details: 'The refresh operation took too long to complete. This may happen if there are many products to process.' },
           { status: 504 }
         );
       }
