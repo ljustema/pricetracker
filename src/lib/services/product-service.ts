@@ -692,7 +692,7 @@ export async function getLatestCompetitorStockBatch(
     }
 
     return allStockData;
-  } catch (error) {
+  } catch (_error) {
     return [];
   }
 }

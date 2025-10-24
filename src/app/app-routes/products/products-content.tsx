@@ -94,7 +94,7 @@ export default function ProductsContent({
   // Function to fetch products based on current searchParams with retry logic
   const fetchProducts = useCallback(async (retryCount = 0) => {
     const _maxRetries = 3;
-    const fetchStartTime = Date.now();
+    const _fetchStartTime = Date.now();
 
     // Create a unique key for current parameters to prevent duplicate requests
     const currentParamsKey = JSON.stringify({ urlParams, filterParams, itemsPerPage });

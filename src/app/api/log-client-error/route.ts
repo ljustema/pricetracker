@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     await fs.appendFile(LOG_FILE, logEntry, "utf8");
 
     return NextResponse.json({ success: true });
-  } catch (err) {
+  } catch (_err) {
     return NextResponse.json({ error: "Failed to log client error" }, { status: 500 });
   }
 }

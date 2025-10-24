@@ -313,7 +313,7 @@ export async function POST(request: NextRequest) {
               });
             }
           }
-        } catch (error) {
+        } catch (_error) {
           // Error fetching competitor prices
         }
       }
@@ -364,7 +364,7 @@ export async function POST(request: NextRequest) {
               });
             }
           }
-        } catch (error) {
+        } catch (_error) {
           // Error fetching supplier prices
         }
       }
@@ -415,7 +415,7 @@ export async function POST(request: NextRequest) {
               });
             }
           }
-        } catch (error) {
+        } catch (_error) {
           // Error fetching competitor stock
         }
       }
@@ -470,7 +470,7 @@ export async function POST(request: NextRequest) {
               });
             }
           }
-        } catch (error) {
+        } catch (_error) {
           // Error fetching supplier stock
         }
       }
