@@ -2,68 +2,92 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/options';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createSupabaseAdminClient } from '@/lib/supabase/server';
+
+const CONTEXT = 'API:refresh-prices';
 
 /**
  * POST /api/products/refresh-prices
- * 
+ *
  * Refreshes the materialized view containing the latest competitor prices.
- * This endpoint should be called when the user wants to see the most up-to-date prices.
- * 
+ * This endpoint starts the refresh operation asynchronously and returns immediately.
+ * The actual refresh happens in the background to avoid HTTP timeouts.
+ *
  * Returns:
- * - 200: Success with refresh time
+ * - 202: Accepted - refresh operation started
  * - 401: Unauthorized
  * - 500: Server error
  */
+
+// Background refresh function that runs without blocking the HTTP response
+async function performRefreshInBackground(userId: string): Promise<void> {
+  const startTime = Date.now();
+  console.log(`[${CONTEXT}] Starting background refresh for user ${userId}`);
+
+  try {
+    // Use admin client for background operations
+    const supabase = createSupabaseAdminClient();
+
+    console.log(`[${CONTEXT}] Calling refresh_latest_competitor_prices_mv_with_timeout with 15-minute timeout`);
+
+    const { error } = await supabase.rpc('refresh_latest_competitor_prices_mv_with_timeout', {
+      p_timeout_ms: 900000 // 15 minutes
+    });
+
+    const elapsedTime = Date.now() - startTime;
+
+    if (error) {
+      console.error(`[${CONTEXT}] RPC returned error after ${elapsedTime}ms: ${error.message}`);
+      return;
+    }
+
+    console.log(`[${CONTEXT}] Refresh completed successfully in ${elapsedTime}ms (${(elapsedTime / 1000).toFixed(2)}s)`);
+  } catch (error: unknown) {
+    const elapsedTime = Date.now() - startTime;
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[${CONTEXT}] Background refresh failed after ${elapsedTime}ms: ${errorMessage}`);
+  }
+}
+
 export async function POST(_request: NextRequest) {
   try {
+    console.log(`[${CONTEXT}] Received refresh request`);
+
     // Check authentication
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
+      console.warn(`[${CONTEXT}] Unauthorized request - no session`);
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const supabase = await createSupabaseServerClient();
-    const startTime = Date.now();
+    const userId = session.user.id;
+    console.log(`[${CONTEXT}] Authenticated user: ${userId}`);
 
-    try {
-      // Call the database function to refresh the materialized view with a 15-minute timeout
-      // The timeout is set within the function itself to ensure it applies to the refresh operation
-      const { error } = await supabase.rpc('refresh_latest_competitor_prices_mv_with_timeout', {
-        p_timeout_ms: 900000
-      });
-
-      if (error) {
-        return NextResponse.json(
-          { error: 'Failed to refresh prices', details: error.message },
-          { status: 500 }
-        );
-      }
-    } catch (rpcError: unknown) {
-      // Check if it's a timeout error
-      const errorMessage = rpcError instanceof Error ? rpcError.message : 'Unknown error';
-      if (errorMessage.includes('statement timeout') || errorMessage.includes('canceling statement')) {
-        return NextResponse.json(
-          { error: 'Refresh request timed out', details: 'The refresh operation took too long to complete. This may happen if there are many products to process.' },
-          { status: 504 }
-        );
-      }
-      throw rpcError;
-    }
-
-    const refreshTime = Date.now() - startTime;
-
-    return NextResponse.json({
-      success: true,
-      message: 'Prices refreshed successfully',
-      refreshTime: `${(refreshTime / 1000).toFixed(2)}s`,
-      timestamp: new Date().toISOString()
+    // Start the refresh in the background WITHOUT awaiting it
+    // This allows us to return immediately to the client
+    console.log(`[${CONTEXT}] Starting background refresh task`);
+    performRefreshInBackground(userId).catch((error) => {
+      console.error(`[${CONTEXT}] Unhandled error in background refresh: ${error}`);
     });
+
+    // Return immediately with 202 Accepted status
+    console.log(`[${CONTEXT}] Returning 202 Accepted response to client`);
+    return NextResponse.json(
+      {
+        success: true,
+        message: 'Refresh operation started in background',
+        status: 'processing',
+        timestamp: new Date().toISOString()
+      },
+      { status: 202 }
+    );
 
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+    console.error(`[${CONTEXT}] Unexpected error: ${errorMessage}`);
     return NextResponse.json(
       { error: 'Internal server error', details: errorMessage },
       { status: 500 }

@@ -37,6 +37,7 @@ export default function ProductsHeader() {
     setRefreshMessage(null);
 
     try {
+      console.log('[FRONTEND] Starting fetch with params: Object');
       const response = await fetch('/api/products/refresh-prices', {
         method: 'POST',
         headers: {
@@ -44,12 +45,33 @@ export default function ProductsHeader() {
         },
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.details || 'Failed to refresh prices');
+      const data = await response.json();
+
+      // Handle 202 Accepted - refresh started in background
+      if (response.status === 202) {
+        console.log('[FRONTEND] Refresh started in background (202 Accepted)');
+        setRefreshMessage({
+          type: 'success',
+          text: `⏳ Refresh started in background. This may take several minutes. The page will update automatically.`
+        });
+
+        // Keep the message visible longer since the operation is still running
+        setTimeout(() => setRefreshMessage(null), 8000);
+
+        // Reload the page after a delay to show updated prices
+        // Wait 30 seconds to give the background task time to complete
+        setTimeout(() => {
+          console.log('[FRONTEND] Reloading page to show updated prices');
+          window.location.reload();
+        }, 30000);
+
+        return;
       }
 
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.details || 'Failed to refresh prices');
+      }
+
       setRefreshMessage({
         type: 'success',
         text: `✅ Prices updated successfully (${data.refreshTime})`
@@ -62,11 +84,11 @@ export default function ProductsHeader() {
       window.location.reload();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[FRONTEND] Error refreshing prices:', error);
       setRefreshMessage({
         type: 'error',
         text: `❌ Failed to refresh prices: ${errorMessage}`
       });
-      console.error('Error refreshing prices:', error);
     } finally {
       setIsRefreshingPrices(false);
     }
