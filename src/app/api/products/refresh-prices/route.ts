@@ -18,33 +18,40 @@ const CONTEXT = 'API:refresh-prices';
  * - 500: Server error
  */
 
-// Background refresh function that runs without blocking the HTTP response
-async function performRefreshInBackground(userId: string): Promise<void> {
+// Trigger refresh function that returns immediately without waiting
+async function triggerRefreshInDatabase(userId: string): Promise<void> {
   const startTime = Date.now();
-  console.log(`[${CONTEXT}] Starting background refresh for user ${userId}`);
+  console.log(`[${CONTEXT}] Triggering refresh for user ${userId}`);
 
   try {
     // Use admin client for background operations
     const supabase = createSupabaseAdminClient();
 
-    console.log(`[${CONTEXT}] Calling refresh_latest_competitor_prices_mv_with_timeout with 15-minute timeout`);
+    console.log(`[${CONTEXT}] Calling trigger_mv_refresh_async to start refresh in database`);
 
-    const { error } = await supabase.rpc('refresh_latest_competitor_prices_mv_with_timeout', {
-      p_timeout_ms: 900000 // 15 minutes
+    const { data, error } = await supabase.rpc('trigger_mv_refresh_async', {
+      p_view_name: 'latest_product_data_mv'
     });
 
     const elapsedTime = Date.now() - startTime;
 
     if (error) {
-      console.error(`[${CONTEXT}] RPC returned error after ${elapsedTime}ms: ${error.message}`);
+      console.error(`[${CONTEXT}] Failed to trigger refresh after ${elapsedTime}ms: ${error.message}`);
       return;
     }
 
-    console.log(`[${CONTEXT}] Refresh completed successfully in ${elapsedTime}ms (${(elapsedTime / 1000).toFixed(2)}s)`);
+    if (data && data.length > 0) {
+      const result = data[0];
+      if (result.is_already_refreshing) {
+        console.log(`[${CONTEXT}] Refresh already in progress, skipping trigger`);
+      } else {
+        console.log(`[${CONTEXT}] Refresh triggered successfully in ${elapsedTime}ms`);
+      }
+    }
   } catch (error: unknown) {
     const elapsedTime = Date.now() - startTime;
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error(`[${CONTEXT}] Background refresh failed after ${elapsedTime}ms: ${errorMessage}`);
+    console.error(`[${CONTEXT}] Failed to trigger refresh after ${elapsedTime}ms: ${errorMessage}`);
   }
 }
 
@@ -65,11 +72,11 @@ export async function POST(_request: NextRequest) {
     const userId = session.user.id;
     console.log(`[${CONTEXT}] Authenticated user: ${userId}`);
 
-    // Start the refresh in the background WITHOUT awaiting it
+    // Trigger the refresh in the database WITHOUT awaiting it
     // This allows us to return immediately to the client
-    console.log(`[${CONTEXT}] Starting background refresh task`);
-    performRefreshInBackground(userId).catch((error) => {
-      console.error(`[${CONTEXT}] Unhandled error in background refresh: ${error}`);
+    console.log(`[${CONTEXT}] Triggering refresh task in database`);
+    triggerRefreshInDatabase(userId).catch((error) => {
+      console.error(`[${CONTEXT}] Unhandled error triggering refresh: ${error}`);
     });
 
     // Return immediately with 202 Accepted status

@@ -31,6 +31,20 @@ export default function ProductsHeader() {
     }
   };
 
+  // Function to check refresh status
+  const checkRefreshStatus = async (): Promise<boolean> => {
+    try {
+      const response = await fetch('/api/products/refresh-prices-status');
+      if (response.ok) {
+        const data = await response.json();
+        return data.status?.is_refreshing || false;
+      }
+    } catch (error) {
+      console.error('[FRONTEND] Error checking refresh status:', error);
+    }
+    return false;
+  };
+
   // Function to refresh competitor prices
   const handleRefreshPrices = async () => {
     setIsRefreshingPrices(true);
@@ -52,18 +66,37 @@ export default function ProductsHeader() {
         console.log('[FRONTEND] Refresh started in background (202 Accepted)');
         setRefreshMessage({
           type: 'success',
-          text: `⏳ Refresh started in background. This may take several minutes. The page will update automatically.`
+          text: `⏳ Refresh started in background. This may take several minutes. Checking status...`
         });
 
-        // Keep the message visible longer since the operation is still running
-        setTimeout(() => setRefreshMessage(null), 8000);
+        // Poll for refresh completion
+        let isStillRefreshing = true;
+        let pollCount = 0;
+        const maxPolls = 120; // 2 minutes of polling (1 second intervals)
 
-        // Reload the page after a delay to show updated prices
-        // Wait 30 seconds to give the background task time to complete
-        setTimeout(() => {
-          console.log('[FRONTEND] Reloading page to show updated prices');
-          window.location.reload();
-        }, 30000);
+        const pollInterval = setInterval(async () => {
+          pollCount++;
+          isStillRefreshing = await checkRefreshStatus();
+
+          if (!isStillRefreshing || pollCount >= maxPolls) {
+            clearInterval(pollInterval);
+
+            if (isStillRefreshing && pollCount >= maxPolls) {
+              console.log('[FRONTEND] Refresh still in progress after 2 minutes, reloading anyway');
+            } else {
+              console.log('[FRONTEND] Refresh completed, reloading page');
+            }
+
+            setRefreshMessage({
+              type: 'success',
+              text: `✅ Refresh completed! Reloading page...`
+            });
+
+            setTimeout(() => {
+              window.location.reload();
+            }, 1000);
+          }
+        }, 1000);
 
         return;
       }
@@ -74,7 +107,7 @@ export default function ProductsHeader() {
 
       setRefreshMessage({
         type: 'success',
-        text: `✅ Prices updated successfully (${data.refreshTime})`
+        text: `✅ Prices updated successfully`
       });
 
       // Clear message after 3 seconds
