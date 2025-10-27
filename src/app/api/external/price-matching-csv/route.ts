@@ -57,6 +57,11 @@ export async function GET(request: NextRequest) {
 
     const userId = ensureUUID(keyValidation[0].user_id);
 
+    // Update last_used_at timestamp for this API key
+    await supabase.rpc('update_api_key_usage', {
+      p_api_key: apiKey
+    });
+
     // Parse query parameters for filtering
     const url = new URL(request.url);
     const competitorId = url.searchParams.get('competitor_id');
