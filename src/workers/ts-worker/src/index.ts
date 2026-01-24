@@ -918,6 +918,10 @@ async function fetchAndProcessJob() {
                     const errorLine = line.substring(6).trim();
                     logStructured(job.id, 'error', 'SCRIPT_LOG', errorLine);
                     scriptErrors.push(errorLine);
+                } else if (line.startsWith("WARNING:") && job) {
+                    // Log warnings but don't add to scriptErrors (they shouldn't fail the job)
+                    const warningLine = line.substring(8).trim();
+                    logStructured(job.id, 'warn', 'SCRIPT_WARNING', warningLine);
                 } else if (
                     job && (
                     line.includes("Error:") ||
@@ -934,9 +938,22 @@ async function fetchAndProcessJob() {
                     line.includes("Cannot read properties")
                     )
                 ) {
-                    // Capture error-like messages that don't have the ERROR: prefix
-                    logStructured(job.id, 'error', 'SCRIPT_ERROR', line);
-                    scriptErrors.push(line);
+                    // Filter out common warnings that shouldn't fail the job
+                    const isWarning =
+                        line.includes("Missing essential data") || // Scraper warnings about incomplete products
+                        line.includes("baseline-browser-mapping") || // Crawlee update warnings
+                        line.includes("data in this module is over") || // Crawlee update warnings
+                        line.includes("DeprecationWarning") || // Node.js deprecation warnings
+                        line.includes("ExperimentalWarning"); // Node.js experimental feature warnings
+
+                    if (isWarning) {
+                        // Log as warning, not error
+                        logStructured(job.id, 'warn', 'SCRIPT_WARNING', line);
+                    } else {
+                        // Capture error-like messages that don't have the ERROR: prefix
+                        logStructured(job.id, 'error', 'SCRIPT_ERROR', line);
+                        scriptErrors.push(line);
+                    }
                 } else if (line.includes("at ") && (line.includes(".js:") || line.includes(".ts:")) && job) {
                     // This looks like a stack trace line
                     logStructured(job.id, 'debug', 'SCRIPT_STACKTRACE', line);
@@ -1158,28 +1175,46 @@ async function fetchAndProcessJob() {
                         finalStatus = 'completed';
                         logStructured(job.id, 'info', 'JOB_COMPLETION', `Test run completed successfully. Total products processed: ${productCount}`);
                     } else if (scriptErrors.length > 0) {
-                        finalStatus = 'failed';
-                        errorMessage = `Script finished successfully (exit code 0) but reported errors via stderr.`;
-                        errorDetails = scriptErrors.join('\n');
-                        logStructured(job.id, 'error', 'JOB_COMPLETION', errorMessage);
+                        // Only fail if we have actual errors AND very few products were scraped
+                        // This prevents failing jobs that had minor issues but still scraped successfully
+                        const hasSignificantErrors = scriptErrors.some(err =>
+                            err.includes("TypeError:") ||
+                            err.includes("ReferenceError:") ||
+                            err.includes("SyntaxError:") ||
+                            err.includes("Cannot find module") ||
+                            err.includes("is not defined") ||
+                            err.includes("is not a function")
+                        );
 
-                        // Create a more structured error details object
-                        const errorDetailsObj = {
-                            scriptErrors: scriptErrors,
-                            command: `${command} ${args.join(' ')}`,
-                            timestamp: new Date().toISOString(),
-                            fullStderr: stderrData.trim(),
-                            primaryError: scriptErrors.length > 0 ? scriptErrors[0] : 'Unknown error',
-                            contextInfo: {
-                                isTestRun: job.is_test_run,
-                                scraperId: job.scraper_id,
-                                runId: job.id,
-                                scriptPath: tmpScriptPath
-                            }
-                        };
+                        // If we have significant errors OR no products were scraped, mark as failed
+                        if (hasSignificantErrors || productCount === 0) {
+                            finalStatus = 'failed';
+                            errorMessage = `Script finished with exit code 0 but encountered ${scriptErrors.length} error(s).`;
+                            errorDetails = scriptErrors.join('\n');
+                            logStructured(job.id, 'error', 'JOB_COMPLETION', errorMessage);
 
-                        // Convert to string for storage
-                        errorDetails = JSON.stringify(errorDetailsObj, null, 2);
+                            // Create a more structured error details object
+                            const errorDetailsObj = {
+                                scriptErrors: scriptErrors,
+                                command: `${command} ${args.join(' ')}`,
+                                timestamp: new Date().toISOString(),
+                                fullStderr: stderrData.trim(),
+                                primaryError: scriptErrors.length > 0 ? scriptErrors[0] : 'Unknown error',
+                                contextInfo: {
+                                    isTestRun: job.is_test_run,
+                                    scraperId: job.scraper_id,
+                                    runId: job.id,
+                                    scriptPath: tmpScriptPath
+                                }
+                            };
+
+                            // Convert to string for storage
+                            errorDetails = JSON.stringify(errorDetailsObj, null, 2);
+                        } else {
+                            // Script had minor errors but still scraped products successfully
+                            finalStatus = 'completed';
+                            logStructured(job.id, 'info', 'JOB_COMPLETION', `Job completed with ${scriptErrors.length} minor error(s). Total products processed: ${productCount}`);
+                        }
                     } else {
                         // Script exited with code 0 and no errors - mark as completed
                         finalStatus = 'completed';
