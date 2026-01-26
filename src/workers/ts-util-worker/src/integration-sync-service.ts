@@ -740,6 +740,27 @@ export class IntegrationSyncService {
       // Simple approach: Enable the auto-processing trigger to handle records automatically
       this.log('info', 'PROCESSING_START', 'Records will be processed automatically by database trigger');
 
+      // Run cleanup to remove our_* fields from products no longer in integration
+      this.log('info', 'CLEANUP_START', 'Running cleanup for removed products');
+      try {
+        const { data: cleanupResult, error: cleanupError } = await this.supabase
+          .rpc('cleanup_removed_integration_products', { p_integration_run_id: this.runId });
+
+        if (cleanupError) {
+          this.log('error', 'CLEANUP_ERROR', `Cleanup failed: ${cleanupError.message}`);
+          // Don't fail the entire sync if cleanup fails
+        } else if (cleanupResult && Array.isArray(cleanupResult) && cleanupResult.length > 0) {
+          const cleaned = (cleanupResult[0] as { cleaned_count?: number }).cleaned_count || 0;
+          const deleted = (cleanupResult[0] as { deleted_temp_records?: number }).deleted_temp_records || 0;
+          this.log('info', 'CLEANUP_COMPLETE',
+            `Cleanup complete: ${cleaned} products cleared, ${deleted} temp records deleted`);
+        }
+      } catch (error) {
+        this.log('error', 'CLEANUP_EXCEPTION',
+          `Cleanup exception: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        // Don't fail the entire sync if cleanup fails
+      }
+
       // Update run status to completed
       await this.updateRunStatus('completed', {
         productsProcessed: result.productsProcessed,
