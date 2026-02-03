@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
 
     // Parse query parameters
     const url = new URL(request.url);
-    const days = parseInt(url.searchParams.get('days') || '30');
+    const days = parseInt(url.searchParams.get('days') || '7'); // Changed from 30 to 7 days default
     const competitorIds = url.searchParams.get('competitor_ids');
 
     console.time('api-competitor-analysis-price-change-frequency');
