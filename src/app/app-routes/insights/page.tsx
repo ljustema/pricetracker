@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { ensureUUID } from '@/lib/utils/uuid';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import InsightsComponent from '@/components/insights/InsightsComponent';
+import InsightsHeader from '@/components/insights/InsightsHeader';
 
 export const metadata = {
   title: 'Insights | PriceTracker',
@@ -94,7 +95,7 @@ export default async function InsightsPage() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold mb-6">Insights</h1>
+      <InsightsHeader />
       <InsightsComponent stockData={stockData} />
     </div>
   );
