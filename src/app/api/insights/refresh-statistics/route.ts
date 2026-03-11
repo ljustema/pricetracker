@@ -8,7 +8,7 @@ const CONTEXT = 'API:refresh-statistics';
 /**
  * POST /api/insights/refresh-statistics
  *
- * Refreshes the materialized view containing brand statistics.
+ * Refreshes the materialized view containing brand statistics and updates price snapshots.
  * This endpoint starts the refresh operation asynchronously and returns immediately.
  * The actual refresh happens in the background to avoid HTTP timeouts.
  *
@@ -48,6 +48,26 @@ async function triggerRefreshInDatabase(userId: string): Promise<void> {
         console.log(`[${CONTEXT}] Refresh triggered successfully in ${elapsedTime}ms`);
       }
     }
+
+    // Also update price competitiveness snapshots
+    console.log(`[${CONTEXT}] Updating price competitiveness snapshots for today`);
+    const snapshotStartTime = Date.now();
+
+    const { error: snapshotError } = await supabase.rpc('calculate_daily_price_competitiveness_snapshot', {
+      p_user_id: userId,
+      p_snapshot_date: new Date().toISOString().split('T')[0],
+      p_competitor_id: null,
+      p_brand_filter: null
+    });
+
+    const snapshotElapsedTime = Date.now() - snapshotStartTime;
+
+    if (snapshotError) {
+      console.error(`[${CONTEXT}] Failed to update snapshots after ${snapshotElapsedTime}ms: ${snapshotError.message}`);
+    } else {
+      console.log(`[${CONTEXT}] Snapshots updated successfully in ${snapshotElapsedTime}ms`);
+    }
+
   } catch (error: unknown) {
     const elapsedTime = Date.now() - startTime;
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
