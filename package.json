@@ -91,5 +91,8 @@
     "tsconfig-paths": "^4.2.0",
     "typescript": "5.8.3"
   },
-  "overrides": {}
+  "overrides": {},
+  "engines": {
+    "node": ">=20.0.0"
+  }
 }
