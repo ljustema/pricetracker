@@ -18,6 +18,7 @@ interface ScraperRun {
 import { Button } from "@/components/ui/button"; // Import Button component
 import DeleteButton from "@/components/ui/delete-button";
 import ScraperRunHistoryModal from "@/components/scrapers/scraper-run-history-modal"; // Import the modal
+import ScraperHealthBadge from "@/components/scrapers/scraper-health-badge";
 import ActivateButton from "./activate-button"; // Import ActivateButton component
 import { MoreHorizontal } from "lucide-react";
 import {
@@ -218,6 +219,13 @@ export default function ScrapersPage() {
                 </th>
                 <th
                   scope="col"
+                  className="px-3 py-3 text-center text-xs font-medium uppercase tracking-wider text-gray-500"
+                  title="Automatisk hälsokontroll baserat på rolling median och drop-rate"
+                >
+                  Health
+                </th>
+                <th
+                  scope="col"
                   className="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
                 >
                   Last Run
@@ -318,6 +326,13 @@ export default function ScrapersPage() {
                           {scraper.status || "idle"}
                         </span>
                       )}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-4 text-center">
+                      {scraper.id ? (
+                        <span className="inline-flex items-center justify-center">
+                          <ScraperHealthBadge scraperId={scraper.id} />
+                        </span>
+                      ) : null}
                     </td>
                     <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
                       {scraper.last_run

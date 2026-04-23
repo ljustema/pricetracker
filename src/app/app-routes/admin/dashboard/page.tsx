@@ -15,6 +15,7 @@ import {
   Calendar,
   MessageSquare
 } from "lucide-react";
+import ScraperHealthWidget from "@/components/admin/scraper-health-widget";
 
 export const metadata: Metadata = {
   title: "Admin Dashboard - PriceTracker",
@@ -206,6 +207,9 @@ export default async function AdminDashboardPage() {
           })}
         </div>
       </div>
+
+      {/* Scraper Health */}
+      <ScraperHealthWidget />
 
       {/* Admin Info */}
       <Card>
