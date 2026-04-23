@@ -26,6 +26,7 @@ interface SupabaseQueryBuilder {
   select: (columns?: string) => SupabaseQueryBuilder;
   insert: (data: unknown) => SupabaseQueryBuilder;
   update: (data: Record<string, unknown>) => SupabaseQueryBuilder;
+  delete: () => SupabaseQueryBuilder;
   eq: (column: string, value: unknown) => SupabaseQueryBuilder;
   limit: (count: number) => SupabaseQueryBuilder;
   range: (from: number, to: number) => SupabaseQueryBuilder;
@@ -520,16 +521,8 @@ export class IntegrationSyncService {
       return;
     }
 
-    // Insert the batch into the temp_integrations_scraped_data table
-    const { error: insertError } = await this.supabase
-      .from('temp_integrations_scraped_data')
-      .insert(stagedProducts);
-
-    if (insertError) {
-      const errorMessage = insertError && typeof insertError === 'object' && 'message' in insertError ? (insertError as { message: string }).message : 'Unknown error';
-      this.log('error', 'STAGING_ERROR', `Error staging batch ${batchNumber}: ${errorMessage}`);
-      throw new Error(`Failed to stage products: ${errorMessage}`);
-    }
+    // Stage via SECURITY DEFINER RPC (60s statement_timeout) with retry/backoff
+    await this.stageBatchWithRetry(stagedProducts, batchNumber, totalBatches);
 
     this.log('info', 'BATCH_STAGED', `Staged batch ${batchNumber}/${totalBatches} (${stagedProducts.length} products)`);
   }
@@ -670,27 +663,72 @@ export class IntegrationSyncService {
       status: 'pending'
     }));
 
-    const { data: insertData, error: insertError } = await this.supabase
-      .from('temp_integrations_scraped_data')
-      .insert(stagedProductsWithStatus)
-      .select();
-
-    console.log(`Insert response: ${insertError ? 'ERROR' : 'SUCCESS'}`);
-    if (insertData) {
-      const insertArray = insertData as unknown[];
-      console.log(`Inserted ${insertArray.length} rows`);
-    }
-
-    if (insertError) {
-      const errorMessage = insertError && typeof insertError === 'object' && 'message' in insertError ? (insertError as { message: string }).message : 'Unknown error';
-      this.log('error', 'STAGING_ERROR', `Error staging batch ${batchNumber}: ${errorMessage}`);
-      throw new Error(`Failed to stage products: ${errorMessage}`);
-    }
+    // Stage via SECURITY DEFINER RPC with retry/backoff (throws on permanent failure)
+    await this.stageBatchWithRetry(stagedProductsWithStatus, batchNumber, totalBatches);
 
     this.log('info', 'BATCH_STAGED', `Staged batch ${batchNumber}/${totalBatches} (${batch.length} products)`);
 
     // Products are automatically processed via database triggers after insertion
     this.log('info', 'AUTO_PROCESSING', `Batch ${batchNumber}/${totalBatches} automatically processed via database triggers`);
+  }
+
+  /**
+   * Stage a batch of products via the stage_integration_batch RPC with retry/backoff.
+   *
+   * Uses a SECURITY DEFINER RPC that sets a local 60s statement_timeout, bypassing
+   * the 8s authenticator default. Retries up to 3 times with exponential backoff
+   * (1s, 2s, 4s) on transient errors (502 Bad Gateway, statement timeouts, network).
+   * Throws on permanent failure so the caller's existing error handling fires.
+   */
+  private async stageBatchWithRetry(
+    rows: Record<string, unknown>[],
+    batchNumber: number,
+    totalBatches: number | string
+  ): Promise<void> {
+    const maxAttempts = 3;
+    const baseDelayMs = 1000;
+
+    let lastErrorMessage = 'Unknown error';
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const { error } = await this.supabase.rpc('stage_integration_batch', {
+        p_run_id: this.runId,
+        p_rows: rows,
+      });
+
+      if (!error) {
+        if (attempt > 1) {
+          this.log('info', 'STAGING_RETRY_OK',
+            `Batch ${batchNumber}/${totalBatches} succeeded on attempt ${attempt}`);
+        }
+        return;
+      }
+
+      const errObj = error as unknown as Record<string, unknown>;
+      const msg = typeof errObj?.message === 'string' ? errObj.message : 'Unknown error';
+      const code = typeof errObj?.code === 'string' ? errObj.code : '';
+      lastErrorMessage = msg;
+
+      const retriable =
+        /timeout|502|503|504|bad gateway|gateway timeout|ECONNRESET|ETIMEDOUT|fetch failed|network/i.test(msg) ||
+        code === '57014' /* query_canceled / statement_timeout */ ||
+        code === '08006' /* connection_failure */ ||
+        code === '08003' /* connection_does_not_exist */;
+
+      if (!retriable || attempt === maxAttempts) {
+        this.log('error', 'STAGING_ERROR',
+          `Batch ${batchNumber}/${totalBatches} failed on attempt ${attempt}/${maxAttempts}: ${msg}`);
+        throw new Error(`Failed to stage products: ${msg}`);
+      }
+
+      const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
+      this.log('warn', 'STAGING_RETRY',
+        `Batch ${batchNumber}/${totalBatches} transient error on attempt ${attempt}/${maxAttempts}: ${msg}. Retrying in ${delayMs}ms`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+
+    // Fallback (should be unreachable): throw with the last error observed
+    throw new Error(`Failed to stage products: ${lastErrorMessage}`);
   }
 
   /**
@@ -783,6 +821,27 @@ export class IntegrationSyncService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error during sync';
       this.log('error', 'SYNC_ERROR', `Sync failed: ${errorMessage}`);
+
+      // Best-effort cleanup of staged rows for this run. On the success path the
+      // cleanup_removed_integration_products RPC already deletes them; on failure
+      // (timeouts, 502, partial batches) we have to do it here to avoid orphaned
+      // rows piling up in temp_integrations_scraped_data between retries.
+      try {
+        const { error: cleanupError } = await this.supabase
+          .from('temp_integrations_scraped_data')
+          .delete()
+          .eq('integration_run_id', this.runId);
+        if (cleanupError) {
+          this.log('warn', 'CLEANUP_AFTER_ERROR_FAILED',
+            `Could not delete staged rows after failure: ${cleanupError.message}`);
+        } else {
+          this.log('info', 'CLEANUP_AFTER_ERROR',
+            'Deleted staged rows for failed run');
+        }
+      } catch (cleanupException) {
+        this.log('warn', 'CLEANUP_AFTER_ERROR_EXCEPTION',
+          `Cleanup exception: ${cleanupException instanceof Error ? cleanupException.message : 'Unknown error'}`);
+      }
 
       // Update run status to failed
       await this.updateRunStatus('failed', {}, errorMessage);
