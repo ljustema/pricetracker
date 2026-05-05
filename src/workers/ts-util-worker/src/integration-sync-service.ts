@@ -20,14 +20,20 @@ interface SupabaseError {
 interface DatabaseResponse<T = unknown> {
   data: T | null;
   error: SupabaseError | null;
+  count?: number | null;
 }
 
 interface SupabaseQueryBuilder {
-  select: (columns?: string) => SupabaseQueryBuilder;
+  select: (
+    columns?: string,
+    options?: { count?: 'exact' | 'planned' | 'estimated'; head?: boolean }
+  ) => SupabaseQueryBuilder;
   insert: (data: unknown) => SupabaseQueryBuilder;
   update: (data: Record<string, unknown>) => SupabaseQueryBuilder;
   delete: () => SupabaseQueryBuilder;
   eq: (column: string, value: unknown) => SupabaseQueryBuilder;
+  gte: (column: string, value: unknown) => SupabaseQueryBuilder;
+  lt: (column: string, value: unknown) => SupabaseQueryBuilder;
   limit: (count: number) => SupabaseQueryBuilder;
   range: (from: number, to: number) => SupabaseQueryBuilder;
   single: () => Promise<DatabaseResponse>;
@@ -74,12 +80,52 @@ export class IntegrationSyncService {
   private supabase: SupabaseClient;
   private logs: Record<string, unknown>[] = [];
   private heartbeatInterval: NodeJS.Timeout | null = null;
+  // Postgres-side timestamp captured at sync start; used to attribute created/updated rows
+  // to this run without being affected by client/server clock drift.
+  private runStartedAt: string | null = null;
 
   constructor(userId: string, integrationId: string, runId: string, supabase: SupabaseClient) {
     this.userId = userId;
     this.integrationId = integrationId;
     this.runId = runId;
     this.supabase = supabase;
+  }
+
+  /**
+   * Count products inserted by this run (created_at >= runStartedAt).
+   * Uses an exact head count to avoid the PostgREST default 1000-row cap.
+   */
+  private async countCreatedSinceRunStart(): Promise<number> {
+    if (!this.runStartedAt) return 0;
+    const { count, error } = await this.supabase
+      .from('products')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', this.userId)
+      .gte('created_at', this.runStartedAt);
+    if (error) {
+      this.log('warn', 'STATS_CREATED_COUNT_ERROR', `Failed to count created products: ${error.message}`);
+      return 0;
+    }
+    return count || 0;
+  }
+
+  /**
+   * Count products updated (but not created) by this run: updated_at within window
+   * AND created_at strictly before the window started.
+   */
+  private async countUpdatedSinceRunStart(): Promise<number> {
+    if (!this.runStartedAt) return 0;
+    const { count, error } = await this.supabase
+      .from('products')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', this.userId)
+      .gte('updated_at', this.runStartedAt)
+      .lt('created_at', this.runStartedAt);
+    if (error) {
+      this.log('warn', 'STATS_UPDATED_COUNT_ERROR', `Failed to count updated products: ${error.message}`);
+      return 0;
+    }
+    return count || 0;
   }
 
   /**
@@ -330,32 +376,15 @@ export class IntegrationSyncService {
     this.log('info', 'DB_PROCESSING_WAIT', 'Waiting for processing to complete...');
     await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
 
-    // Get statistics on processed products
+    // Compute created/updated counts from the products table using the run window.
+    // The previous implementation queried temp_integrations_scraped_data with a default
+    // PostgREST limit of 1000 rows and then assigned all "processed" rows to "created",
+    // which produced a fixed nonsensical number (e.g. always 994) for every run.
     try {
-      const { data: stats, error: statsError } = await this.supabase
-        .from('temp_integrations_scraped_data')
-        .select('status')
-        .eq('integration_run_id', this.runId);
-
-      if (statsError) {
-        const errorMessage = statsError && typeof statsError === 'object' && 'message' in statsError ? (statsError as { message: string }).message : 'Unknown error';
-        this.log('error', 'DB_STATS_ERROR', `Error getting product statistics: ${errorMessage}`);
-      } else if (stats) {
-        // Count products by status
-        const statsArray = stats as { status: string }[];
-        const processed = statsArray.filter((p) => p.status === 'processed').length;
-        const errors = statsArray.filter((p) => p.status === 'error').length;
-        const pending = statsArray.filter((p) => p.status === 'pending').length;
-
-        // Estimate created vs updated (we don't have this info directly)
-        // For now, assume all processed products are created
-        productsCreated = processed;
-        productsUpdated = 0;
-
-        this.log('info', 'DB_PROCESSING_COMPLETE',
-          `Processing status: Processed: ${processed}, Created: ${productsCreated}, ` +
-          `Updated: ${productsUpdated}, Errors: ${errors}, Pending: ${pending}`);
-      }
+      productsCreated = await this.countCreatedSinceRunStart();
+      productsUpdated = await this.countUpdatedSinceRunStart();
+      this.log('info', 'DB_PROCESSING_COMPLETE',
+        `Processed: ${productsProcessed}, Created: ${productsCreated}, Updated: ${productsUpdated}`);
     } catch (error) {
       this.log('error', 'DB_STATS_ERROR', `Exception getting product statistics: ${error instanceof Error ? error.message : 'Unknown error'}`);
       console.error('Full error details:', error);
@@ -455,20 +484,12 @@ export class IntegrationSyncService {
       // Wait a moment to ensure all database operations are complete
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Get final statistics
-      const { data: stats, error: statsError } = await this.supabase
-        .from('temp_integrations_scraped_data')
-        .select('status')
-        .eq('integration_run_id', this.runId);
-
-      if (!statsError && stats) {
-        const statsArray = stats as { status: string }[];
-        const processed = statsArray.filter((p) => p.status === 'processed').length;
-        productsCreated = processed; // Assume all are new for now
-        productsUpdated = 0;
-
-        this.log('info', 'FINAL_STATS', `Final stats: Processed: ${processed}, Created: ${productsCreated}, Updated: ${productsUpdated}`);
-      }
+      // Compute created/updated counts from the products table using the run window.
+      // See the equivalent comment in syncPrestashop for the bug this replaces.
+      productsCreated = await this.countCreatedSinceRunStart();
+      productsUpdated = await this.countUpdatedSinceRunStart();
+      this.log('info', 'FINAL_STATS',
+        `Final stats: Processed: ${productsProcessed}, Created: ${productsCreated}, Updated: ${productsUpdated}`);
 
       return {
         success: true,
@@ -738,6 +759,21 @@ export class IntegrationSyncService {
     try {
       // Start heartbeat to prevent stall detection
       this.startHeartbeat();
+
+      // Anchor the run start in Postgres server time (not worker clock). The BEFORE INSERT
+      // trigger on temp_integrations_scraped_data uses NOW() to set products.updated_at;
+      // even sub-second drift between the worker clock and the database clock would cause
+      // the created/updated count queries below to miss every affected row.
+      try {
+        const { data: nowData, error: nowError } = await this.supabase.rpc('db_now');
+        if (nowError || !nowData) {
+          this.runStartedAt = new Date().toISOString();
+        } else {
+          this.runStartedAt = nowData as unknown as string;
+        }
+      } catch {
+        this.runStartedAt = new Date().toISOString();
+      }
 
       // Update run status to processing
       await this.updateRunStatus('processing');
