@@ -2,14 +2,13 @@ import { Metadata } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import { redirect } from "next/navigation";
-import Image from "next/image";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import crypto from 'crypto';
 import BrandStatisticsServer from "@/components/brands/BrandStatisticsServer";
 import GenerateReportButton from "@/components/dashboard/generate-report-button";
 import ExportPriceMatchingButton from "@/components/dashboard/ExportPriceMatchingButton";
-import PriceChangeDisplay from "@/components/dashboard/PriceChangeDisplay";
+import TopPriceDropsCard, { TopPriceDrop } from "@/components/dashboard/TopPriceDropsCard";
 import { Database } from "@/lib/supabase/database.types";
 
 // Helper function to ensure user ID is a valid UUID
@@ -137,7 +136,7 @@ export default async function DashboardPage() {
     .lt("price_change_percentage", 0) // Only price drops
     .gte("changed_at", sevenDaysAgo.toISOString()) // Only last 7 days
     .order("price_change_percentage", { ascending: true }) // Biggest drops first
-    .limit(50) as { data: PriceChange[] | null; error: Error | null };
+    .limit(500) as { data: PriceChange[] | null; error: Error | null };
 
   // Deduplicate by product_id to show only the biggest drop per product
   const topPriceDrops = allPriceDrops ?
@@ -152,7 +151,7 @@ export default async function DashboardPage() {
           return map;
         }, new Map<string, PriceChange>())
         .values()
-    ).slice(0, 5) // Take top 5 after deduplication
+    ).slice(0, 100) // Take top 100 after deduplication
     : null;
 
   // Get brands with analytics data using the RPC function
@@ -370,71 +369,7 @@ export default async function DashboardPage() {
       {/* Top price drops */}
       <div className="mb-8">
         <h2 className="mb-4 text-xl font-semibold">Top Price Drops (Last 7 Days)</h2>
-        <div className="rounded-lg bg-white p-6 shadow-sm">
-          {topPriceDrops && topPriceDrops.length > 0 ? (
-            <div className="divide-y">
-              {topPriceDrops.map((priceChange) => (
-                <div key={priceChange.id} className="py-4 first:pt-0 last:pb-0">
-                  <div className="flex items-center">
-                    <div className="flex-shrink-0">
-                      {priceChange.products.image_url ? (
-                        <Image
-                          src={priceChange.products.image_url}
-                          alt={priceChange.products.name}
-                          width={48}
-                          height={48}
-                          className="rounded-md"
-                        />
-                      ) : (
-                        <div className="flex h-12 w-12 items-center justify-center rounded-md bg-gray-100">
-                          <svg
-                            className="h-6 w-6 text-gray-400"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                            />
-                          </svg>
-                        </div>
-                      )}
-                    </div>
-                    <div className="ml-4 flex-1">
-                      <Link href={`/app-routes/products/${priceChange.product_id}`}>
-                        <h3 className="text-lg font-medium text-gray-900 hover:text-indigo-600">
-                          {priceChange.products.name}
-                        </h3>
-                      </Link>
-                      <p className="text-sm text-gray-500">
-                        {priceChange.competitors?.name || priceChange.integrations?.name || "Unknown"} • SKU: {priceChange.products.sku}
-                      </p>
-                    </div>
-                    <PriceChangeDisplay
-                      oldPrice={
-                        priceChange.competitor_id
-                          ? (priceChange.old_competitor_price || 0)
-                          : (priceChange.old_our_retail_price || 0)
-                      }
-                      newPrice={
-                        priceChange.competitor_id
-                          ? (priceChange.new_competitor_price || 0)
-                          : (priceChange.new_our_retail_price || 0)
-                      }
-                      currencyCode={'SEK'}
-                      percentage={priceChange.price_change_percentage}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-center text-gray-500">No price drops detected in the last 7 days.</p>
-          )}
-        </div>
+        <TopPriceDropsCard drops={(topPriceDrops || []) as TopPriceDrop[]} />
       </div>
 
       {/* Quick actions */}
