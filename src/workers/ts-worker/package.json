@@ -5,7 +5,7 @@
   "description": "TypeScript scraper execution worker for PriceTracker",
   "main": "dist/index.js",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc",
