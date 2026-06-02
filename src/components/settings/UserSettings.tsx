@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -28,6 +28,16 @@ const profileFormSchema = z.object({
     web_price_change: z.boolean().optional(),
     email_price_change: z.boolean().optional(),
   }).optional(),
+  operational_report_email: z.string().email("Invalid report email address").or(z.literal("")),
+  operational_report_mode: z.enum(["disabled", "daily", "issues_only"]),
+}).superRefine((values, context) => {
+  if (values.operational_report_mode !== "disabled" && !values.operational_report_email) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["operational_report_email"],
+      message: "Report email is required when operations reports are enabled",
+    });
+  }
 });
 
 type ProfileFormValues = z.infer<typeof profileFormSchema>;
@@ -72,8 +82,20 @@ export default function UserSettings({ user }: UserSettingsProps) {
         web_price_change: true,
         email_price_change: false,
       },
+      operational_report_email: user?.email || "",
+      operational_report_mode: "disabled",
     },
   });
+
+  useEffect(() => {
+    fetch("/api/settings/profile")
+      .then(response => response.ok ? response.json() : Promise.reject(new Error("Failed to load notification settings")))
+      .then(data => {
+        form.setValue("operational_report_email", data.operational_report_email || "");
+        form.setValue("operational_report_mode", data.operational_report_mode || "disabled");
+      })
+      .catch(error => console.error("Error loading notification settings:", error));
+  }, [form]);
 
   const onSubmit = async (data: ProfileFormValues) => {
     setIsLoading(true);
@@ -308,43 +330,35 @@ export default function UserSettings({ user }: UserSettingsProps) {
         <form onSubmit={form.handleSubmit(onSubmit)}>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="email_summary">Email Summary</Label>
+              <Label htmlFor="operational_report_email">Report Email</Label>
+              <Input
+                id="operational_report_email"
+                type="email"
+                placeholder="operations@example.com"
+                {...form.register("operational_report_email")}
+              />
+              <p className="text-xs text-gray-500">Scraper and integration reports will be sent to this address.</p>
+              {form.formState.errors.operational_report_email && (
+                <p className="text-sm text-red-500">{form.formState.errors.operational_report_email.message}</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="operational_report_mode">Operations Reports</Label>
               <Select
-                onValueChange={(value: "never" | "daily" | "weekly" | "monthly") =>
-                  form.setValue("notification_preferences.email_summary", value)
+                onValueChange={(value: "disabled" | "daily" | "issues_only") =>
+                  form.setValue("operational_report_mode", value)
                 }
-                defaultValue={form.getValues("notification_preferences.email_summary") || "weekly"}
+                value={form.watch("operational_report_mode")}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select frequency" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="never">Never</SelectItem>
-                  <SelectItem value="daily">Daily</SelectItem>
-                  <SelectItem value="weekly">Weekly</SelectItem>
-                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="disabled">Disabled</SelectItem>
+                  <SelectItem value="daily">Daily summary and warnings</SelectItem>
+                  <SelectItem value="issues_only">Only failures or missing runs</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-            <div className="flex items-center justify-between">
-              <Label htmlFor="web_price_change">Web Price Change Alerts</Label>
-              <Switch
-                id="web_price_change"
-                checked={form.getValues("notification_preferences.web_price_change")}
-                onCheckedChange={(checked) =>
-                  form.setValue("notification_preferences.web_price_change", checked)
-                }
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label htmlFor="email_price_change">Email Price Change Alerts</Label>
-              <Switch
-                id="email_price_change"
-                checked={form.getValues("notification_preferences.email_price_change")}
-                onCheckedChange={(checked) =>
-                  form.setValue("notification_preferences.email_price_change", checked)
-                }
-              />
             </div>
           </CardContent>
           <CardFooter className="flex justify-end">

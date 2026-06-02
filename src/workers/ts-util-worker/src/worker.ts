@@ -4,6 +4,7 @@ import * as path from 'path';
 import { promises as fsPromises } from 'fs';
 import * as dotenv from 'dotenv';
 import { IntegrationSyncService } from './integration-sync-service';
+import { OperationalReportService } from './operational-report-service';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -27,6 +28,7 @@ console.log('Using Supabase URL:', supabaseUrl);
 
 // Using `any` for now as Database types are not available, but defining RPC return type
 const supabase = createClient<any>(supabaseUrl, supabaseServiceRoleKey);
+const operationalReportService = new OperationalReportService(supabase);
 
 // Type for the data returned by the claim_next_integration_job RPC
 interface ClaimedIntegrationJobData {
@@ -48,6 +50,7 @@ interface ClaimedIntegrationJobData {
 
 const POLLING_INTERVAL_MS = 30000; // Poll every 30 seconds (reduced from 5 seconds)
 const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
+const REPORT_CHECK_INTERVAL_MS = 15 * 60 * 1000;
 
 console.log(`Starting TypeScript Utility Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
 
@@ -326,10 +329,16 @@ function startPolling() {
     fetchAndProcessIntegrationJob().catch(err => console.error("Polling cycle failed:", err));
   }, POLLING_INTERVAL_MS);
 
+  operationalReportService.run().catch(err => console.error("Initial operational report check failed:", err));
+  const reportIntervalId = setInterval(() => {
+    operationalReportService.run().catch(err => console.error("Operational report check failed:", err));
+  }, REPORT_CHECK_INTERVAL_MS);
+
   // Graceful shutdown handling
   const shutdown = () => {
     console.log('Shutting down worker...');
     clearInterval(intervalId);
+    clearInterval(reportIntervalId);
     process.exit(0);
   };
 

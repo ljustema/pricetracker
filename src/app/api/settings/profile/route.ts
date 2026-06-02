@@ -28,7 +28,33 @@ interface UserSettingsUpdateData {
   primary_currency?: string;
   secondary_currencies?: string[];
   currency_format?: string;
+  operational_report_email?: string | null;
+  operational_report_mode?: "disabled" | "daily" | "issues_only";
   updated_at?: string;
+}
+
+export async function GET() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    return NextResponse.json({ error: "Server configuration error" }, { status: 500 });
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+  const { data, error } = await supabase
+    .from("user_settings")
+    .select("operational_report_email, operational_report_mode")
+    .eq("user_id", ensureUUID(session.user.id))
+    .maybeSingle();
+
+  if (error) return NextResponse.json({ error: "Failed to load notification settings" }, { status: 500 });
+  return NextResponse.json({
+    operational_report_email: data?.operational_report_email || session.user.email || "",
+    operational_report_mode: data?.operational_report_mode || "disabled",
+  });
 }
 
 export async function PATCH(request: NextRequest) {
@@ -77,8 +103,22 @@ export async function PATCH(request: NextRequest) {
       primary_currency,
       secondary_currencies,
       currency_format,
-      notification_preferences
+      notification_preferences,
+      operational_report_email,
+      operational_report_mode
     } = body;
+
+    const reportModes = ["disabled", "daily", "issues_only"];
+    if (operational_report_mode !== undefined && !reportModes.includes(operational_report_mode)) {
+      return NextResponse.json({ error: "Invalid operations report mode" }, { status: 400 });
+    }
+    if (
+      operational_report_mode !== undefined &&
+      operational_report_mode !== "disabled" &&
+      (typeof operational_report_email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(operational_report_email))
+    ) {
+      return NextResponse.json({ error: "A valid report email is required when operations reports are enabled" }, { status: 400 });
+    }
 
     // Prepare the update data
     const updateData: ProfileUpdateData = {};
@@ -106,6 +146,8 @@ export async function PATCH(request: NextRequest) {
     if (primary_currency !== undefined) settingsData.primary_currency = primary_currency;
     if (secondary_currencies !== undefined) settingsData.secondary_currencies = secondary_currencies;
     if (currency_format !== undefined) settingsData.currency_format = currency_format;
+    if (operational_report_email !== undefined) settingsData.operational_report_email = operational_report_email || null;
+    if (operational_report_mode !== undefined) settingsData.operational_report_mode = operational_report_mode;
 
     let profileResult = null;
     let settingsResult = null;
@@ -134,8 +176,7 @@ export async function PATCH(request: NextRequest) {
       settingsData.updated_at = new Date().toISOString();
       const { data: settingsData_result, error: settingsError } = await supabase
         .from("user_settings")
-        .update(settingsData)
-        .eq("user_id", userId)
+        .upsert({ user_id: userId, ...settingsData }, { onConflict: "user_id" })
         .select();
 
       if (settingsError) {
