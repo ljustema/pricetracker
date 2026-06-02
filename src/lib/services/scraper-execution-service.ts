@@ -187,7 +187,7 @@ export class ScraperExecutionService {
           const { error: updateError } = await supabaseAdmin
             .from('scraper_runs')
             .update({
-              error_message: 'Worker did not pick up the job. The Python worker may not be running or may be busy with other tasks.'
+              error_message: `Worker did not pick up the job. The ${scraper.scraper_type === 'typescript' ? 'TypeScript' : 'Python'} worker may not be running or may be busy with other tasks.`
             })
             .eq('id', actualRunId);
 
