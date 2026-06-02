@@ -4,6 +4,9 @@
   "private": true,
   "description": "TypeScript scraper execution worker for PriceTracker",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",

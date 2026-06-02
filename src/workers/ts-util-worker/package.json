@@ -4,6 +4,9 @@
   "private": true,
   "description": "TypeScript utility worker for PriceTracker integrations",
   "main": "dist/worker.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/worker.js",
