@@ -4,6 +4,22 @@ import { authOptions } from "@/lib/auth/options";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { ensureUUID } from "@/lib/utils/uuid";
 
+interface ProductForExport {
+  id: string;
+  name: string;
+  sku: string;
+  ean: string;
+  brand: string;
+  brand_name?: string; // Add brand_name property from database
+  image_url: string;
+  our_retail_price: number | null;
+  our_wholesale_price: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  source_prices?: Record<string, { price: number }>;
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Get the current user from the session
@@ -36,7 +52,7 @@ export async function POST(request: NextRequest) {
       p_brand: body.brand || null,
       p_category: body.category || null,
       p_search: body.search || null,
-      p_is_active: body.isActive === 'true' ? true : (body.isActive === false ? false : null),
+      p_is_active: body.isActive === true ? true : (body.isActive === false ? false : null),
       p_competitor_ids: (() => {
         // Handle multiple competitor IDs - now using array parameter
         const competitorIds = body.sourceId;
@@ -45,13 +61,42 @@ export async function POST(request: NextRequest) {
         }
         return competitorIds ? [competitorIds] : null;
       })(),
-      p_has_price: body.hasPrice !== undefined ? body.hasPrice : null,
+      p_has_price: (() => {
+        // Handle price filter logic to match database function expectations
+        if (body.notOurProducts === true) {
+          return null; // When filtering for "not our products", p_has_price should be null
+        }
+        if (body.hasPrice === true) {
+          return true; // When filtering for "our products", p_has_price should be true
+        }
+        return null; // Default case - no price filter
+      })(),
+      p_not_our_products: (() => {
+        // Handle not our products filter logic
+        if (body.hasPrice === true) {
+          return null; // When filtering for "our products", p_not_our_products should be null
+        }
+        if (body.notOurProducts === true) {
+          return true; // When filtering for "not our products", p_not_our_products should be true
+        }
+        return null; // Default case - no filter
+      })(),
       p_price_lower_than_competitors: body.price_lower_than_competitors || null,
       p_price_higher_than_competitors: body.price_higher_than_competitors || null,
+      p_in_stock_only: body.in_stock_only === true ? true : null, // Add missing parameter
+      p_our_products_with_competitor_prices: body.our_products_with_competitor_prices === true ? true : null,
+      p_our_products_with_supplier_prices: body.our_products_with_supplier_prices === true ? true : null,
+      p_supplier_ids: (() => {
+        const supplierIds = body.supplierId;
+        if (Array.isArray(supplierIds)) {
+          return supplierIds.length > 0 ? supplierIds : null;
+        }
+        return supplierIds ? [supplierIds] : null;
+      })(),
     };
 
     // Fetch all products using pagination
-    let allProducts: any[] = [];
+    let allProducts: ProductForExport[] = [];
     let currentPage = 1;
     let totalPages = 1;
     const pageSize = 1000; // Maximum page size
@@ -68,7 +113,6 @@ export async function POST(request: NextRequest) {
       );
 
       if (error) {
-        console.error(`Error fetching products for CSV export (page ${currentPage}):`, error);
         return NextResponse.json(
           { error: `Failed to fetch products: ${error.message}` },
           { status: 500 }
@@ -90,20 +134,346 @@ export async function POST(request: NextRequest) {
 
     } while (currentPage <= totalPages);
 
-    // Use all collected products for the CSV
-    const data = allProducts;
+    // Use all collected products for the CSV and map brand_name to brand
+    const data = allProducts.map(product => ({
+      ...product,
+      // Map brand_name from database to brand for CSV compatibility
+      brand: product.brand_name || product.brand || null
+    }));
 
-    // Get all competitors for this user to include their names in the CSV
-    const { data: competitors } = await supabase
-      .from('competitors')
-      .select('id, name')
-      .eq('user_id', userId);
+    // Note: our_wholesale_price is now included in get_products_filtered RPC function
 
-    const competitorMap = new Map();
-    if (competitors) {
-      competitors.forEach(comp => {
-        competitorMap.set(comp.id, comp.name);
-      });
+    // Get custom fields for this user
+    const { error: customFieldsError } = await supabase
+      .from('product_custom_fields')
+      .select('id, field_name')
+      .eq('user_id', userId)
+      .order('field_name');
+
+    if (customFieldsError) {
+      // Error fetching custom fields - continue without them
+    }
+
+    // Get custom field values for all products
+    const productIds = data.map(p => p.id);
+
+    // Fetch custom field values in batches to avoid "414 Request-URI Too Large" error
+    const customFieldMap = new Map();
+    const batchSize = 100; // Process 100 product IDs at a time
+
+    for (let i = 0; i < productIds.length; i += batchSize) {
+      const batchIds = productIds.slice(i, i + batchSize);
+
+      let query = supabase
+        .from('product_custom_field_values')
+        .select(`
+          product_id,
+          custom_field_id,
+          value,
+          product_custom_fields (
+            field_name
+          )
+        `)
+        .in('product_id', batchIds)
+        .not('value', 'is', null) // Only get records with actual values
+        .neq('value', ''); // Exclude empty strings
+
+      // Add source type filter based on checkboxes
+      const sourceTypes = [];
+      if (body.includeCompetitorFields === true) {
+        sourceTypes.push('competitor');
+      }
+      if (body.includeSupplierFields === true) {
+        sourceTypes.push('supplier');
+      }
+
+      // Only apply filter if at least one type is selected
+      if (sourceTypes.length > 0) {
+        query = query.in('source_type', sourceTypes);
+      } else {
+        // If no custom fields are selected, don't fetch any custom fields
+        // Use a UUID that doesn't exist instead of -1
+        query = query.eq('product_id', '00000000-0000-0000-0000-000000000000');
+      }
+
+      const { data: batchCustomFieldValues, error: customFieldError } = await query;
+
+      if (customFieldError) {
+        continue; // Continue with next batch even if one fails
+      }
+
+      // Process this batch's results
+      if (batchCustomFieldValues) {
+        batchCustomFieldValues.forEach((cfv: {
+          product_id: string;
+          custom_field_id: string;
+          value: string;
+          product_custom_fields: { field_name: string }[];
+        }) => {
+          if (!customFieldMap.has(cfv.product_id)) {
+            customFieldMap.set(cfv.product_id, new Map());
+          }
+          // Handle the nested structure from the join
+          const fieldName = (cfv.product_custom_fields as unknown as { field_name: string } | null)?.field_name;
+          if (fieldName && cfv.value && cfv.value.trim() !== '') {
+            customFieldMap.get(cfv.product_id)!.set(fieldName, cfv.value);
+          }
+        });
+      }
+    }
+
+    // Fetch competitor and supplier prices and stock if needed
+    const competitorPricesMap = new Map<string, Array<{
+      competitor_id?: string;
+      integration_id?: string;
+      product_id: string;
+      source_name: string;
+      new_price: number;
+      new_competitor_price?: number;
+      new_our_retail_price?: number;
+      created_at: string;
+    }>>();
+    const supplierPricesMap = new Map<string, Array<{
+      supplier_id?: string;
+      integration_id?: string;
+      product_id: string;
+      source_name: string;
+      new_price: number;
+      new_supplier_price?: number;
+      new_supplier_recommended_price?: number;
+      created_at: string;
+    }>>();
+    const competitorStockMap = new Map<string, Array<{
+      competitor_id?: string;
+      integration_id?: string;
+      product_id: string;
+      source_name: string;
+      new_stock_quantity: number;
+      current_stock_quantity?: number;
+      created_at: string;
+    }>>();
+    const supplierStockMap = new Map<string, Array<{
+      supplier_id?: string;
+      integration_id?: string;
+      product_id: string;
+      source_name: string;
+      supplier_name?: string;
+      integration_name?: string;
+      new_stock_quantity: number;
+      created_at: string;
+    }>>();
+
+    if (body.includeCompetitorPrices || body.includeSupplierPrices || body.includeCompetitorStock || body.includeSupplierStock) {
+      // Get competitor prices using batch function in smaller chunks to avoid 1000 record limit
+      if (body.includeCompetitorPrices) {
+        try {
+          const pricesBatchSize = 500; // Smaller batch size to avoid hitting 1000 record limit
+          for (let i = 0; i < productIds.length; i += pricesBatchSize) {
+            const batchIds = productIds.slice(i, i + pricesBatchSize);
+
+            // Use filtered function if competitor filter is applied, otherwise use regular function
+            const competitorIds = rpcParams.p_competitor_ids;
+            const { data: allCompetitorPrices, error: competitorError } = await supabase
+              .rpc(competitorIds ? 'get_latest_competitor_prices_batch_filtered' : 'get_latest_competitor_prices_batch', {
+                p_user_id: userId,
+                p_product_ids: batchIds,
+                ...(competitorIds && { p_competitor_ids: competitorIds })
+              });
+
+            if (competitorError) {
+              continue;
+            }
+
+            if (allCompetitorPrices) {
+              // Filter out our own integration prices - only include actual competitor prices
+              const competitorPrices = allCompetitorPrices.filter((price: {
+                competitor_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_price: number;
+                created_at: string;
+              }) =>
+                price.competitor_id && !price.integration_id
+              );
+
+              // Group by product_id
+              competitorPrices.forEach((price: {
+                competitor_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_price: number;
+                created_at: string;
+              }) => {
+                if (!competitorPricesMap.has(price.product_id)) {
+                  competitorPricesMap.set(price.product_id, []);
+                }
+                competitorPricesMap.get(price.product_id)!.push(price);
+              });
+            }
+          }
+        } catch (_error) {
+          // Error fetching competitor prices
+        }
+      }
+
+      // Get supplier prices using batch function in smaller chunks to avoid 1000 record limit
+      if (body.includeSupplierPrices) {
+        try {
+          const pricesBatchSize = 500; // Smaller batch size to avoid hitting 1000 record limit
+          for (let i = 0; i < productIds.length; i += pricesBatchSize) {
+            const batchIds = productIds.slice(i, i + pricesBatchSize);
+
+            const { data: allSupplierPrices, error: supplierError } = await supabase
+              .rpc('get_latest_supplier_prices_batch', {
+                p_user_id: userId,
+                p_product_ids: batchIds
+              });
+
+            if (supplierError) {
+              continue;
+            }
+
+            if (allSupplierPrices) {
+              // Filter out our own integration prices - only include actual supplier prices
+              const supplierPrices = allSupplierPrices.filter((price: {
+                supplier_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_price: number;
+                created_at: string;
+              }) =>
+                price.supplier_id && !price.integration_id
+              );
+
+              // Group by product_id
+              supplierPrices.forEach((price: {
+                supplier_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_price: number;
+                created_at: string;
+              }) => {
+                if (!supplierPricesMap.has(price.product_id)) {
+                  supplierPricesMap.set(price.product_id, []);
+                }
+                supplierPricesMap.get(price.product_id)!.push(price);
+              });
+            }
+          }
+        } catch (_error) {
+          // Error fetching supplier prices
+        }
+      }
+
+      // Get competitor stock using individual queries
+      if (body.includeCompetitorStock) {
+        try {
+          // Fetch stock data for each product
+          for (const productId of productIds) {
+            const { data: productStock, error: stockError } = await supabase
+              .rpc('get_latest_competitor_stock', {
+                p_user_id: userId,
+                p_product_id: productId
+              });
+
+            if (stockError) {
+              continue;
+            }
+
+            if (productStock) {
+              // Filter out our own integration stock - only include actual competitor stock
+              const competitorStock = productStock.filter((stock: {
+                competitor_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_stock_quantity: number;
+                current_stock_quantity?: number;
+                created_at: string;
+              }) =>
+                stock.competitor_id && !stock.integration_id
+              );
+
+              // Group by product_id
+              competitorStock.forEach((stock: {
+                competitor_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                new_stock_quantity: number;
+                current_stock_quantity?: number;
+                created_at: string;
+              }) => {
+                if (!competitorStockMap.has(stock.product_id)) {
+                  competitorStockMap.set(stock.product_id, []);
+                }
+                competitorStockMap.get(stock.product_id)!.push(stock);
+              });
+            }
+          }
+        } catch (_error) {
+          // Error fetching competitor stock
+        }
+      }
+
+      // Get supplier stock using batch function in smaller chunks to avoid 1000 record limit
+      if (body.includeSupplierStock) {
+        try {
+          const stockBatchSize = 500; // Smaller batch size to avoid hitting 1000 record limit
+          for (let i = 0; i < productIds.length; i += stockBatchSize) {
+            const batchIds = productIds.slice(i, i + stockBatchSize);
+
+            const { data: allSupplierStock, error: supplierStockError } = await supabase
+              .rpc('get_latest_supplier_stock_batch', {
+                p_user_id: userId,
+                p_product_ids: batchIds
+              });
+
+            if (supplierStockError) {
+              continue;
+            }
+
+            if (allSupplierStock) {
+              // Filter out our own integration stock - only include actual supplier stock
+              const supplierStock = allSupplierStock.filter((stock: {
+                supplier_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                supplier_name?: string;
+                integration_name?: string;
+                new_stock_quantity: number;
+                created_at: string;
+              }) =>
+                stock.supplier_id && !stock.integration_id
+              );
+
+              // Group by product_id
+              supplierStock.forEach((stock: {
+                supplier_id?: string;
+                integration_id?: string;
+                product_id: string;
+                source_name: string;
+                supplier_name?: string;
+                integration_name?: string;
+                new_stock_quantity: number;
+                created_at: string;
+              }) => {
+                if (!supplierStockMap.has(stock.product_id)) {
+                  supplierStockMap.set(stock.product_id, []);
+                }
+                supplierStockMap.get(stock.product_id)!.push(stock);
+              });
+            }
+          }
+        } catch (_error) {
+          // Error fetching supplier stock
+        }
+      }
     }
 
     // Define CSV headers - removed id, category, description as requested
@@ -113,8 +483,8 @@ export async function POST(request: NextRequest) {
       "ean",
       "brand",
       "image_url",
-      "our_price",
-      "wholesale_price",
+      "our_retail_price",
+      "our_wholesale_price",
       "is_active",
       "created_at",
       "updated_at"
@@ -123,38 +493,82 @@ export async function POST(request: NextRequest) {
     // Add competitor price headers if any products have competitor prices
     const competitorPriceHeaders = new Set<string>();
 
-    // Get our own integration ID to filter it out
-    const { data: ourIntegration } = await supabase
-      .from('integrations')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('is_our_store', true)
-      .maybeSingle();
 
-    const ourIntegrationId = ourIntegration?.id;
-
-
-    data.forEach(product => {
-      if (product.source_prices) {
-        Object.keys(product.source_prices).forEach(sourceId => {
-          // Skip our own integration
-          if (sourceId === ourIntegrationId) {
-            return;
-          }
-
-          // Only include if we have a name for this competitor
-          const sourceName = competitorMap.get(sourceId);
-          if (sourceName) {
-            competitorPriceHeaders.add(`competitor_price_${sourceName}`);
-          }
+    // Only add competitor price headers if competitor prices are requested
+    if (body.includeCompetitorPrices) {
+      // Use the competitorPricesMap to create headers instead of product.source_prices
+      competitorPricesMap.forEach(prices => {
+        prices.forEach(price => {
+          const competitorName = price.source_name || 'Unknown_Competitor';
+          const cleanName = competitorName.replace(/[^a-zA-Z0-9]/g, '_');
+          competitorPriceHeaders.add(`competitor_price_${cleanName}`);
         });
-      }
+      });
+    }
+
+
+
+    // Add custom field headers - only include fields that have values in the current result set
+    const customFieldHeaders: string[] = [];
+    const usedCustomFields = new Set<string>();
+
+    // Collect all custom field names that have values in the current products
+    customFieldMap.forEach(productFields => {
+      productFields.forEach((value: string, fieldName: string) => {
+        if (value && value.trim() !== '') {
+          usedCustomFields.add(fieldName);
+        }
+      });
     });
 
+    // Convert to sorted array for consistent column order
+    customFieldHeaders.push(...Array.from(usedCustomFields).sort());
 
+    // Add supplier price headers if needed
+    const supplierPriceHeaders = new Set<string>();
+    if (body.includeSupplierPrices) {
+      supplierPricesMap.forEach(prices => {
+        prices.forEach(price => {
+          const supplierName = price.source_name || 'Unknown_Supplier';
+          const cleanName = supplierName.replace(/[^a-zA-Z0-9]/g, '_');
+          supplierPriceHeaders.add(`supplier_price_${cleanName}`);
+          supplierPriceHeaders.add(`supplier_recommended_price_${cleanName}`);
+        });
+      });
+    }
+
+    // Add competitor stock headers if needed - only for those with actual stock values
+    const competitorStockHeaders = new Set<string>();
+    if (body.includeCompetitorStock) {
+      competitorStockMap.forEach(stocks => {
+        stocks.forEach(stock => {
+          // Only add header if stock has a valid quantity value
+          if (stock.current_stock_quantity !== null && stock.current_stock_quantity !== undefined) {
+            const competitorName = stock.source_name || 'Unknown_Competitor';
+            const cleanName = competitorName.replace(/[^a-zA-Z0-9]/g, '_');
+            competitorStockHeaders.add(`competitor_stock_${cleanName}`);
+          }
+        });
+      });
+    }
+
+    // Add supplier stock headers if needed - only for those with actual stock values
+    const supplierStockHeaders = new Set<string>();
+    if (body.includeSupplierStock) {
+      supplierStockMap.forEach(stocks => {
+        stocks.forEach(stock => {
+          // Only add header if stock has a valid quantity value
+          if (stock.new_stock_quantity !== null && stock.new_stock_quantity !== undefined) {
+            const supplierName = stock.supplier_name || stock.integration_name || 'Unknown_Supplier';
+            const cleanName = supplierName.replace(/[^a-zA-Z0-9]/g, '_');
+            supplierStockHeaders.add(`supplier_stock_${cleanName}`);
+          }
+        });
+      });
+    }
 
     // Combine all headers
-    const allHeaders = [...headers, ...Array.from(competitorPriceHeaders)];
+    const allHeaders = [...headers, ...Array.from(competitorPriceHeaders), ...Array.from(supplierPriceHeaders), ...Array.from(competitorStockHeaders), ...Array.from(supplierStockHeaders), ...customFieldHeaders];
 
     // Build the CSV content
     let csvContent = allHeaders.join(",") + "\n";
@@ -167,8 +581,8 @@ export async function POST(request: NextRequest) {
         escapeCsvValue(product.ean),
         escapeCsvValue(product.brand),
         escapeCsvValue(product.image_url),
-        product.our_price ? `"${String(product.our_price).replace('.', ',')}"` : '',
-        product.wholesale_price ? `"${String(product.wholesale_price).replace('.', ',')}"` : '',
+        product.our_retail_price ? `"${String(product.our_retail_price).replace('.', ',')}"` : '',
+        product.our_wholesale_price ? `"${String(product.our_wholesale_price).replace('.', ',')}"` : '',
         product.is_active,
         product.created_at,
         product.updated_at
@@ -176,27 +590,96 @@ export async function POST(request: NextRequest) {
 
       // Add competitor prices
       competitorPriceHeaders.forEach(header => {
-        const headerName = header.replace('competitor_price_', '');
+        const _competitorName = header.replace('competitor_price_', '').replace(/_/g, ' ');
         let price = '';
 
-        if (product.source_prices) {
-          // Find the competitor ID that matches this header name
-          // Convert Map to array of entries and find the matching entry
-          const matchingEntry = Array.from(competitorMap.entries()).find(
-            ([_, name]) => name === headerName
-          );
+        // Use competitorPricesMap instead of product.source_prices
+        const productCompetitorPrices = competitorPricesMap.get(product.id) || [];
+        const matchingPrice = productCompetitorPrices.find(p => {
+          const priceName = (p.source_name || 'Unknown Competitor').replace(/[^a-zA-Z0-9]/g, '_');
+          return priceName === header.replace('competitor_price_', '');
+        });
 
-          const matchingSourceId = matchingEntry ? matchingEntry[0] : undefined;
+        if (matchingPrice?.new_competitor_price) {
+          price = `"${String(matchingPrice.new_competitor_price).replace('.', ',')}"`;
+        } else if (matchingPrice?.new_our_retail_price) {
+          // Fallback to our retail price if competitor price is not available
+          price = `"${String(matchingPrice.new_our_retail_price).replace('.', ',')}"`;
+        }
 
+        row.push(price);
+      });
 
+      // Add supplier prices
+      supplierPriceHeaders.forEach(header => {
+        let price = '';
 
-          if (matchingSourceId && product.source_prices[matchingSourceId]) {
-            const priceValue = product.source_prices[matchingSourceId].price;
-            price = priceValue ? `"${String(priceValue).replace('.', ',')}"` : '';
+        if (header.includes('supplier_price_')) {
+          const productSupplierPrices = supplierPricesMap.get(product.id) || [];
+          const matchingPrice = productSupplierPrices.find(p => {
+            const priceName = (p.source_name || 'Unknown Supplier').replace(/[^a-zA-Z0-9]/g, '_');
+            return priceName === header.replace('supplier_price_', '');
+          });
+
+          if (matchingPrice?.new_supplier_price) {
+            price = `"${String(matchingPrice.new_supplier_price).replace('.', ',')}"`;
+          }
+        } else if (header.includes('supplier_recommended_price_')) {
+          const productSupplierPrices = supplierPricesMap.get(product.id) || [];
+          const matchingPrice = productSupplierPrices.find(p => {
+            const priceName = (p.source_name || 'Unknown Supplier').replace(/[^a-zA-Z0-9]/g, '_');
+            return priceName === header.replace('supplier_recommended_price_', '');
+          });
+
+          if (matchingPrice?.new_supplier_recommended_price) {
+            price = `"${String(matchingPrice.new_supplier_recommended_price).replace('.', ',')}"`;
           }
         }
 
         row.push(price);
+      });
+
+      // Add competitor stock
+      competitorStockHeaders.forEach(header => {
+        const _competitorName = header.replace('competitor_stock_', '').replace(/_/g, ' ');
+        let stock = '';
+
+        // Use competitorStockMap
+        const productCompetitorStock = competitorStockMap.get(product.id) || [];
+        const matchingStock = productCompetitorStock.find(s => {
+          const stockName = (s.source_name || 'Unknown Competitor').replace(/[^a-zA-Z0-9]/g, '_');
+          return stockName === header.replace('competitor_stock_', '');
+        });
+
+        if (matchingStock?.current_stock_quantity !== null && matchingStock?.current_stock_quantity !== undefined) {
+          stock = String(matchingStock.current_stock_quantity);
+        }
+
+        row.push(stock);
+      });
+
+      // Add supplier stock
+      supplierStockHeaders.forEach(header => {
+        let stock = '';
+
+        const productSupplierStock = supplierStockMap.get(product.id) || [];
+        const matchingStock = productSupplierStock.find(s => {
+          const stockName = (s.supplier_name || s.integration_name || 'Unknown Supplier').replace(/[^a-zA-Z0-9]/g, '_');
+          return stockName === header.replace('supplier_stock_', '');
+        });
+
+        if (matchingStock?.new_stock_quantity !== null && matchingStock?.new_stock_quantity !== undefined) {
+          stock = String(matchingStock.new_stock_quantity);
+        }
+
+        row.push(stock);
+      });
+
+      // Add custom field values
+      customFieldHeaders.forEach(fieldName => {
+        const productCustomFields = customFieldMap.get(product.id);
+        const value = productCustomFields ? productCustomFields.get(fieldName) : '';
+        row.push(escapeCsvValue(value));
       });
 
       csvContent += row.join(",") + "\n";
@@ -215,7 +698,6 @@ export async function POST(request: NextRequest) {
       headers: headers_response
     });
   } catch (error) {
-    console.error("Error generating products CSV:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unknown error" },
       { status: 500 }

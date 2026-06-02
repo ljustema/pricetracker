@@ -51,7 +51,7 @@ export default function SupportDashboard({ user }: SupportDashboardProps) {
     unread: 0
   });
 
-  const { unreadCount, markAsViewed, refreshNotifications } = useNotifications();
+  const { unreadCount: _unreadCount, markAsViewed: _markAsViewed, refreshNotifications } = useNotifications();
 
   const fetchConversations = async () => {
     setLoading(true);

@@ -27,7 +27,7 @@ export async function POST(
     // Verify conversation exists
     const { data: conversation, error: conversationError } = await supabase
       .from('support_conversations')
-      .select('id, user_id, status')
+      .select('id, user_id, status, subject')
       .eq('id', conversationId)
       .single();
 
@@ -74,7 +74,11 @@ export async function POST(
     }
 
     // Update conversation timestamp and status if needed
-    const updateData: any = {
+    const updateData: {
+      updated_at: string;
+      status?: string;
+      resolved_at?: null;
+    } = {
       updated_at: new Date().toISOString()
     };
 

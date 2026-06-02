@@ -119,7 +119,7 @@ export function ContactForm({ className = "", showTitle = true, compact = false 
       setIsSubmitted(true);
       toast({
         title: "Message sent!",
-        description: "Thank you for contacting us. We'll get back to you within 24 hours.",
+        description: "Thank you for contacting us. We&apos;ll get back to you within 24 hours.",
       });
 
       // Reset form
@@ -152,7 +152,7 @@ export function ContactForm({ className = "", showTitle = true, compact = false 
             <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-gray-900 mb-2">Message Sent!</h3>
             <p className="text-gray-600 mb-4">
-              Thank you for contacting us. We'll get back to you within 24 hours.
+              Thank you for contacting us. We&apos;ll get back to you within 24 hours.
             </p>
             <Button 
               onClick={() => setIsSubmitted(false)}
@@ -175,7 +175,7 @@ export function ContactForm({ className = "", showTitle = true, compact = false 
             Contact Us
           </CardTitle>
           <CardDescription>
-            Get in touch with our team. We'd love to hear from you.
+            Get in touch with our team. We&apos;d love to hear from you.
           </CardDescription>
         </CardHeader>
       )}
@@ -287,7 +287,7 @@ export function ContactForm({ className = "", showTitle = true, compact = false 
             <div className="text-center py-2">
               <p className="text-sm text-green-600 flex items-center justify-center">
                 <CheckCircle className="h-4 w-4 mr-1" />
-                Message sent! We'll get back to you soon.
+                Message sent! We&apos;ll get back to you soon.
               </p>
             </div>
           )}

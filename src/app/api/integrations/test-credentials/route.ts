@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/options';
 import { PrestashopClient } from '@/workers/ts-util-worker/src/prestashop-client';
+import { XMLParser } from 'fast-xml-parser';
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,9 +19,17 @@ export async function POST(request: NextRequest) {
     const { platform, api_url, api_key } = body;
 
     // Validate required fields
-    if (!platform || !api_url || !api_key) {
+    if (!platform || !api_url) {
       return NextResponse.json(
         { error: 'Missing required fields' },
+        { status: 400 }
+      );
+    }
+
+    // For platforms other than google-feed, require API key
+    if (platform !== 'google-feed' && !api_key) {
+      return NextResponse.json(
+        { error: 'Missing API key' },
         { status: 400 }
       );
     }
@@ -70,6 +79,65 @@ export async function POST(request: NextRequest) {
           message = error instanceof Error
             ? `Connection error: ${error.message}`
             : 'Unknown error connecting to Prestashop';
+        }
+        break;
+
+      case 'google-feed':
+        try {
+          console.log(`Testing Google Feed XML connection with URL: ${api_url}`);
+
+          // Fetch the XML feed
+          const response = await fetch(api_url, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36'
+            }
+          });
+
+          if (!response.ok) {
+            message = `Failed to fetch XML feed: ${response.status} ${response.statusText}`;
+            break;
+          }
+
+          const xmlContent = await response.text();
+
+          // Parse XML to validate structure
+          const parser = new XMLParser({
+            ignoreAttributes: false,
+            attributeNamePrefix: '_',
+            parseAttributeValue: true,
+            processEntities: false,
+            htmlEntities: false,
+          });
+
+          const parsedXml = parser.parse(xmlContent);
+
+          // Check for valid Google Feed structure
+          let itemCount = 0;
+          if (parsedXml.rss?.channel?.item) {
+            itemCount = Array.isArray(parsedXml.rss.channel.item)
+              ? parsedXml.rss.channel.item.length
+              : 1;
+          } else if (parsedXml.feed?.entry) {
+            itemCount = Array.isArray(parsedXml.feed.entry)
+              ? parsedXml.feed.entry.length
+              : 1;
+          } else if (parsedXml.channel?.item) {
+            itemCount = Array.isArray(parsedXml.channel.item)
+              ? parsedXml.channel.item.length
+              : 1;
+          }
+
+          if (itemCount > 0) {
+            success = true;
+            message = `Successfully connected to Google Feed XML. Found ${itemCount} product(s) in the feed.`;
+          } else {
+            message = 'XML feed is valid but contains no product items. Expected RSS/channel/item or feed/entry structure.';
+          }
+        } catch (error) {
+          console.error('Detailed error testing Google Feed XML connection:', error);
+          message = error instanceof Error
+            ? `Connection error: ${error.message}`
+            : 'Unknown error connecting to Google Feed XML';
         }
         break;
 

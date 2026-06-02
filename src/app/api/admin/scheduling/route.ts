@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 
+
+
 // GET /api/admin/scheduling - Get scheduling statistics and status
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const supabase = createSupabaseAdminClient();
 
@@ -73,7 +75,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get user profiles for recent jobs
-    const recentJobUserIds = recentJobsRaw?.map(job => job.scrapers.user_id) || [];
+    const recentJobUserIds = recentJobsRaw?.map(job => (job.scrapers as unknown as { user_id: string }).user_id) || [];
     const { data: recentJobUserProfiles, error: recentJobUsersError } = await supabase
       .from('user_profiles')
       .select('id, name, email')
@@ -92,7 +94,7 @@ export async function GET(request: NextRequest) {
       ...job,
       scrapers: {
         ...job.scrapers,
-        user_profiles: recentJobUserProfiles?.find(u => u.id === job.scrapers.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
+        user_profiles: recentJobUserProfiles?.find(u => u.id === (job.scrapers as unknown as { user_id: string }).user_id) || { name: 'Unknown', email: 'unknown@example.com' }
       }
     }));
 
@@ -120,7 +122,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get user profiles for recent integration runs
-    const integrationRunUserIds = recentIntegrationsRaw?.map(run => run.integrations.user_id) || [];
+    const integrationRunUserIds = recentIntegrationsRaw?.map(run => (run.integrations as unknown as { user_id: string }).user_id) || [];
     const { data: integrationRunUserProfiles, error: integrationRunUsersError } = await supabase
       .from('user_profiles')
       .select('id, name, email')
@@ -139,11 +141,11 @@ export async function GET(request: NextRequest) {
       ...run,
       integrations: {
         ...run.integrations,
-        user_profiles: integrationRunUserProfiles?.find(u => u.id === run.integrations.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
+        user_profiles: integrationRunUserProfiles?.find(u => u.id === (run.integrations as unknown as { user_id: string }).user_id) || { name: 'Unknown', email: 'unknown@example.com' }
       }
     }));
 
-    // Get scheduled scrapers with their next run times and user information
+    // Get scheduled scrapers with their stored next run times and user information
     const { data: scheduledScrapersRaw, error: scheduledError } = await supabase
       .from('scrapers')
       .select(`
@@ -151,6 +153,7 @@ export async function GET(request: NextRequest) {
         name,
         schedule,
         last_run,
+        next_run_time,
         is_active,
         scraper_type,
         user_id,
@@ -169,7 +172,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get user profiles for scrapers
-    const scraperUserIds = scheduledScrapersRaw?.map(s => s.user_id) || [];
+    const scraperUserIds = scheduledScrapersRaw?.map((s: Record<string, unknown>) => s.user_id as string) || [];
     const { data: scraperUserProfiles, error: scraperUsersError } = await supabase
       .from('user_profiles')
       .select('id, name, email')
@@ -184,12 +187,12 @@ export async function GET(request: NextRequest) {
     }
 
     // Combine scrapers with user profiles
-    const scheduledScrapers = scheduledScrapersRaw?.map(scraper => ({
+    const scheduledScrapers = scheduledScrapersRaw?.map((scraper: Record<string, unknown>) => ({
       ...scraper,
       user_profiles: scraperUserProfiles?.find(u => u.id === scraper.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
     }));
 
-    // Get scheduled integrations with their sync frequencies
+    // Get scheduled integrations with their sync frequencies and stored next run times
     const { data: scheduledIntegrationsRaw, error: integrationsScheduledError } = await supabase
       .from('integrations')
       .select(`
@@ -198,10 +201,13 @@ export async function GET(request: NextRequest) {
         platform,
         sync_frequency,
         last_sync_at,
+        next_run_time,
         status,
+        is_active,
         user_id
       `)
       .eq('status', 'active')
+      .eq('is_active', true)
       .not('sync_frequency', 'is', null)
       .order('name');
 
@@ -228,8 +234,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Combine integrations with user profiles
-    const scheduledIntegrations = scheduledIntegrationsRaw?.map(integration => ({
+    // Combine integrations with user profiles (next_run_time is already stored in database)
+    const scheduledIntegrations = (scheduledIntegrationsRaw || []).map((integration) => ({
       ...integration,
       user_profiles: integrationUserProfiles?.find(u => u.id === integration.user_id) || { name: 'Unknown', email: 'unknown@example.com' }
     }));
@@ -238,28 +244,33 @@ export async function GET(request: NextRequest) {
     let dueScrapersCount = 0;
     let dueIntegrationsCount = 0;
 
-    // Count pending scraper runs
-    const { data: pendingScraperRuns, error: scraperRunsError } = await supabase
-      .from('scraper_runs')
+    // Count scrapers that are due to run (next_run_time <= now)
+    const { data: dueScrapers, error: scraperRunsError } = await supabase
+      .from('scrapers')
       .select('id')
-      .eq('status', 'pending');
+      .eq('is_active', true)
+      .not('next_run_time', 'is', null)
+      .lte('next_run_time', new Date().toISOString());
 
     if (scraperRunsError) {
-      console.error('Error fetching pending scraper runs:', scraperRunsError);
+      console.error('Error fetching due scrapers:', scraperRunsError);
     } else {
-      dueScrapersCount = pendingScraperRuns?.length || 0;
+      dueScrapersCount = dueScrapers?.length || 0;
     }
 
-    // Count pending integration runs
-    const { data: pendingIntegrationRuns, error: integrationRunsError } = await supabase
-      .from('integration_runs')
+    // Count integrations that are due to run (next_run_time <= now)
+    const { data: dueIntegrations, error: integrationRunsError } = await supabase
+      .from('integrations')
       .select('id')
-      .eq('status', 'pending');
+      .eq('status', 'active')
+      .eq('is_active', true)
+      .not('next_run_time', 'is', null)
+      .lte('next_run_time', new Date().toISOString());
 
     if (integrationRunsError) {
-      console.error('Error fetching pending integration runs:', integrationRunsError);
+      console.error('Error fetching due integrations:', integrationRunsError);
     } else {
-      dueIntegrationsCount = pendingIntegrationRuns?.length || 0;
+      dueIntegrationsCount = dueIntegrations?.length || 0;
     }
 
 
@@ -303,7 +314,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, ...params } = body;
+    const { action, ..._params } = body;
 
     const supabase = createSupabaseAdminClient();
 
@@ -465,6 +476,18 @@ export async function PUT(request: NextRequest) {
         );
       }
 
+      // Recalculate next_run_time for the updated scraper
+      const { error: nextRunError } = await supabase
+        .rpc('update_scraper_next_run_time', {
+          scraper_id: id,
+          completed_at: new Date().toISOString()
+        });
+
+      if (nextRunError) {
+        console.error('Error updating scraper next run time:', nextRunError);
+        // Don't fail the request, just log the error
+      }
+
       return NextResponse.json({
         success: true,
         message: 'Scraper schedule updated successfully'
@@ -487,6 +510,18 @@ export async function PUT(request: NextRequest) {
           { error: 'Failed to update integration schedule' },
           { status: 500 }
         );
+      }
+
+      // Recalculate next_run_time for the updated integration
+      const { error: nextRunError } = await supabase
+        .rpc('update_integration_next_run_time', {
+          integration_id: id,
+          completed_at: new Date().toISOString()
+        });
+
+      if (nextRunError) {
+        console.error('Error updating integration next run time:', nextRunError);
+        // Don't fail the request, just log the error
       }
 
       return NextResponse.json({

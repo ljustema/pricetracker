@@ -1,24 +1,169 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { UploadIcon, PlusIcon, GitMergeIcon, DownloadIcon } from "lucide-react";
+import { useState, useEffect } from "react";
+import { UploadIcon, PlusIcon, GitMergeIcon, DownloadIcon, RefreshCwIcon } from "lucide-react";
 import CSVUploadForm from "./csv-upload-form";
 import CSVExportDialog from "./csv-export-dialog";
 import { useSearchParams } from "next/navigation";
-import { useToast } from "@/components/ui/use-toast";
-
 export default function ProductsHeader() {
   const [showCSVUploadForm, setShowCSVUploadForm] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [counts, setCounts] = useState({ duplicates: 0 });
+  const [isLoadingCounts, setIsLoadingCounts] = useState(true);
   const searchParams = useSearchParams();
-  const { toast } = useToast();
+
+  // Function to fetch counts
+  const fetchCounts = async () => {
+    try {
+      const response = await fetch('/api/products/counts');
+      if (response.ok) {
+        const data = await response.json();
+        setCounts(data);
+      }
+    } catch (error) {
+      console.error('Error fetching counts:', error);
+    } finally {
+      setIsLoadingCounts(false);
+    }
+  };
+
+  // Function to check refresh status
+  const checkRefreshStatus = async (): Promise<boolean> => {
+    try {
+      const response = await fetch('/api/products/refresh-prices-status');
+      if (response.ok) {
+        const data = await response.json();
+        return data.status?.is_refreshing || false;
+      }
+    } catch (error) {
+      console.error('[FRONTEND] Error checking refresh status:', error);
+    }
+    return false;
+  };
+
+  // Function to refresh competitor prices
+  const handleRefreshPrices = async () => {
+    setIsRefreshingPrices(true);
+    setRefreshMessage(null);
+
+    try {
+      console.log('[FRONTEND] Starting fetch with params: Object');
+      const response = await fetch('/api/products/refresh-prices', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json();
+
+      // Handle 202 Accepted - refresh started in background
+      if (response.status === 202) {
+        console.log('[FRONTEND] Refresh started in background (202 Accepted)');
+        setRefreshMessage({
+          type: 'success',
+          text: `⏳ Refresh started in background. This may take several minutes. Checking status...`
+        });
+
+        // Poll for refresh completion
+        let isStillRefreshing = true;
+        let pollCount = 0;
+        const maxPolls = 120; // 2 minutes of polling (1 second intervals)
+
+        const pollInterval = setInterval(async () => {
+          pollCount++;
+          isStillRefreshing = await checkRefreshStatus();
+
+          if (!isStillRefreshing || pollCount >= maxPolls) {
+            clearInterval(pollInterval);
+
+            if (isStillRefreshing && pollCount >= maxPolls) {
+              console.log('[FRONTEND] Refresh still in progress after 2 minutes, reloading anyway');
+            } else {
+              console.log('[FRONTEND] Refresh completed, reloading page');
+            }
+
+            setRefreshMessage({
+              type: 'success',
+              text: `✅ Refresh completed! Reloading page...`
+            });
+
+            setTimeout(() => {
+              window.location.reload();
+            }, 1000);
+          }
+        }, 1000);
+
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(data.details || 'Failed to refresh prices');
+      }
+
+      setRefreshMessage({
+        type: 'success',
+        text: `✅ Prices updated successfully`
+      });
+
+      // Clear message after 3 seconds
+      setTimeout(() => setRefreshMessage(null), 3000);
+
+      // Reload the page to show updated prices
+      window.location.reload();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[FRONTEND] Error refreshing prices:', error);
+      setRefreshMessage({
+        type: 'error',
+        text: `❌ Failed to refresh prices: ${errorMessage}`
+      });
+    } finally {
+      setIsRefreshingPrices(false);
+    }
+  };
+
+  // Fetch counts for notification badges
+  useEffect(() => {
+    fetchCounts();
+
+    // Refresh counts every 30 seconds
+    const interval = setInterval(fetchCounts, 30000);
+
+    // Listen for custom events to refresh counts immediately
+    const handleRefreshCounts = () => {
+      fetchCounts();
+    };
+
+    window.addEventListener('refreshProductCounts', handleRefreshCounts);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('refreshProductCounts', handleRefreshCounts);
+    };
+  }, []);
 
   const handleCSVUploadSuccess = () => {
     setShowCSVUploadForm(false);
     // Refresh the page to show the new products
     window.location.reload();
+  };
+
+  // Function to refresh counts (can be called from child components)
+  const _refreshCounts = async () => {
+    try {
+      const response = await fetch('/api/products/counts');
+      if (response.ok) {
+        const data = await response.json();
+        setCounts(data);
+      }
+    } catch (error) {
+      console.error('Error refreshing counts:', error);
+    }
   };
 
   // Get filter parameters from URL search params
@@ -36,11 +181,24 @@ export default function ProductsHeader() {
       }
       return undefined;
     })(),
+    supplierId: (() => {
+      // Handle multiple supplier IDs - pass all selected supplier IDs for CSV export
+      const supplierParam = searchParams.get('supplier');
+      if (supplierParam) {
+        const supplierIds = supplierParam.split(',').filter(Boolean);
+        return supplierIds.length > 0 ? supplierIds : undefined;
+      }
+      return undefined;
+    })(),
     hasPrice: searchParams.get('has_price') === 'true',
+    notOurProducts: searchParams.get('not_our_products') === 'true',
     sortBy: searchParams.get('sort') || 'created_at',
     sortOrder: searchParams.get('sortOrder') || 'desc',
     price_lower_than_competitors: searchParams.get('price_lower_than_competitors') === 'true',
     price_higher_than_competitors: searchParams.get('price_higher_than_competitors') === 'true',
+    in_stock_only: searchParams.get('in_stock_only') === 'true',
+    our_products_with_competitor_prices: searchParams.get('our_products_with_competitor_prices') === 'true',
+    our_products_with_supplier_prices: searchParams.get('our_products_with_supplier_prices') === 'true',
   };
 
   return (
@@ -54,6 +212,15 @@ export default function ProductsHeader() {
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold">Products</h1>
           <div className="flex space-x-3">
+            <button
+              onClick={handleRefreshPrices}
+              disabled={isRefreshingPrices}
+              className="flex items-center rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
+              title="Refresh competitor prices from the latest data"
+            >
+              <RefreshCwIcon className={`h-4 w-4 mr-2 ${isRefreshingPrices ? 'animate-spin' : ''}`} />
+              {isRefreshingPrices ? "Updating..." : "Update Prices"}
+            </button>
             <button
               onClick={() => setShowExportDialog(true)}
               disabled={isExporting}
@@ -69,12 +236,18 @@ export default function ProductsHeader() {
               <UploadIcon className="h-4 w-4 mr-2" />
               Upload CSV
             </button>
+
             <Link
               href="/app-routes/products/duplicates"
-              className="flex items-center rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+              className="flex items-center relative rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
             >
               <GitMergeIcon className="h-4 w-4 mr-2" />
               Merge Duplicates
+              {!isLoadingCounts && counts.duplicates > 0 && (
+                <span className="absolute -top-2 -right-2 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/2 -translate-y-1/2 bg-red-600 rounded-full">
+                  {counts.duplicates}
+                </span>
+              )}
             </Link>
             <Link
               href="/app-routes/products/new"
@@ -93,6 +266,17 @@ export default function ProductsHeader() {
             isExporting={isExporting}
             setIsExporting={setIsExporting}
           />
+        </div>
+      )}
+
+      {/* Refresh message notification */}
+      {refreshMessage && (
+        <div className={`mt-4 p-3 rounded-md text-sm font-medium ${
+          refreshMessage.type === 'success'
+            ? 'bg-green-50 text-green-800 border border-green-200'
+            : 'bg-red-50 text-red-800 border border-red-200'
+        }`}>
+          {refreshMessage.text}
         </div>
       )}
     </div>

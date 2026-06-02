@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { ScraperAISession, ScraperAIPhase } from "@/lib/services/scraper-session-service";
 import { CheckCircle, Circle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,11 +24,11 @@ const AiScriptAssembly = dynamic(() => import("./ai-script-assembly"), {
 });
 
 // Legacy components - kept for backward compatibility
-const AiUrlCollection = dynamic(() => import("./ai-url-collection"), {
+const _AiUrlCollection = dynamic(() => import("./ai-url-collection"), {
   loading: () => <div>Loading URL Collection...</div>,
 });
 
-const AiDataExtraction = dynamic(() => import("./ai-data-extraction"), {
+const _AiDataExtraction = dynamic(() => import("./ai-data-extraction"), {
   loading: () => <div>Loading Data Extraction...</div>,
 });
 
@@ -63,39 +63,8 @@ export default function AiScraperWizard({
     }
   }, [competitorId]);
 
-  // Fetch session data if sessionId is provided
-  useEffect(() => {
-    if (sessionId) {
-      fetchSession(sessionId);
-    } else {
-      setLoading(false);
-    }
-  }, [sessionId]);
-
-  // Fetch competitor data to get the website URL
-  const fetchCompetitorData = async (id: string) => {
-    try {
-      setFetchingCompetitor(true);
-      const response = await fetch(`/api/competitors/${id}`);
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch competitor data");
-      }
-
-      const data = await response.json();
-      if (data.website) {
-        // Set the URL state directly to the competitor's website
-        setUrl(data.website);
-      }
-      setFetchingCompetitor(false);
-    } catch (err) {
-      console.error("Error fetching competitor data:", err);
-      setFetchingCompetitor(false);
-    }
-  };
-
   // Fetch session data from the API
-  const fetchSession = async (id: string) => {
+  const fetchSession = useCallback(async (id: string) => {
     try {
       setLoading(true);
       console.log(`Fetching session data for ID: ${id}`);
@@ -136,6 +105,37 @@ export default function AiScraperWizard({
       throw err; // Re-throw to allow calling functions to handle the error
     } finally {
       setLoading(false);
+    }
+  }, [currentPhase]);
+
+  // Fetch session data if sessionId is provided
+  useEffect(() => {
+    if (sessionId) {
+      fetchSession(sessionId);
+    } else {
+      setLoading(false);
+    }
+  }, [sessionId, fetchSession]);
+
+  // Fetch competitor data to get the website URL
+  const fetchCompetitorData = async (id: string) => {
+    try {
+      setFetchingCompetitor(true);
+      const response = await fetch(`/api/competitors/${id}`);
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch competitor data");
+      }
+
+      const data = await response.json();
+      if (data.website) {
+        // Set the URL state directly to the competitor's website
+        setUrl(data.website);
+      }
+      setFetchingCompetitor(false);
+    } catch (err) {
+      console.error("Error fetching competitor data:", err);
+      setFetchingCompetitor(false);
     }
   };
 
@@ -324,7 +324,7 @@ export default function AiScraperWizard({
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [currentPhase, session?.id]);
+  }, [currentPhase, session?.id, fetchSession, session]);
 
   // Render the current phase component
   const renderPhaseComponent = () => {
@@ -499,27 +499,7 @@ export default function AiScraperWizard({
           />
         );
 
-      // Legacy phases - handle for backward compatibility
-      case "url-collection" as any:
-        console.warn("Legacy phase 'url-collection' detected, redirecting to 'data-validation'");
-        setCurrentPhase("data-validation");
-        return (
-          <AiDataValidation
-            session={session}
-            onComplete={() => handlePhaseComplete("data-validation", "assembly")}
-            onBack={() => setCurrentPhase("analysis")}
-          />
-        );
-      case "data-extraction" as any:
-        console.warn("Legacy phase 'data-extraction' detected, redirecting to 'data-validation'");
-        setCurrentPhase("data-validation");
-        return (
-          <AiDataValidation
-            session={session}
-            onComplete={() => handlePhaseComplete("data-validation", "assembly")}
-            onBack={() => setCurrentPhase("analysis")}
-          />
-        );
+
       default:
         console.error("Unknown phase:", currentPhase);
         return <div>Unknown phase: {currentPhase}. <Button onClick={() => setCurrentPhase("analysis")}>Reset to Analysis Phase</Button></div>;

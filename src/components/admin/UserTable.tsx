@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -54,7 +54,7 @@ export function UserTable({ searchParams }: UserTableProps) {
   const [statusFilter, setStatusFilter] = useState(searchParams.status || 'all');
 
   // Fetch users data
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -81,11 +81,11 @@ export function UserTable({ searchParams }: UserTableProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [searchParams]);
 
   useEffect(() => {
     fetchUsers();
-  }, [searchParams]);
+  }, [searchParams, fetchUsers]);
 
   // Update URL with new search params
   const updateSearchParams = (newParams: Record<string, string>) => {

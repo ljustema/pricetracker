@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { ValidationProduct, ValidationLog } from "@/lib/services/scraper-types";
 import { AlertCircle, CheckCircle, XCircle, Loader2 } from "lucide-react";
 
@@ -37,7 +37,10 @@ export default function AiScraperValidation({
         throw new Error('No TypeScript script found for this scraper');
       }
       
-      // Validate the script
+      // Validate the script with supplier/competitor context
+      // IMPORTANT: When modifying validation request body, also update:
+      // - pricetracker/src/components/scrapers/script-scraper-form.tsx (validation calls)
+      // - pricetracker/src/app/app-routes/scrapers/[scraperId]/edit/page.tsx (props passed to ScriptScraperForm)
       const validateResponse = await fetch('/api/scrapers/validate-script', {
         method: 'POST',
         headers: {
@@ -46,6 +49,9 @@ export default function AiScraperValidation({
         body: JSON.stringify({
           scraper_type: 'typescript',
           scriptContent: scraper.typescript_script,
+          // Include supplier/competitor ID for context
+          ...(scraper.supplier_id && { supplierId: scraper.supplier_id }),
+          ...(scraper.competitor_id && { competitorId: scraper.competitor_id }),
         }),
       });
       
@@ -69,17 +75,17 @@ export default function AiScraperValidation({
     }
   };
 
-  // Format price with currency
-  const formatPrice = (price: number | null, currency: string = 'SEK') => {
-    if (price === null) return 'N/A';
-    
+  // Format price with currency code
+  const formatPrice = (price: number | null | undefined, currencyCode: string = 'SEK') => {
+    if (price === null || price === undefined) return 'N/A';
+
     try {
       return new Intl.NumberFormat('sv-SE', {
         style: 'currency',
-        currency: currency,
+        currency: currencyCode,
       }).format(price);
-    } catch (e) {
-      return `${price} ${currency}`;
+    } catch (_e) {
+      return `${price} ${currencyCode}`;
     }
   };
 
@@ -184,7 +190,7 @@ export default function AiScraperValidation({
                         {product.name || 'N/A'}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {formatPrice(product.price, product.currency)}
+                        {formatPrice(product.competitor_price, product.currency_code)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {product.brand || 'N/A'}

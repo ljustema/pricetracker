@@ -7,9 +7,21 @@ export async function GET(request: NextRequest) {
     return new NextResponse('Missing URL parameter', { status: 400 });
   }
 
+  // Only log errors, not every request
+
   try {
     // Set up headers for the request
-    const headers: HeadersInit = {};
+    const headers: HeadersInit = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9,sv;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Sec-Fetch-Dest': 'image',
+      'Sec-Fetch-Mode': 'no-cors',
+      'Sec-Fetch-Site': 'cross-site'
+    };
 
     // Get auth header from the request if provided
     const authHeader = request.headers.get('x-auth-header');
@@ -70,11 +82,20 @@ export async function GET(request: NextRequest) {
     let lastError: Response | null = null;
 
     for (const urlToTry of urlsToTry) {
-      console.log('Attempting to fetch image from:', urlToTry);
-
       try {
-        // Fetch the image from the URL with appropriate headers
-        const response = await fetch(urlToTry, { headers });
+        // Fetch the image from the URL with appropriate headers and timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+        const response = await fetch(urlToTry, {
+          headers,
+          signal: controller.signal,
+          // Add additional fetch options for better compatibility
+          redirect: 'follow',
+          referrerPolicy: 'no-referrer-when-downgrade'
+        });
+
+        clearTimeout(timeoutId);
 
         if (response.ok) {
           // Get the image data as an array buffer
@@ -94,9 +115,11 @@ export async function GET(request: NextRequest) {
 
         // Store the last error response
         lastError = response;
-        console.error(`Failed to fetch from ${urlToTry}: ${response.status} ${response.statusText}`);
       } catch (fetchError) {
-        console.error(`Error fetching from ${urlToTry}:`, fetchError);
+        // Only log errors, not every failed attempt
+        if (fetchError instanceof Error && fetchError.name !== 'AbortError') {
+          console.error(`Error fetching image from ${urlToTry}:`, fetchError.message);
+        }
       }
     }
 

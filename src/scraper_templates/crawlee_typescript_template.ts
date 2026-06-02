@@ -8,6 +8,16 @@
  *
  * Configuration options are grouped at the top of the file for easy modification.
  *
+ * CUSTOM FIELDS: You can scrape any additional fields you want! PriceTracker now supports
+ * custom fields, so feel free to extract specifications, descriptions, dimensions, or any
+ * other product data. Just add them to your ScrapedProductData interface and they will be
+ * stored as custom fields automatically.
+ *
+ * STOCK TRACKING: This template includes comprehensive stock tracking functionality.
+ * Customize the extractStockData() function to extract stock status, quantities, and
+ * availability information from your target site. Stock data is automatically processed
+ * and stored in the stock_changes_competitors table.
+ *
  * Version 1.1.0 - Optimized for performance with memory-only storage, improved
  * concurrency handling, and better error management.
  */
@@ -115,7 +125,7 @@ const CONFIG = {
   // Performance settings
   PERFORMANCE: {
     MAX_CONCURRENCY: 10, // Maximum number of concurrent requests, max is 10.
-    BATCH_SIZE: 500, // Number of products to process before writing a batch
+    BATCH_SIZE: 50, // Number of products to collect before outputting to PriceTracker (affects memory usage)
     REQUEST_TIMEOUT: 60, // Timeout in seconds for each request
     MAX_RETRIES: 3, // Maximum number of retries for failed requests
     REQUEST_DELAY: 100, // Delay between requests in milliseconds (0 for no delay)
@@ -171,11 +181,28 @@ interface ScriptContext {
   run_id?: string;
 }
 
+interface StockData {
+  quantity: number | null;
+  status: string | null;
+  availability_date: Date | null;
+  total_stock: number | null;
+  combinations_stock: Array<{
+    article_number: string;
+    stock: number;
+    price: number;
+    campaign_price?: number;
+    stock_type: number;
+    empty_stock_text?: string;
+  }> | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  raw_data: Record<string, any> | null;
+}
+
 interface ScrapedProductData {
   name: string;
-  price: number | null;
-  currency: string;
-  url: string;
+  competitor_price: number | null; // Updated field name to match temp_competitors_scraped_data table
+  currency_code: string | null; // Updated field name to match temp_competitors_scraped_data table, allow null for database default
+  competitor_url: string; // Renamed from url to match database schema
   sku: string | null;
   brand: string | null;
   ean: string | null;
@@ -183,6 +210,13 @@ interface ScrapedProductData {
   is_available: boolean;
   description?: string | null;
   raw_price?: string | null;
+  stock_quantity?: number | null; // Stock quantity for temp_competitors_scraped_data
+  stock_status?: string | null; // Stock status for temp_competitors_scraped_data
+  availability_date?: Date | null; // Availability date for temp_competitors_scraped_data
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  raw_stock_data?: Record<string, any> | null; // Raw stock data for debugging
+  stock_data?: StockData | null; // Structured stock data to match worker expectations
+  raw_data?: Record<string, string | number | boolean | null> | null; // Custom fields data - any additional fields will be automatically processed as custom fields
 }
 
 interface ScriptMetadata {
@@ -191,7 +225,7 @@ interface ScriptMetadata {
   description: string;
   target_url: string;
   required_libraries: string[];
-  batch_size?: number;
+  batch_size?: number; // Number of products to process before outputting a batch
   max_concurrency?: number;
   collection_strategy: 'api' | 'scraping';
 }
@@ -533,7 +567,7 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
       // This needs to be customized based on the API's response format
       const pageProducts: ApiProduct[] = Array.isArray(data)
         ? data as ApiProduct[]
-        : ((data as any)?.products || (data as any)?.items || []);
+        : ((data as Record<string, unknown>)?.products || (data as Record<string, unknown>)?.items || []) as ApiProduct[];
 
       if (pageProducts.length > 0) {
         products.push(...pageProducts);
@@ -572,9 +606,9 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
       // This conversion needs to be customized based on the specific API response format
       return {
         name: apiProduct.name,
-        price: typeof apiProduct.price === 'number' ? apiProduct.price : parseFloat(String(apiProduct.price)),
-        currency: apiProduct.currency_code || 'SEK', // Default to SEK if not specified
-        url: `${CONFIG.SITE.BASE_URL}/product/${apiProduct.id}`, // Construct URL based on product ID
+        competitor_price: typeof apiProduct.price === 'number' ? apiProduct.price : parseFloat(String(apiProduct.price)),
+        currency_code: apiProduct.currency_code || null, // Let database set user's primary currency
+        competitor_url: `${CONFIG.SITE.BASE_URL}/product/${apiProduct.id}`, // Updated field name to match database schema
         sku: apiProduct.sku || null,
         brand: apiProduct.brand || null,
         ean: apiProduct.ean || null,
@@ -593,6 +627,182 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
 }
 
 // ------------------------------------ //
+// ---- CUSTOM FIELDS EXTRACTION ------ //
+// ------------------------------------ //
+
+/**
+ * Helper function to extract custom fields from a specifications table
+ * This is useful for extracting product specifications, features, or other structured data
+ *
+ * @param $ - Cheerio instance
+ * @param tableSelector - CSS selector for the table containing specifications
+ * @param keySelector - CSS selector for the key/label cells (relative to each row)
+ * @param valueSelector - CSS selector for the value cells (relative to each row)
+ * @returns Object with custom field data
+ */
+function extractCustomFieldsFromTable(
+  $: cheerio.CheerioAPI,
+  tableSelector: string,
+  keySelector: string = 'td:first-child, th:first-child',
+  valueSelector: string = 'td:last-child, th:last-child'
+): Record<string, string | number | boolean | null> {
+  const customFields: Record<string, string | number | boolean | null> = {};
+
+  try {
+    const table = $(tableSelector);
+    if (table.length === 0) {
+      return customFields;
+    }
+
+    // Find all rows in the table
+    const rows = table.find('tr, tbody tr');
+
+    rows.each((_index: number, row: unknown) => {
+      const $row = $(row);
+      const keyElement = $row.find(keySelector);
+      const valueElement = $row.find(valueSelector);
+
+      if (keyElement.length > 0 && valueElement.length > 0) {
+        let key = keyElement.text().trim();
+        const value = valueElement.text().trim();
+
+        // Clean up the key - remove colons, convert to snake_case
+        key = key
+          .replace(/[:\s]+$/, '') // Remove trailing colons and spaces
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_') // Replace non-alphanumeric with underscores
+          .replace(/^_+|_+$/g, '') // Remove leading/trailing underscores
+          .replace(/_+/g, '_'); // Replace multiple underscores with single
+
+        // Skip empty keys or values
+        if (!key || !value) {
+          return;
+        }
+
+        // Try to convert value to appropriate type
+        let processedValue: string | number | boolean | null = value;
+
+        // Check for boolean values
+        if (value.toLowerCase() === 'yes' || value.toLowerCase() === 'ja' || value.toLowerCase() === 'true') {
+          processedValue = true;
+        } else if (value.toLowerCase() === 'no' || value.toLowerCase() === 'nej' || value.toLowerCase() === 'false') {
+          processedValue = false;
+        } else {
+          // Try to parse as number (but keep original if it contains units or text)
+          const numericValue = parseFloat(value.replace(/[^\d.,]/g, '').replace(',', '.'));
+          if (!isNaN(numericValue) && value.match(/^\s*[\d.,]+\s*[a-zA-Z]*\s*$/)) {
+            // Only convert to number if the value is primarily numeric
+            const hasUnits = value.match(/[a-zA-Z]/);
+            if (!hasUnits) {
+              processedValue = numericValue;
+            }
+          }
+        }
+
+        customFields[key] = processedValue;
+      }
+    });
+
+  } catch (error) {
+    logError('Error extracting custom fields from table', error);
+  }
+
+  return customFields;
+}
+
+// ------------------------------------ //
+// ------ STOCK DATA EXTRACTION ------- //
+// ------------------------------------ //
+
+/**
+ * Extract stock data from product pages
+ * Customize the selectors and logic for your specific site
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractStockData($: any, url: string): StockData | null {
+  const stockData: StockData = {
+    quantity: null,
+    status: null,
+    availability_date: null,
+    total_stock: null,
+    combinations_stock: null,
+    raw_data: null
+  };
+
+  try {
+    // Initialize raw data object to store all stock-related information
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rawStockInfo: Record<string, any> = {};
+
+    // --- Extract stock status from your site's stock display ---
+    // Example: Look for stock information in common selectors
+    const stockSelectors = [
+      '.stock-status',
+      '.availability-status',
+      '.product-availability',
+      '.stock-info',
+      '.stockInfo > .stock', // Common pattern from Bright123/Ljusbutik
+      '.inventory-status'
+    ];
+
+    for (const selector of stockSelectors) {
+      const element = $(selector);
+      if (element.length > 0) {
+        const statusText = element.text().trim();
+        if (statusText) {
+          stockData.status = statusText;
+          rawStockInfo.status_source = selector;
+          rawStockInfo.original_status = statusText;
+          rawStockInfo.stock_element_classes = element.attr('class');
+          break;
+        }
+      }
+    }
+
+    // --- Extract stock quantity if available ---
+    // Example: Look for numeric stock quantities
+    const quantitySelectors = [
+      '.stock-quantity',
+      '.inventory-count',
+      '.items-in-stock'
+    ];
+
+    for (const selector of quantitySelectors) {
+      const element = $(selector);
+      if (element.length > 0) {
+        const quantityText = element.text().trim();
+        const quantity = parseInt(quantityText.replace(/[^0-9]/g, ''));
+        if (!isNaN(quantity)) {
+          stockData.quantity = quantity;
+          rawStockInfo.quantity_source = selector;
+          rawStockInfo.original_quantity = quantityText;
+          break;
+        }
+      }
+    }
+
+    // --- Store all raw data for debugging and future improvements ---
+    rawStockInfo.all_stock_text = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stock_elements: $('.stock, .inventory, .availability').map((_: number, el: any) => $(el).text().trim()).get(),
+      delivery_info: $('.delivery-info, .shipping-info').text().trim()
+    };
+
+    // Only set raw_data if we found any stock information
+    if (Object.keys(rawStockInfo).length > 0) {
+      stockData.raw_data = rawStockInfo;
+    }
+
+    // Stock data extracted successfully
+
+    return stockData;
+  } catch (error) {
+    logError(`Error extracting stock data from ${url}`, error);
+    return null;
+  }
+}
+
+// ------------------------------------ //
 // ---- PRODUCT DATA EXTRACTION ------- //
 // ------------------------------------ //
 
@@ -600,28 +810,34 @@ async function fetchProductsFromApi(isTestRun: boolean, isValidation: boolean): 
  * Helper function to extract product data using various methods
  * This function should be customized for each specific site
  */
-async function extractProductData($: any, url: string): Promise<ScrapedProductData | null> {
+async function extractProductData($: cheerio.CheerioAPI, url: string): Promise<ScrapedProductData | null> {
   try {
     // Initialize product data with defaults
     const productData: ScrapedProductData = {
       name: '',
-      price: null,
-      currency: 'SEK', // Default currency
-      url,
+      competitor_price: null,
+      currency_code: null, // Let database set user's primary currency
+      competitor_url: url, // Updated field name to match database schema
       sku: null,
       brand: null,
       ean: null,
       image_url: null,
       is_available: true, // Default to true unless found otherwise
       description: null,
-      raw_price: null
+      raw_price: null,
+      stock_quantity: null,
+      stock_status: null,
+      availability_date: null,
+      raw_stock_data: null,
+      stock_data: null,
+      raw_data: null
     };
 
     // --- 1. Try extracting from schema.org JSON-LD first ---
     if (CONFIG.PRODUCT_EXTRACTION.SCHEMA_ORG.ENABLED) {
       const schemaScripts = $(CONFIG.PRODUCT_EXTRACTION.SCHEMA_ORG.SCRIPT_SELECTOR);
       if (schemaScripts.length > 0) {
-        schemaScripts.each((_i: number, elem: any) => {
+        schemaScripts.each((_i: number, elem: unknown) => {
           try {
             const scriptContent = $(elem).html();
             if (scriptContent && scriptContent.includes('Product')) {
@@ -636,12 +852,12 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
                   }
 
                   // Extract Price & Currency
-                  if (productData.price === null && product.offers && product.offers.price) {
+                  if (productData.competitor_price === null && product.offers && product.offers.price) {
                     const priceStr = String(product.offers.price);
                     productData.raw_price = priceStr;
-                    productData.price = parseFloat(priceStr);
+                    productData.competitor_price = parseFloat(priceStr);
                     if (product.offers.priceCurrency) {
-                      productData.currency = product.offers.priceCurrency;
+                      productData.currency_code = product.offers.priceCurrency;
                     }
                   }
 
@@ -704,7 +920,7 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
     }
 
     // Extract Price
-    if (productData.price === null) {
+    if (productData.competitor_price === null) {
       const priceEl = $(selectors.PRICE);
       if (priceEl.length > 0) {
         productData.raw_price = priceEl.text().trim();
@@ -719,10 +935,10 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
           if (!isNaN(price)) {
             // Sanity check for large numbers (possible formatting issues)
             if (price > 100000) {
-              productData.price = price / 1000;
+              productData.competitor_price = price / 1000;
             } else {
               // Convert to integer if it's a whole number
-              productData.price = price % 1 === 0 ? Math.floor(price) : price;
+              productData.competitor_price = price % 1 === 0 ? Math.floor(price) : price;
             }
           }
         }
@@ -730,10 +946,10 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
     }
 
     // Extract Currency
-    if (productData.currency === 'SEK' && selectors.CURRENCY) {
+    if (productData.currency_code === null && selectors.CURRENCY) {
       const currencyEl = $(selectors.CURRENCY);
       if (currencyEl.length > 0) {
-        productData.currency = currencyEl.text().trim();
+        productData.currency_code = currencyEl.text().trim();
       }
     }
 
@@ -807,7 +1023,42 @@ async function extractProductData($: any, url: string): Promise<ScrapedProductDa
       }
     }
 
-    // --- 3. Validate the extracted data ---
+    // --- 3. Extract custom fields from specifications tables ---
+    // This is a generic example - customize the selectors for your specific site
+    // Common patterns: specifications tables, feature lists, product details tables
+    const customFields = extractCustomFieldsFromTable(
+      $,
+      '.product-specifications table, .product-features table, .product-details table', // Table selector
+      'td:first-child, th:first-child', // Key selector
+      'td:last-child, th:last-child'    // Value selector
+    );
+
+    // Add custom fields to raw_data if any were found
+    if (Object.keys(customFields).length > 0) {
+      productData.raw_data = customFields;
+    }
+
+    // --- 4. Extract stock data ---
+    const stockData = extractStockData($, url);
+    if (stockData) {
+      // Set the stock_data object to match worker expectations
+      productData.stock_data = {
+        quantity: stockData.quantity,
+        status: stockData.status,
+        availability_date: stockData.availability_date,
+        total_stock: stockData.total_stock,
+        combinations_stock: stockData.combinations_stock,
+        raw_data: stockData.raw_data
+      };
+
+      // Also set individual fields for backward compatibility
+      productData.stock_quantity = stockData.quantity;
+      productData.stock_status = stockData.status;
+      productData.availability_date = stockData.availability_date;
+      productData.raw_stock_data = stockData.raw_data;
+    }
+
+    // --- 5. Validate the extracted data ---
     // Required field - if no name, the extraction failed
     if (!productData.name) {
       return null;
@@ -974,7 +1225,7 @@ async function scrape(context: ScriptContext): Promise<void> {
 
     // Set up progress reporting
     const progressInterval = setInterval(() => {
-      logProgress(`Phase 2: Processing products: ${processedCount}/${totalUrls} (Batch: ${batchCount})`, 2);
+      logProgress(`Processing products: ${processedCount}/${totalUrls} (Batch: ${batchCount})`, 2);
     }, 5000);
 
     // Calculate optimal concurrency based on system resources

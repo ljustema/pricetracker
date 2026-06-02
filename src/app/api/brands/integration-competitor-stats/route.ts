@@ -6,10 +6,16 @@ import { createSupabaseAdminClient } from '@/lib/supabase/server';
 // Add cache headers to improve performance
 const CACHE_MAX_AGE = 60; // Cache for 60 seconds
 
+interface CompetitorStatistic {
+  competitor_id: string;
+  product_count: number;
+  brand_count: number;
+}
+
 /**
  * GET handler to fetch integration and competitor statistics for the brands page
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Get the authenticated user's session
     const session = await getServerSession(authOptions);
@@ -75,7 +81,7 @@ export async function GET(request: NextRequest) {
       integrations.map(async (integration) => {
         // Get total products for this integration
         const { count: totalCount, error: totalError } = await supabase
-          .from('price_changes')
+          .from('price_changes_competitors')
           .select('product_id', { count: 'exact', head: true })
           .eq('user_id', userId)
           .eq('integration_id', integration.id);
@@ -102,25 +108,12 @@ export async function GET(request: NextRequest) {
         if (uniqueError) {
           console.error(`Error fetching unique products for integration ${integration.id}:`, uniqueError);
 
-          // Fallback query if RPC fails
+          // Fallback query if RPC fails - simplified approach
           const { count, error: fallbackError } = await supabase
-            .from('products')
-            .select('id', { count: 'exact', head: true })
+            .from('price_changes_competitors')
+            .select('product_id', { count: 'exact', head: true })
             .eq('user_id', userId)
-            .in('id', (subquery) => {
-              subquery
-                .from('price_changes')
-                .select('product_id')
-                .eq('user_id', userId)
-                .eq('integration_id', integration.id)
-                .not('product_id', 'in', (subsubquery) => {
-                  subsubquery
-                    .from('price_changes')
-                    .select('product_id')
-                    .eq('user_id', userId)
-                    .neq('integration_id', integration.id);
-                });
-            });
+            .eq('integration_id', integration.id);
 
           if (fallbackError) {
             console.error(`Fallback query also failed for integration ${integration.id}:`, fallbackError);
@@ -151,7 +144,7 @@ export async function GET(request: NextRequest) {
     // Create a map of competitor_id to stats for quick lookup
     const statsMap = new Map<string, { product_count: number, brand_count: number }>();
     if (competitorStatsData) {
-      competitorStatsData.forEach((stat: any) => {
+      competitorStatsData.forEach((stat: CompetitorStatistic) => {
         statsMap.set(stat.competitor_id, {
           product_count: stat.product_count || 0,
           brand_count: stat.brand_count || 0
@@ -179,25 +172,12 @@ export async function GET(request: NextRequest) {
         if (uniqueError) {
           console.error(`Error fetching unique products for competitor ${competitor.id}:`, uniqueError);
 
-          // Fallback query if RPC fails
+          // Fallback query if RPC fails - simplified approach
           const { count, error: fallbackError } = await supabase
-            .from('products')
-            .select('id', { count: 'exact', head: true })
+            .from('price_changes_competitors')
+            .select('product_id', { count: 'exact', head: true })
             .eq('user_id', userId)
-            .in('id', (subquery) => {
-              subquery
-                .from('price_changes')
-                .select('product_id')
-                .eq('user_id', userId)
-                .eq('competitor_id', competitor.id)
-                .not('product_id', 'in', (subsubquery) => {
-                  subsubquery
-                    .from('price_changes')
-                    .select('product_id')
-                    .eq('user_id', userId)
-                    .neq('competitor_id', competitor.id);
-                });
-            });
+            .eq('competitor_id', competitor.id);
 
           if (fallbackError) {
             console.error(`Fallback query also failed for competitor ${competitor.id}:`, fallbackError);

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Image from 'next/image';
 
 type Tab = 'dashboard' | 'competitors' | 'products';
 
@@ -80,10 +81,12 @@ export default function DashboardPreview() {
             isChangingTab ? 'opacity-0 scale-[0.98]' : 'opacity-100 scale-100'
           }`}
         >
-          <img
+          <Image
             src={tabScreenshots[activeTab]}
             alt={tabAltText[activeTab]}
             className="rounded-lg shadow-md w-full"
+            width={800}
+            height={600}
           />
 
           {/* Add a subtle overlay to indicate interactivity */}

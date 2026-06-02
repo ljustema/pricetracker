@@ -3,15 +3,10 @@ import { BrandService } from '@/lib/services/brand-service';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/options';
 
-// Helper function to get brand ID from context
-function getBrandIdFromContext(context: { params?: { id?: string } }): string | null {
-  return context.params?.id || null;
-}
-
 /**
  * GET handler to fetch analytics data for a specific brand by ID
  */
-export async function GET(_request: NextRequest, context: { params?: { id?: string } }) {
+export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     // Get the authenticated user's session
     const session = await getServerSession(authOptions);
@@ -21,7 +16,7 @@ export async function GET(_request: NextRequest, context: { params?: { id?: stri
     const userId = session.user.id;
 
     // Get the brand ID from the URL path
-    const brandId = getBrandIdFromContext(context);
+    const { id: brandId } = await params;
     if (!brandId) {
       return NextResponse.json({ error: 'Brand ID is required' }, { status: 400 });
     }

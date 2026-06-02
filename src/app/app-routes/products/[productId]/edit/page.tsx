@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import Link from "next/link";
+import ProductCustomFields from "@/components/products/ProductCustomFields";
 
 interface Brand {
   id: string;
@@ -18,6 +18,7 @@ export default function ProductEditPage() {
   const [isFetching, setIsFetching] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [brands, setBrands] = useState<Brand[]>([]);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
   const [formData, setFormData] = useState({
     name: "",
     sku: "",
@@ -27,9 +28,9 @@ export default function ProductEditPage() {
     category: "",
     description: "",
     image_url: "",
-    url: "", // Add URL field
-    our_price: "",
-    wholesale_price: "",
+    our_url: "", // Renamed from url
+    our_retail_price: "", // Renamed from our_price
+    our_wholesale_price: "", // Renamed from wholesale_price
     is_active: true,
   });
 
@@ -92,9 +93,9 @@ export default function ProductEditPage() {
           category: product.category || "",
           description: product.description || "",
           image_url: product.image_url || "",
-          url: product.url || "", // Include the URL from the product
-          our_price: product.our_price ? product.our_price.toString() : "",
-          wholesale_price: product.wholesale_price ? product.wholesale_price.toString() : "",
+          our_url: product.our_url || "", // Include the our_url from the product
+          our_retail_price: product.our_retail_price ? product.our_retail_price.toString() : "",
+          our_wholesale_price: product.our_wholesale_price ? product.our_wholesale_price.toString() : "",
           is_active: product.is_active !== undefined ? product.is_active : true,
         });
       } catch (err) {
@@ -135,6 +136,10 @@ export default function ProductEditPage() {
     }
   };
 
+  const handleCustomFieldChange = (values: Record<string, string>) => {
+    setCustomFieldValues(values);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -144,8 +149,8 @@ export default function ProductEditPage() {
       // Prepare the data for submission
       const productData = {
         ...formData,
-        our_price: formData.our_price ? parseFloat(formData.our_price) : null,
-        wholesale_price: formData.wholesale_price ? parseFloat(formData.wholesale_price) : null,
+        our_retail_price: formData.our_retail_price ? parseFloat(formData.our_retail_price) : null,
+        our_wholesale_price: formData.our_wholesale_price ? parseFloat(formData.our_wholesale_price) : null,
         // Make sure we're sending both brand and brand_id
         brand: formData.brand,
         brand_id: formData.brand_id,
@@ -164,6 +169,27 @@ export default function ProductEditPage() {
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to update product');
+      }
+
+      // Save custom fields if there are any
+      if (Object.keys(customFieldValues).length > 0) {
+        const customFieldValuesToSave = Object.entries(customFieldValues).map(([fieldId, value]) => ({
+          custom_field_id: fieldId,
+          value: value.trim(),
+        }));
+
+        const customFieldsResponse = await fetch(`/api/products/${productId}/custom-fields`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ customFieldValues: customFieldValuesToSave }),
+        });
+
+        if (!customFieldsResponse.ok) {
+          console.error('Failed to save custom fields, but product was updated');
+          // Don't throw error here, as the main product was saved successfully
+        }
       }
 
       // Redirect back to the product detail page
@@ -313,14 +339,14 @@ export default function ProductEditPage() {
             </div>
 
             <div>
-              <label htmlFor="url" className="block text-sm font-medium">
+              <label htmlFor="our_url" className="block text-sm font-medium">
                 Product URL
               </label>
               <input
-                id="url"
-                name="url"
+                id="our_url"
+                name="our_url"
                 type="text"
-                value={formData.url}
+                value={formData.our_url}
                 onChange={handleChange}
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
                 placeholder="https://example.com/product"
@@ -328,20 +354,20 @@ export default function ProductEditPage() {
             </div>
 
             <div>
-              <label htmlFor="our_price" className="block text-sm font-medium">
-                Our Price
+              <label htmlFor="our_retail_price" className="block text-sm font-medium">
+                Our Retail Price
               </label>
               <div className="relative mt-1 rounded-md shadow-sm">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                   <span className="text-gray-500 sm:text-sm">$</span>
                 </div>
                 <input
-                  id="our_price"
-                  name="our_price"
+                  id="our_retail_price"
+                  name="our_retail_price"
                   type="number"
                   step="0.01"
                   min="0"
-                  value={formData.our_price}
+                  value={formData.our_retail_price}
                   onChange={handleChange}
                   className="block w-full rounded-md border border-gray-300 pl-7 pr-12 py-2 focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
                   placeholder="0.00"
@@ -350,20 +376,20 @@ export default function ProductEditPage() {
             </div>
 
             <div>
-              <label htmlFor="wholesale_price" className="block text-sm font-medium">
-                Wholesale Price
+              <label htmlFor="our_wholesale_price" className="block text-sm font-medium">
+                Our Wholesale Price
               </label>
               <div className="relative mt-1 rounded-md shadow-sm">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                   <span className="text-gray-500 sm:text-sm">$</span>
                 </div>
                 <input
-                  id="wholesale_price"
-                  name="wholesale_price"
+                  id="our_wholesale_price"
+                  name="our_wholesale_price"
                   type="number"
                   step="0.01"
                   min="0"
-                  value={formData.wholesale_price}
+                  value={formData.our_wholesale_price}
                   onChange={handleChange}
                   className="block w-full rounded-md border border-gray-300 pl-7 pr-12 py-2 focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
                   placeholder="0.00"
@@ -401,13 +427,23 @@ export default function ProductEditPage() {
             </label>
           </div>
 
+          {/* Custom Fields Section */}
+          <div className="border-t border-gray-200 pt-6">
+            <ProductCustomFields
+              productId={productId}
+              alwaysEditable={true}
+              onValuesChange={handleCustomFieldChange}
+            />
+          </div>
+
           <div className="flex justify-end space-x-3">
-            <Link
-              href="/app-routes/products"
+            <button
+              type="button"
+              onClick={() => router.back()}
               className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
             >
               Cancel
-            </Link>
+            </button>
             <button
               type="submit"
               disabled={isLoading}

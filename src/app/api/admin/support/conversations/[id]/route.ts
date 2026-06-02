@@ -105,7 +105,7 @@ export async function PUT(
 ) {
   try {
     // Validate admin access
-    const adminUser = await validateAdminApiAccess();
+    const _adminUser = await validateAdminApiAccess();
 
     const { id: conversationId } = await params;
     const body = await request.json();

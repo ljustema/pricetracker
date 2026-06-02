@@ -125,7 +125,7 @@ export async function POST(_request: NextRequest) {
 
     // Fetch price changes (limit to recent ones to avoid huge files)
     const { data: priceChangesData, error: priceChangesError } = await supabase
-      .from("price_changes")
+      .from("price_changes_competitors")
       .select("*")
       .eq("user_id", userId)
       .order("changed_at", { ascending: false })
@@ -139,8 +139,27 @@ export async function POST(_request: NextRequest) {
       );
     }
 
-    // Add price changes to the zip file
-    zip.file("price_changes.json", JSON.stringify(priceChangesData, null, 2));
+    // Add competitor price changes to the zip file
+    zip.file("price_changes_competitors.json", JSON.stringify(priceChangesData, null, 2));
+
+    // Fetch supplier price changes (limit to recent ones to avoid huge files)
+    const { data: supplierPriceChangesData, error: supplierPriceChangesError } = await supabase
+      .from("price_changes_suppliers")
+      .select("*")
+      .eq("user_id", userId)
+      .order("changed_at", { ascending: false })
+      .limit(1000);
+
+    if (supplierPriceChangesError) {
+      console.error("Error fetching supplier price changes:", supplierPriceChangesError);
+      return NextResponse.json(
+        { error: "Failed to fetch supplier price changes" },
+        { status: 500 }
+      );
+    }
+
+    // Add supplier price changes to the zip file
+    zip.file("price_changes_suppliers.json", JSON.stringify(supplierPriceChangesData, null, 2));
 
     // Fetch brands
     const { data: brandsData, error: brandsError } = await supabase

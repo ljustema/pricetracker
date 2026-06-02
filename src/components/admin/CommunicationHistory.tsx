@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,7 +37,7 @@ export function CommunicationHistory() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
 
-  const fetchCommunications = async (page = 1) => {
+  const fetchCommunications = useCallback(async (page = 1) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -63,11 +63,11 @@ export function CommunicationHistory() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [searchTerm, statusFilter, typeFilter]);
 
   useEffect(() => {
     fetchCommunications(1);
-  }, [searchTerm, statusFilter, typeFilter]);
+  }, [searchTerm, statusFilter, typeFilter, fetchCommunications]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {

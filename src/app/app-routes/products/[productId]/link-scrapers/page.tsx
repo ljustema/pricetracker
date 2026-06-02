@@ -32,13 +32,7 @@ interface Product {
   brand?: string;
 }
 
-interface LinkScrapersPageProps {
-  params: {
-    productId: string;
-  };
-}
-
-export default function LinkScrapersPage({ params }: LinkScrapersPageProps) {
+export default function LinkScrapersPage() {
   const router = useRouter();
   const { data: session } = useSession();
   const [isLoading, setIsLoading] = useState(false);
@@ -255,12 +249,13 @@ export default function LinkScrapersPage({ params }: LinkScrapersPageProps) {
           )}
 
           <div className="flex justify-end space-x-3">
-            <Link
-              href={`/products/${productId}`}
+            <button
+              type="button"
+              onClick={() => router.back()}
               className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
             >
               Cancel
-            </Link>
+            </button>
             <button
               type="submit"
               disabled={isLoading || scrapers.length === 0}

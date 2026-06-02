@@ -9,7 +9,7 @@ const CACHE_MAX_AGE = 60; // Cache for 60 seconds
 /**
  * GET handler to fetch market coverage data for competitors
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Get the authenticated user's session
     const session = await getServerSession(authOptions);
@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
       competitors.map(async (competitor) => {
         // Count distinct products for this competitor
         const { count: productCount, error: countError } = await supabase
-          .from('price_changes')
+          .from('price_changes_competitors')
           .select('product_id', { count: 'exact', head: true })
           .eq('user_id', userId)
           .eq('competitor_id', competitor.id);
@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
         }
 
         // Calculate coverage percentage
-        const coveragePercentage = totalProducts ? (productCount / totalProducts) * 100 : 0;
+        const coveragePercentage = totalProducts ? ((productCount || 0) / totalProducts) * 100 : 0;
 
         return {
           competitor_id: competitor.id,

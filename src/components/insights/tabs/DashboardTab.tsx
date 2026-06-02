@@ -5,6 +5,9 @@ import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/components/ui/use-toast';
 import { formatCurrency } from '@/lib/utils/format';
+import { StockBadgeCompact } from '@/components/ui/stock-badge';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 
 // Simple SVG icons
 const ProductIcon = () => (
@@ -37,14 +40,19 @@ interface PriceChange {
   product_id: string;
   competitor_id: string | null;
   integration_id: string | null;
-  old_price: number;
-  new_price: number;
+  old_competitor_price?: number;
+  new_competitor_price?: number;
+  old_our_retail_price?: number;
+  new_our_retail_price?: number;
   price_change_percentage: number;
   changed_at: string;
   products: {
     name: string;
   };
   competitors?: {
+    name: string;
+  };
+  integrations?: {
     name: string;
   };
 }
@@ -63,9 +71,53 @@ interface Product {
   };
 }
 
+interface StockChange {
+  id: string;
+  product_id: string;
+  competitor_id: string;
+  old_stock_quantity: number | null;
+  new_stock_quantity: number | null;
+  old_stock_status: string | null;
+  new_stock_status: string | null;
+  stock_change_quantity: number | null;
+  changed_at: string;
+  products: {
+    name: string;
+  };
+  competitors: {
+    name: string;
+  };
+}
+
+interface SupplierPriceChange {
+  id: string;
+  product_id: string;
+  supplier_id: string | null;
+  integration_id: string | null;
+  old_supplier_price: number | null;
+  new_supplier_price: number | null;
+  old_our_wholesale_price: number | null;
+  new_our_wholesale_price: number | null;
+  price_change_percentage: number | null;
+  changed_at: string;
+  products: {
+    name: string;
+  };
+  suppliers: {
+    name: string;
+  } | null;
+  integrations: {
+    name: string;
+  } | null;
+}
+
 interface DashboardActivity {
-  latestPriceChanges: PriceChange[];
+  latestCompetitorPriceChanges: PriceChange[];
+  latestOurRetailPriceChanges: PriceChange[];
   latestProducts: Product[];
+  latestStockChanges: StockChange[];
+  latestSupplierPriceChanges: SupplierPriceChange[];
+  latestOurWholesalePriceChanges: SupplierPriceChange[];
 }
 
 const DashboardTab: React.FC = () => {
@@ -75,6 +127,41 @@ const DashboardTab: React.FC = () => {
   const [isLoadingActivity, setIsLoadingActivity] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
+
+  // Modal states
+  const [modalData, setModalData] = useState<{
+    latestCompetitorPriceChanges: PriceChange[];
+    latestOurRetailPriceChanges: PriceChange[];
+    latestProducts: Product[];
+    latestStockChanges: StockChange[];
+    latestSupplierPriceChanges: SupplierPriceChange[];
+    latestOurWholesalePriceChanges: SupplierPriceChange[];
+  } | null>(null);
+  const [isLoadingModal, setIsLoadingModal] = useState(false);
+
+  // Fetch extended data for modals
+  const fetchModalData = async () => {
+    if (modalData) return; // Already loaded
+
+    try {
+      setIsLoadingModal(true);
+      const response = await fetch('/api/insights/dashboard/activity?limit=50');
+      if (!response.ok) {
+        throw new Error(`Failed to fetch extended activity data: ${response.statusText}`);
+      }
+      const data = await response.json();
+      setModalData(data);
+    } catch (err) {
+      console.error('Error fetching extended activity data:', err);
+      toast({
+        title: 'Error',
+        description: 'Failed to load extended activity data',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoadingModal(false);
+    }
+  };
 
   // Fetch KPIs
   useEffect(() => {
@@ -194,19 +281,73 @@ const DashboardTab: React.FC = () => {
 
       {/* Recent Activity Section */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Recent Price Changes */}
+        {/* Recent Competitor Price Changes */}
         <Card>
           <CardHeader>
-            <CardTitle>Recent Price Changes</CardTitle>
+            <div className="flex justify-between items-center">
+              <CardTitle>Recent Competitor Price Changes</CardTitle>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" onClick={fetchModalData}>
+                    See more
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="w-[50vw] !max-w-none max-h-[80vh]">
+                  <DialogHeader>
+                    <DialogTitle>Recent Competitor Price Changes (Latest 50)</DialogTitle>
+                    <DialogDescription>
+                      View the latest 50 competitor price changes from your tracked products.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="overflow-y-auto max-h-[60vh] space-y-3 pr-4">
+                    {isLoadingModal ? (
+                      <div className="text-center py-8">Loading...</div>
+                    ) : modalData?.latestCompetitorPriceChanges ? (
+                      modalData.latestCompetitorPriceChanges.map((priceChange) => (
+                        <div key={priceChange.id} className="border-b pb-3 last:border-0">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <Link
+                                href={`/app-routes/products/${priceChange.product_id}`}
+                                className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                                target="_blank"
+                              >
+                                {priceChange.products.name}
+                              </Link>
+                              <p className="text-sm text-gray-500">
+                                {priceChange.competitors?.name || 'Unknown competitor'}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
+                              </div>
+                              <div className="text-sm text-gray-500">
+                                {formatCurrency(priceChange.old_competitor_price || 0)} → {formatCurrency(priceChange.new_competitor_price || 0)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            {new Date(priceChange.changed_at).toLocaleString()}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">No recent competitor price changes</div>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
           </CardHeader>
           <CardContent>
-            {activity.latestPriceChanges.length === 0 ? (
+            {(activity.latestCompetitorPriceChanges || []).length === 0 ? (
               <div className="text-center py-4 text-gray-500">
-                <p>No recent price changes</p>
+                <p>No recent competitor price changes</p>
               </div>
             ) : (
               <div className="space-y-4">
-                {activity.latestPriceChanges.map((priceChange) => (
+                {(activity.latestCompetitorPriceChanges || []).map((priceChange) => (
                   <div key={priceChange.id} className="border-b pb-3 last:border-0">
                     <div className="flex justify-between items-start">
                       <div>
@@ -217,15 +358,15 @@ const DashboardTab: React.FC = () => {
                           {priceChange.products.name}
                         </Link>
                         <p className="text-sm text-gray-500">
-                          {priceChange.competitors ? priceChange.competitors.name : 'Your price'}
+                          {priceChange.competitors?.name || 'Unknown competitor'}
                         </p>
                       </div>
                       <div className="text-right">
-                        <div className={`font-medium ${priceChange.price_change_percentage > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {priceChange.price_change_percentage > 0 ? '+' : ''}{priceChange.price_change_percentage.toFixed(2)}%
+                        <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
                         </div>
                         <div className="text-sm text-gray-500">
-                          {formatCurrency(priceChange.old_price)} → {formatCurrency(priceChange.new_price)}
+                          {formatCurrency(priceChange.old_competitor_price || 0)} → {formatCurrency(priceChange.new_competitor_price || 0)}
                         </div>
                       </div>
                     </div>
@@ -239,10 +380,354 @@ const DashboardTab: React.FC = () => {
           </CardContent>
         </Card>
 
+        {/* Recent Our Retail Price Changes */}
+        <Card>
+          <CardHeader>
+            <div className="flex justify-between items-center">
+              <CardTitle>Recent Our Retail Price Changes</CardTitle>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" onClick={fetchModalData}>
+                    See more
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="w-[50vw] !max-w-none max-h-[80vh]">
+                  <DialogHeader>
+                    <DialogTitle>Recent Our Retail Price Changes (Latest 50)</DialogTitle>
+                    <DialogDescription>
+                      View the latest 50 retail price changes from your integrations.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="overflow-y-auto max-h-[60vh] space-y-3 pr-4">
+                    {isLoadingModal ? (
+                      <div className="text-center py-8">Loading...</div>
+                    ) : modalData?.latestOurRetailPriceChanges ? (
+                      modalData.latestOurRetailPriceChanges.map((priceChange) => (
+                        <div key={priceChange.id} className="border-b pb-3 last:border-0">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <Link
+                                href={`/app-routes/products/${priceChange.product_id}`}
+                                className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                                target="_blank"
+                              >
+                                {priceChange.products.name}
+                              </Link>
+                              <p className="text-sm text-gray-500">
+                                {priceChange.integrations?.name || 'Unknown integration'}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
+                              </div>
+                              <div className="text-sm text-gray-500">
+                                {formatCurrency(priceChange.old_our_retail_price || 0)} → {formatCurrency(priceChange.new_our_retail_price || 0)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            {new Date(priceChange.changed_at).toLocaleString()}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">No recent retail price changes</div>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {(activity.latestOurRetailPriceChanges || []).length === 0 ? (
+              <div className="text-center py-4 text-gray-500">
+                <p>No recent retail price changes</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {(activity.latestOurRetailPriceChanges || []).map((priceChange) => (
+                  <div key={priceChange.id} className="border-b pb-3 last:border-0">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <Link
+                          href={`/app-routes/products/${priceChange.product_id}`}
+                          className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                        >
+                          {priceChange.products.name}
+                        </Link>
+                        <p className="text-sm text-gray-500">
+                          {priceChange.integrations?.name || 'Unknown integration'}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          {formatCurrency(priceChange.old_our_retail_price || 0)} → {formatCurrency(priceChange.new_our_retail_price || 0)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {new Date(priceChange.changed_at).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Second row for supplier price changes */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Recent Supplier Price Changes */}
+        <Card>
+          <CardHeader>
+            <div className="flex justify-between items-center">
+              <CardTitle>Recent Supplier Price Changes</CardTitle>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" onClick={fetchModalData}>
+                    See more
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="w-[50vw] !max-w-none max-h-[80vh]">
+                  <DialogHeader>
+                    <DialogTitle>Recent Supplier Price Changes (Latest 50)</DialogTitle>
+                    <DialogDescription>
+                      View the latest 50 supplier price changes from your tracked suppliers.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="overflow-y-auto max-h-[60vh] space-y-3 pr-4">
+                    {isLoadingModal ? (
+                      <div className="text-center py-8">Loading...</div>
+                    ) : modalData?.latestSupplierPriceChanges ? (
+                      modalData.latestSupplierPriceChanges.map((supplierPriceChange) => (
+                        <div key={supplierPriceChange.id} className="border-b pb-3 last:border-0">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <Link
+                                href={`/app-routes/products/${supplierPriceChange.product_id}`}
+                                className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                                target="_blank"
+                              >
+                                {supplierPriceChange.products.name}
+                              </Link>
+                              <p className="text-sm text-gray-500">
+                                {supplierPriceChange.suppliers?.name || 'Unknown supplier'}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <div className={`font-medium ${(supplierPriceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {(supplierPriceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(supplierPriceChange.price_change_percentage || 0).toFixed(2)}%
+                              </div>
+                              <div className="text-sm text-gray-500">
+                                {formatCurrency(supplierPriceChange.old_supplier_price || 0)} → {formatCurrency(supplierPriceChange.new_supplier_price || 0)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            {new Date(supplierPriceChange.changed_at).toLocaleString()}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">No supplier price changes found</div>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {(activity.latestSupplierPriceChanges || []).length === 0 ? (
+              <div className="text-center py-4 text-gray-500">
+                <p>No recent supplier price changes</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {(activity.latestSupplierPriceChanges || []).map((supplierPriceChange) => (
+                  <div key={supplierPriceChange.id} className="border-b pb-3 last:border-0">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <Link
+                          href={`/app-routes/products/${supplierPriceChange.product_id}`}
+                          className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                        >
+                          {supplierPriceChange.products.name}
+                        </Link>
+                        <p className="text-sm text-gray-500">
+                          {supplierPriceChange.suppliers?.name || 'Unknown supplier'}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <div className={`font-medium ${(supplierPriceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(supplierPriceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(supplierPriceChange.price_change_percentage || 0).toFixed(2)}%
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          {formatCurrency(supplierPriceChange.old_supplier_price || 0)} → {formatCurrency(supplierPriceChange.new_supplier_price || 0)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {new Date(supplierPriceChange.changed_at).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Recent Our Wholesale Price Changes */}
+        <Card>
+          <CardHeader>
+            <div className="flex justify-between items-center">
+              <CardTitle>Recent Our Wholesale Price Changes</CardTitle>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" onClick={fetchModalData}>
+                    See more
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="w-[50vw] !max-w-none max-h-[80vh]">
+                  <DialogHeader>
+                    <DialogTitle>Recent Our Wholesale Price Changes (Latest 50)</DialogTitle>
+                    <DialogDescription>
+                      View the latest 50 wholesale price changes from your integrations.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="overflow-y-auto max-h-[60vh] space-y-3 pr-4">
+                    {isLoadingModal ? (
+                      <div className="text-center py-8">Loading...</div>
+                    ) : modalData?.latestOurWholesalePriceChanges ? (
+                      modalData.latestOurWholesalePriceChanges.map((priceChange) => (
+                        <div key={priceChange.id} className="border-b pb-3 last:border-0">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <Link
+                                href={`/app-routes/products/${priceChange.product_id}`}
+                                className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                                target="_blank"
+                              >
+                                {priceChange.products.name}
+                              </Link>
+                              <p className="text-sm text-gray-500">
+                                {priceChange.integrations?.name || 'Unknown integration'}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
+                              </div>
+                              <div className="text-sm text-gray-500">
+                                {formatCurrency(priceChange.old_our_wholesale_price || 0)} → {formatCurrency(priceChange.new_our_wholesale_price || 0)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            {new Date(priceChange.changed_at).toLocaleString()}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">No recent wholesale price changes</div>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {(activity.latestOurWholesalePriceChanges || []).length === 0 ? (
+              <div className="text-center py-4 text-gray-500">
+                <p>No recent wholesale price changes</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {(activity.latestOurWholesalePriceChanges || []).map((priceChange) => (
+                  <div key={priceChange.id} className="border-b pb-3 last:border-0">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <Link
+                          href={`/app-routes/products/${priceChange.product_id}`}
+                          className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                        >
+                          {priceChange.products.name}
+                        </Link>
+                        <p className="text-sm text-gray-500">
+                          {priceChange.integrations?.name || 'Unknown integration'}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <div className={`font-medium ${(priceChange.price_change_percentage || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(priceChange.price_change_percentage || 0) > 0 ? '+' : ''}{(priceChange.price_change_percentage || 0).toFixed(2)}%
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          {formatCurrency(priceChange.old_our_wholesale_price || 0)} → {formatCurrency(priceChange.new_our_wholesale_price || 0)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {new Date(priceChange.changed_at).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Third row for other content */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Recent Products */}
         <Card>
           <CardHeader>
-            <CardTitle>Recently Added Products</CardTitle>
+            <div className="flex justify-between items-center">
+              <CardTitle>Recently Added Products</CardTitle>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" onClick={fetchModalData}>
+                    See more
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="w-[50vw] !max-w-none max-h-[80vh]">
+                  <DialogHeader>
+                    <DialogTitle>Recently Added Products (Latest 50)</DialogTitle>
+                    <DialogDescription>
+                      View the latest 50 products that have been added to your catalog.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="overflow-y-auto max-h-[60vh] space-y-3 pr-4">
+                    {isLoadingModal ? (
+                      <div className="text-center py-8">Loading...</div>
+                    ) : modalData?.latestProducts ? (
+                      modalData.latestProducts.map((product) => (
+                        <div key={product.id} className="border-b pb-3 last:border-0">
+                          <Link
+                            href={`/app-routes/products/${product.id}`}
+                            className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                          >
+                            {product.name}
+                          </Link>
+                          <p className="text-sm text-gray-500">
+                            {product.brands?.name || 'No brand'}
+                          </p>
+                          <div className="text-xs text-gray-400">
+                            {new Date(product.created_at).toLocaleString()}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">No products found</div>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
           </CardHeader>
           <CardContent>
             {activity.latestProducts.length === 0 ? (
@@ -280,6 +765,124 @@ const DashboardTab: React.FC = () => {
             )}
           </CardContent>
         </Card>
+
+        {/* Recent Stock Changes */}
+        <Card>
+          <CardHeader>
+            <div className="flex justify-between items-center">
+              <CardTitle>Recent Stock Changes</CardTitle>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" onClick={fetchModalData}>
+                    See more
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="w-[50vw] !max-w-none max-h-[80vh]">
+                  <DialogHeader>
+                    <DialogTitle>Recent Stock Changes (Latest 50)</DialogTitle>
+                    <DialogDescription>
+                      View the latest 50 stock quantity changes from your competitors.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="overflow-y-auto max-h-[60vh] space-y-3 pr-4">
+                    {isLoadingModal ? (
+                      <div className="text-center py-8">Loading...</div>
+                    ) : modalData?.latestStockChanges ? (
+                      modalData.latestStockChanges.map((stockChange) => (
+                        <div key={stockChange.id} className="border-b pb-3 last:border-0">
+                          {/* Row 1: Product name + Stock badge */}
+                          <div className="flex justify-between items-start">
+                            <Link
+                              href={`/app-routes/products/${stockChange.product_id}`}
+                              className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                            >
+                              {stockChange.products.name}
+                            </Link>
+                            <StockBadgeCompact
+                              stockQuantity={stockChange.new_stock_quantity}
+                              stockStatus={stockChange.new_stock_status}
+                            />
+                          </div>
+
+                          {/* Row 2: Competitor name + Stock change quantity */}
+                          <div className="flex justify-between items-center">
+                            <p className="text-sm text-gray-500">
+                              {stockChange.competitors.name}
+                            </p>
+                            <div className={`font-medium ${(stockChange.stock_change_quantity || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {(stockChange.stock_change_quantity || 0) > 0 ? '+' : ''}{stockChange.stock_change_quantity || 0}
+                            </div>
+                          </div>
+
+                          {/* Row 3: Date + Old → New quantity */}
+                          <div className="flex justify-between items-center">
+                            <div className="text-xs text-gray-400">
+                              {new Date(stockChange.changed_at).toLocaleString()}
+                            </div>
+                            <div className="text-sm text-gray-500">
+                              {stockChange.old_stock_quantity || 0} → {stockChange.new_stock_quantity || 0}
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">No stock changes found</div>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {(activity.latestStockChanges || []).length === 0 ? (
+              <div className="text-center py-4 text-gray-500">
+                <p>No recent stock changes</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {(activity.latestStockChanges || []).map((stockChange) => (
+                  <div key={stockChange.id} className="border-b pb-3 last:border-0">
+                    {/* Row 1: Product name + Stock badge */}
+                    <div className="flex justify-between items-start">
+                      <Link
+                        href={`/app-routes/products/${stockChange.product_id}`}
+                        className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                      >
+                        {stockChange.products.name}
+                      </Link>
+                      <StockBadgeCompact
+                        stockQuantity={stockChange.new_stock_quantity}
+                        stockStatus={stockChange.new_stock_status}
+                      />
+                    </div>
+
+                    {/* Row 2: Competitor name + Stock change quantity */}
+                    <div className="flex justify-between items-center">
+                      <p className="text-sm text-gray-500">
+                        {stockChange.competitors.name}
+                      </p>
+                      <div className={`font-medium ${(stockChange.stock_change_quantity || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {(stockChange.stock_change_quantity || 0) > 0 ? '+' : ''}{stockChange.stock_change_quantity || 0}
+                      </div>
+                    </div>
+
+                    {/* Row 3: Date + Old → New quantity */}
+                    <div className="flex justify-between items-center">
+                      <div className="text-xs text-gray-400">
+                        {new Date(stockChange.changed_at).toLocaleString()}
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        {stockChange.old_stock_quantity || 0} → {stockChange.new_stock_quantity || 0}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+
       </div>
     </div>
   );

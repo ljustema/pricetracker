@@ -66,8 +66,7 @@ export async function POST(request: NextRequest) {
       });
 
     if (logError) {
-      console.error('Error logging communication:', logError);
-      // Don't fail the request if logging fails
+      // Error logging communication - continue anyway
     }
 
     if (status === 'failed') {

@@ -6,4 +6,4 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
-export type Database = any;
+export type Database = Record<string, unknown>;

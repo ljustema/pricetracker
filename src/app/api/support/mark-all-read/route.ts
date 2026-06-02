@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth/options";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 // POST /api/support/mark-all-read - Mark all unread messages as read for current user
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   try {
     // Get user session
     const session = await getServerSession(authOptions);

@@ -77,7 +77,7 @@ function isSpamContent(message: string): boolean {
 
   // Check for excessive URLs
   const urlMatches = message.match(/https?:\/\/[^\s]+/gi);
-  const hasExcessiveUrls = urlMatches && urlMatches.length > 2;
+  const hasExcessiveUrls = Boolean(urlMatches && urlMatches.length > 2);
 
   return hasSpamKeywords || hasSuspiciousPatterns || hasExcessiveUrls;
 }

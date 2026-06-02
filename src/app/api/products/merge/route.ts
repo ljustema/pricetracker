@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
     // If field selections are provided, we need to handle them before merging
     if (fieldSelections && Object.keys(fieldSelections).length > 0) {
       // Get both products to apply field selections
-      const { data: primaryProduct, error: primaryError } = await supabase
+      const { data: _primaryProduct, error: primaryError } = await supabase
         .from("products")
         .select("*")
         .eq("id", primaryId)
@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Create an update object for the primary product
-      const updateData: any = {};
+      const updateData: Record<string, unknown> = {};
 
       // Apply field selections
       for (const [field, selectedProductId] of Object.entries(fieldSelections)) {
@@ -94,9 +94,9 @@ export async function POST(request: NextRequest) {
 
       // We'll check related records separately for each table
       try {
-        // Check price_changes
+        // Check price_changes_competitors
         const { data: priceChanges, error: priceError } = await supabase
-          .from('price_changes')
+          .from('price_changes_competitors')
           .select('product_id')
           .in('product_id', [primaryId, duplicateId]);
 
@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
         // Log the counts if available
         if (!priceError && !scrapedError && !stagedError) {
           console.log("Related records:", {
-            price_changes: priceChanges?.length || 0,
+            price_changes_competitors: priceChanges?.length || 0,
             temp_competitors_scraped_data: scrapedProducts?.length || 0,
             temp_integrations_scraped_data: stagedProducts?.length || 0
           });
@@ -185,13 +185,13 @@ export async function POST(request: NextRequest) {
       // If we get here, the merge was successful
       console.log("Merge successful:", JSON.stringify(result, null, 2));
       return NextResponse.json(result);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Exception during merge operation:", error);
 
       return NextResponse.json(
         {
           error: "Failed to merge products",
-          details: error.message || "Unknown error"
+          details: error instanceof Error ? error.message : "Unknown error"
         },
         { status: 500 }
       );

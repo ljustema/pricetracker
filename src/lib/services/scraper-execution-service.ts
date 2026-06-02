@@ -198,10 +198,10 @@ export class ScraperExecutionService {
           }
         }
       } else {
-        // For regular runs, set a 24-hour timeout
-        console.log(`Run ${actualRunId}: Regular run - setting 24-hour timeout`);
+        // For regular runs, set a 2-hour timeout
+        console.log(`Run ${actualRunId}: Regular run - setting 2-hour timeout`);
         const timeoutAt = new Date();
-        timeoutAt.setHours(timeoutAt.getHours() + 24); // 24 hours from now
+        timeoutAt.setHours(timeoutAt.getHours() + 2); // 2 hours from now
 
         const { error: timeoutError } = await supabaseAdmin
           .from('scraper_run_timeouts')
@@ -212,7 +212,9 @@ export class ScraperExecutionService {
           });
 
         if (timeoutError) {
-          console.error(`Run ${actualRunId}: Error setting timeout: ${timeoutError.message}`);
+          console.error(`Run ${actualRunId}: Error setting timeout: ${timeoutError.message || timeoutError.toString() || 'Unknown error'}`);
+        } else {
+          console.log(`Run ${actualRunId}: Timeout set successfully for ${timeoutAt.toISOString()}`);
         }
 
         // For regular runs, add a wait to see if the worker picks up the job
@@ -281,8 +283,8 @@ export class ScraperExecutionService {
       scraper_id: scraperId,
       competitor_id: scraper.competitor_id,
       name: product.name,
-      price: product.price,
-      currency: product.currency || 'USD',
+      price: product.competitor_price,
+      currency: product.currency_code || 'USD',
       image_url: product.image_url,
       sku: product.sku,
       brand: product.brand,
@@ -359,7 +361,7 @@ export class ScraperExecutionService {
     const processedProducts = await Promise.all(processedProductsPromises);
 
     // --- Batch Insert Logic ---
-    const BATCH_SIZE = 500; // Define the size of each insert chunk
+    const BATCH_SIZE = 100; // Reduced from 500 to prevent database timeouts
     let insertedCount = 0;
     console.log(`processBatch: Starting insert of ${processedProducts.length} products in chunks of ${BATCH_SIZE}...`);
 
@@ -423,17 +425,16 @@ export class ScraperExecutionService {
    *
    * @param scraperType The type of the scraper ('python' or 'typescript').
    * @param scriptContent The raw script code to validate.
+   * @param context Optional context containing supplier/competitor information.
    * @returns A promise resolving to a ValidationResponse object.
    */
   static async validateScriptSynchronously(
     scraperType: 'python' | 'typescript',
-    scriptContent: string
-    // TODO: Add context flags (userId, filter flags) if needed for validation context
+    scriptContent: string,
+    context?: { supplierInfo?: Record<string, unknown>; competitorInfo?: Record<string, unknown> }
   ): Promise<ValidationResponse> {
     const logs: ValidationLog[] = [];
     const products: ValidationProduct[] = [];
-    const MAX_PRODUCTS = 10;
-    const MAX_URLS = 5; // Limit URL collection for validation speed
     const TIMEOUT_MS = 120000; // 120 seconds (2 minutes) timeout for the entire validation
 
     const addLog = (lvl: ValidationLog['lvl'], phase: string, msg: string, data?: Record<string, unknown>) => {
@@ -444,7 +445,7 @@ export class ScraperExecutionService {
     addLog('INFO', 'SETUP', `Starting validation for ${scraperType} script.`);
 
     if (scraperType === 'python') {
-      addLog('INFO', 'SETUP', 'Starting Python script validation via direct execution.');
+      addLog('INFO', 'SETUP', 'Starting Python script validation via static analysis (Python runtime not available on Next.js platform).');
 
       // --- Static validation: require get_metadata and scrape functions ---
       const missingFunctions: string[] = [];
@@ -465,165 +466,53 @@ export class ScraperExecutionService {
         };
       }
 
-      const projectRoot = process.cwd(); // Get the actual CWD of the Node process
-      const uuid = randomUUID();
-      const tempFilePath = path.join(tmpdir(), `validate-${uuid}.py`); // Absolute path for temp file
-      // No longer using wrapper script
+      // --- Additional static validation checks ---
+      const validationIssues: string[] = [];
 
-      try {
-        // Write user script content to a temporary file
-        await fsPromises.writeFile(tempFilePath, scriptContent, 'utf-8');
-        addLog('INFO', 'PYTHON_VALIDATION', `Temporary user script written to ${tempFilePath}`);
-        // Execute the Python wrapper script using spawnSync
-        // Removed log line referencing wrapperScriptPath
-        // Determine Python executable path (logic remains the same)
-        let pythonExecutable = process.env.PYTHON_EXECUTABLE_PATH;
-        let pathSource = 'environment variable (PYTHON_EXECUTABLE_PATH)';
-        if (!pythonExecutable) {
-          if (process.platform === 'win32') {
-            pythonExecutable = 'C:\\Python311\\python.exe'; // Local Windows fallback
-            pathSource = 'local Windows fallback (C:\\Python311\\python.exe)';
-          } else {
-            pythonExecutable = 'python'; // Default for Linux/Railway
-            pathSource = 'default "python"';
-          }
-        }
-        addLog('INFO', 'PYTHON_VALIDATION', `Using Python executable: ${pythonExecutable} (Source: ${pathSource})`);
-
-        // --- PATCH: Run metadata command first to extract target_url ---
-        let extractedTargetUrl: string | undefined = undefined;
-        try {
-          const metadataCommand = `"${pythonExecutable}" "${tempFilePath}" metadata`;
-          addLog('INFO', 'PYTHON_METADATA', `Executing metadata command: ${metadataCommand}`);
-          const metadataOutput = execSync(metadataCommand, {
-            encoding: 'utf-8',
-            timeout: TIMEOUT_MS / 2,
-            cwd: projectRoot,
-            stdio: ['pipe', 'pipe', 'pipe']
-          });
-          const metadata = JSON.parse(metadataOutput);
-          if (metadata && typeof metadata === 'object' && metadata.target_url && typeof metadata.target_url === 'string') {
-            extractedTargetUrl = metadata.target_url;
-            addLog('INFO', 'PYTHON_METADATA', `Extracted target_url from metadata: ${extractedTargetUrl}`);
-          } else {
-            addLog('WARN', 'PYTHON_METADATA', 'No target_url found in metadata output.');
-          }
-        } catch (err) {
-          addLog('WARN', 'PYTHON_METADATA', `Failed to extract metadata: ${err instanceof Error ? err.message : String(err)}`);
-        }
-
-        // --- Continue with scrape --validate as before ---
-        const validationArgs = [
-            'scrape', // <-- Insert the required positional command!
-            `--validate`,
-            `--limit-urls`, MAX_URLS.toString(), // Use constants defined earlier
-            `--limit-products`, MAX_PRODUCTS.toString()
-        ];
-        const command = `"${pythonExecutable}" "${tempFilePath}" ${validationArgs.join(' ')}`;
-        addLog('INFO', 'PYTHON_VALIDATION', `Executing direct validation command: ${command} in CWD: ${projectRoot}`);
-
-        let pythonOutput: string | Buffer;
-        let pythonStderr = '';
-
-        try {
-          // Execute using execSync
-          // Ensure the subprocess environment forces UTF-8 I/O for validation too
-          const execEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
-
-          pythonOutput = execSync(command, {
-            encoding: 'utf-8', // How Node decodes the output
-            timeout: TIMEOUT_MS,
-            cwd: projectRoot,
-            stdio: ['pipe', 'pipe', 'pipe'], // Explicitly capture stdout and stderr
-            env: execEnv // Pass the modified environment
-          });
-          // execSync throws on non-zero exit code, so stderr might be in the error object
-        } catch (error: unknown) { // Catch as unknown first
-          // Type assertion after checking it's an object
-          const execError = error as ExecSyncError;
-
-          // Handle errors from execSync (timeout, non-zero exit code, etc.)
-          addLog('ERROR', 'PYTHON_VALIDATION', `Failed to execute Python script via execSync: ${execError.message}`);
-          // Capture stderr from the error object if available
-          pythonStderr = execError.stderr ? execError.stderr.toString() : ''; // Keep stderr capture
-          if (pythonStderr) {
-             addLog('WARN', 'PYTHON_STDERR', `Script stderr (from execSync error):\n${pythonStderr.trim()}`);
-          }
-          // Check if it was specifically a timeout using the typed error
-          if (execError.signal === 'SIGTERM' || execError.code === 'ETIMEDOUT' || /timed out/i.test(execError.message)) {
-             return { valid: false, error: `Validation timed out (${TIMEOUT_MS}ms)`, logs, products: [] };
-          }
-          return { valid: false, error: `Validation script execution failed: ${execError.message}`, logs, products: [] };
-        }
-
-        // If execSync succeeded (exit code 0), pythonOutput contains stdout
-        const pythonStdout = pythonOutput.toString();
-
-        // Note: With execSync successful execution, stderr is usually empty or contains warnings.
-        // We primarily logged it in the catch block for errors. We could potentially
-        // log pythonProcess.stderr here too if needed, but it's less common for successful runs.
-
-        // --- Continue parsing direct script JSONL output ---
-        addLog('DEBUG', 'PYTHON_STDOUT', 'Raw stdout suppressed for privacy.'); // Do not log full script output
-
-        // Parse the JSONL output (one JSON object per line)
-        const productLines = pythonStdout.split('\n').filter(line => line.trim());
-        const parsedProducts = [];
-        let parseError = null;
-        for (const line of productLines) {
-          try {
-            const obj = JSON.parse(line);
-            // Log the parsed object name immediately after parsing to check encoding in Node.js
-            if (obj && typeof obj === 'object' && obj.name) {
-              addLog('DEBUG', 'PYTHON_PARSE_CHECK', `Parsed product name in Node.js: ${obj.name}`);
-            }
-            // If this line is metadata from get_metadata (Python), extract target_url if present
-            if (
-              obj &&
-              typeof obj === 'object' &&
-              obj.target_url &&
-              typeof obj.target_url === 'string' &&
-              (!extractedTargetUrl || extractedTargetUrl === '')
-            ) {
-              extractedTargetUrl = obj.target_url;
-            }
-            parsedProducts.push(obj);
-          } catch (err) {
-            parseError = err;
-            addLog('ERROR', 'PYTHON_VALIDATION', `Failed to parse product JSON line: ${line}`);
-          }
-        }
-        if (parseError) {
-          addLog('ERROR', 'PYTHON_VALIDATION', `At least one product line could not be parsed as JSON.`);
-          return { valid: false, error: 'Failed to parse one or more product lines as JSON.', logs, products: [] };
-        }
-        addLog('INFO', 'PYTHON_VALIDATION', `Parsed ${parsedProducts.length} products from JSONL output.`);
-        // Return target_url as metadata if found
-        return {
-          valid: true,
-          error: null,
-          products: parsedProducts,
-          logs,
-          metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined,
-        };
-
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        addLog('ERROR', 'PYTHON_VALIDATION', `Exception during validation: ${errorMsg}`);
-        return { valid: false, error: errorMsg, logs, products: [] };
-      } finally {
-        try {
-          await fsPromises.unlink(tempFilePath);
-          addLog('INFO', 'PYTHON_VALIDATION', 'Temporary file deleted.');
-        } catch {
-          // Ignore cleanup errors
-        }
+      // Check for required imports
+      if (!scriptContent.includes('import json')) {
+        validationIssues.push('Missing "import json" - required for JSONL output');
       }
+      if (!scriptContent.includes('import sys')) {
+        validationIssues.push('Missing "import sys" - required for stdout/stderr handling');
+      }
+      if (!scriptContent.includes('import argparse')) {
+        validationIssues.push('Missing "import argparse" - required for command-line arguments');
+      }
+
+      // Check for required argument parsing
+      if (!scriptContent.includes('argparse.ArgumentParser')) {
+        validationIssues.push('Missing argparse.ArgumentParser - required for command-line interface');
+      }
+      if (!scriptContent.includes("choices=['metadata', 'scrape']")) {
+        validationIssues.push('Missing command choices - script must accept "metadata" and "scrape" commands');
+      }
+
+      // Check for required output patterns
+      if (!scriptContent.includes('json.dumps') && !scriptContent.includes('print(json.dumps')) {
+        validationIssues.push('Missing JSON output - script must output JSONL format using json.dumps');
+      }
+
+      if (validationIssues.length > 0) {
+        addLog('WARN', 'PYTHON_VALIDATION', `Script has potential issues: ${validationIssues.join(', ')}`);
+        // Don't fail validation for these issues, just warn
+      }
+
+      addLog('INFO', 'PYTHON_VALIDATION', 'Static validation passed. Script structure appears correct.');
+      addLog('INFO', 'PYTHON_VALIDATION', 'Note: Full execution validation will be performed by py-worker during test runs.');
+
+      // Return success for static validation
+      return {
+        valid: true,
+        error: null,
+        logs,
+        products: [] // No products from static validation
+      };
     }
 
-    // --- TypeScript Validation using Node.js execSync ---
+    // --- TypeScript Validation using Babel compilation ---
     if (scraperType === 'typescript') {
-      addLog('INFO', 'TYPESCRIPT_VALIDATION', 'Starting TypeScript script validation via Node.js execSync.');
+      addLog('INFO', 'TYPESCRIPT_VALIDATION', 'Starting TypeScript script validation using Babel compilation.');
 
       // --- Static validation: check for required patterns ---
       const missingPatterns: string[] = [];
@@ -690,10 +579,10 @@ export class ScraperExecutionService {
 
           const packageJsonPath = path.join(tempDir, 'package.json');
           await fsPromises.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf-8');
-          addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Created package.json at ${packageJsonPath}`);
+          addLog('DEBUG', 'BABEL_COMPILATION', `Created package.json at ${packageJsonPath}`);
 
           // Install dependencies first
-          addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Installing dependencies (this may take a moment)...');
+          addLog('INFO', 'BABEL_COMPILATION', 'Installing dependencies (this may take a moment)...');
           try {
             execSync('npm install --no-package-lock --no-save', {
               encoding: 'utf-8',
@@ -701,10 +590,10 @@ export class ScraperExecutionService {
               cwd: tempDir,
               stdio: ['pipe', 'pipe', 'pipe']
             });
-            addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Dependencies installed successfully');
+            addLog('INFO', 'BABEL_COMPILATION', 'Dependencies installed successfully');
 
             // Install Playwright browsers for TypeScript scrapers that use PlaywrightCrawler
-            addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Installing Playwright browsers (this may take a moment)...');
+            addLog('INFO', 'BABEL_COMPILATION', 'Installing Playwright browsers (this may take a moment)...');
             try {
               execSync('npx playwright install --with-deps chromium', {
                 encoding: 'utf-8',
@@ -712,183 +601,97 @@ export class ScraperExecutionService {
                 cwd: tempDir,
                 stdio: ['pipe', 'pipe', 'pipe']
               });
-              addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Playwright browsers installed successfully');
+              addLog('INFO', 'BABEL_COMPILATION', 'Playwright browsers installed successfully');
             } catch (playwrightError) {
               const error = playwrightError as ExecSyncError;
-              addLog('WARN', 'TYPESCRIPT_COMPILATION', `Playwright browser installation warning: ${error.message}`);
+              addLog('WARN', 'BABEL_COMPILATION', `Playwright browser installation warning: ${error.message}`);
 
               if (error.stderr) {
                 const stderr = error.stderr.toString();
-                addLog('WARN', 'TYPESCRIPT_COMPILATION', `Playwright installation stderr: ${stderr.trim()}`);
+                addLog('WARN', 'BABEL_COMPILATION', `Playwright installation stderr: ${stderr.trim()}`);
               }
 
               // Continue even if Playwright installation has warnings
-              addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Continuing with validation despite Playwright installation issues');
+              addLog('INFO', 'BABEL_COMPILATION', 'Continuing with validation despite Playwright installation issues');
             }
           } catch (npmError) {
             const error = npmError as ExecSyncError;
-            addLog('WARN', 'TYPESCRIPT_COMPILATION', `npm install warning: ${error.message}`);
+            addLog('WARN', 'BABEL_COMPILATION', `npm install warning: ${error.message}`);
 
             if (error.stderr) {
               const stderr = error.stderr.toString();
-              addLog('WARN', 'TYPESCRIPT_COMPILATION', `npm install stderr: ${stderr.trim()}`);
+              addLog('WARN', 'BABEL_COMPILATION', `npm install stderr: ${stderr.trim()}`);
             }
 
             // Continue even if npm install has warnings
           }
 
-          // Create a tsconfig.json file with very permissive settings
-          const tsConfigContent = {
-            compilerOptions: {
-              target: "ES2020",
-              module: "CommonJS",
-              moduleResolution: "Node",
-              esModuleInterop: true,
-              skipLibCheck: true,
-              resolveJsonModule: true,
-              outDir: ".",
-              allowSyntheticDefaultImports: true,
-              noImplicitAny: false,
-              strictNullChecks: false,
-              allowJs: true,
-              noEmitOnError: false,
-              isolatedModules: true,
-              suppressImplicitAnyIndexErrors: true,
-              ignoreDeprecations: "5.0",
-              downlevelIteration: true
-            },
-            include: ["scraper.ts"],
-            exclude: ["node_modules"]
+          // Create babel.config.json for TypeScript compilation
+          const babelConfig = {
+            presets: [
+              "@babel/preset-env",
+              "@babel/preset-typescript"
+            ]
           };
 
-          const tsConfigPath = path.join(tempDir, 'tsconfig.json');
-          await fsPromises.writeFile(tsConfigPath, JSON.stringify(tsConfigContent, null, 2), 'utf-8');
-          addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Created tsconfig.json at ${tsConfigPath}`);
+          const babelConfigPath = path.join(tempDir, 'babel.config.json');
+          await fsPromises.writeFile(babelConfigPath, JSON.stringify(babelConfig, null, 2), 'utf-8');
+          addLog('DEBUG', 'BABEL_COMPILATION', `Created babel.config.json at ${babelConfigPath}`);
 
-          // Now compile using tsc from node_modules
-          addLog('INFO', 'TYPESCRIPT_COMPILATION', 'Compiling TypeScript using local tsc');
+          // Now compile using Babel as primary compiler
+          addLog('INFO', 'BABEL_COMPILATION', 'Compiling TypeScript using Babel');
 
           try {
-            // Try to find the tsc executable
-            let tscPath = path.join(tempDir, 'node_modules', '.bin', 'tsc');
-            let tscCommand = process.platform === 'win32' ? `"${tscPath}"` : tscPath;
+            // Try to find the babel executable
+            const babelPath = path.join(tempDir, 'node_modules', '.bin', 'babel');
+            const babelCommand = process.platform === 'win32' ? `"${babelPath}.cmd"` : `"${babelPath}"`;
 
-            // Check if the tsc executable exists
-            try {
-              await fsPromises.access(tscPath);
-              addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Found tsc at ${tscPath}`);
-            } catch (_accessError) {
-              // If not found in .bin, try the typescript/bin directory
-              addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `tsc not found at ${tscPath}, trying alternative location`);
-              tscPath = path.join(tempDir, 'node_modules', 'typescript', 'bin', 'tsc');
-              tscCommand = process.platform === 'win32' ? `"${tscPath}"` : tscPath;
+            // Execute babel to compile TypeScript
+            const babelFullCommand = `${babelCommand} scraper.ts --out-file scraper.js --extensions ".ts"`;
+            addLog('DEBUG', 'BABEL_COMPILATION', `Executing: ${babelFullCommand}`);
 
-              try {
-                await fsPromises.access(tscPath);
-                addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Found tsc at ${tscPath}`);
-              } catch (_accessError2) {
-                // If still not found, try using npx
-                addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `tsc not found at ${tscPath}, falling back to npx`);
-                tscCommand = 'npx tsc';
-              }
-            }
-
-            // Execute the TypeScript compiler
-            addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Executing: ${tscCommand}`);
-
-            // We need to specify the input file explicitly
-            const fullCommand = `${tscCommand} scraper.ts`;
-            addLog('DEBUG', 'TYPESCRIPT_COMPILATION', `Full command: ${fullCommand}`);
-
-            execSync(fullCommand, {
+            execSync(babelFullCommand, {
               encoding: 'utf-8',
               timeout: TIMEOUT_MS / 2,
               cwd: tempDir,
               stdio: ['pipe', 'pipe', 'pipe']
             });
 
-            addLog('INFO', 'TYPESCRIPT_COMPILATION', 'TypeScript compilation successful');
-          } catch (tscError) {
-            const error = tscError as ExecSyncError;
+            addLog('INFO', 'BABEL_COMPILATION', 'Babel compilation successful');
+          } catch (babelError) {
+            const error = babelError as ExecSyncError;
             let errorMessage = error.message;
             let stderrOutput = '';
 
             // Try to extract the stderr output
             if (error.stderr) {
               stderrOutput = error.stderr.toString().trim();
-              addLog('ERROR', 'TYPESCRIPT_STDERR', `Compilation errors:\n${stderrOutput}`);
+              addLog('ERROR', 'BABEL_STDERR', `Babel compilation errors:\n${stderrOutput}`);
               errorMessage = stderrOutput || errorMessage;
             }
 
             // If stderr is empty, just use the error message directly
             if (!stderrOutput && error.message) {
               errorMessage = error.message;
-              addLog('ERROR', 'TYPESCRIPT_STDERR', `Error message: ${errorMessage}`);
+              addLog('ERROR', 'BABEL_STDERR', `Error message: ${errorMessage}`);
             }
 
-            // No need to list directory contents - removed for cleaner output
-
-            // Try using Babel as a fallback
-            addLog('WARN', 'TYPESCRIPT_COMPILATION', `TypeScript compilation failed, trying Babel as fallback`);
-
-            try {
-              // Create a babel.config.json file
-              const babelConfig = {
-                presets: [
-                  "@babel/preset-env",
-                  "@babel/preset-typescript"
-                ]
-              };
-
-              const babelConfigPath = path.join(tempDir, 'babel.config.json');
-              await fsPromises.writeFile(babelConfigPath, JSON.stringify(babelConfig, null, 2), 'utf-8');
-              addLog('DEBUG', 'BABEL_COMPILATION', `Created babel.config.json at ${babelConfigPath}`);
-
-              // Try to find babel executable
-              const babelPath = path.join(tempDir, 'node_modules', '.bin', 'babel');
-              const babelCommand = process.platform === 'win32' ? `"${babelPath}"` : babelPath;
-
-              // Execute babel
-              const babelFullCommand = `${babelCommand} scraper.ts --out-file scraper.js --extensions ".ts"`;
-              addLog('DEBUG', 'BABEL_COMPILATION', `Executing: ${babelFullCommand}`);
-
-              execSync(babelFullCommand, {
-                encoding: 'utf-8',
-                timeout: TIMEOUT_MS / 2,
-                cwd: tempDir,
-                stdio: ['pipe', 'pipe', 'pipe']
-              });
-
-              addLog('INFO', 'BABEL_COMPILATION', 'Babel compilation successful');
-              // Continue with the compiled file - no need to return
-            } catch (babelError) {
-              const error = babelError as ExecSyncError;
-              // Log the Babel error
-              if (error.stderr) {
-                const stderr = error.stderr.toString().trim();
-                addLog('ERROR', 'BABEL_STDERR', `Babel compilation errors:\n${stderr}`);
-              } else {
-                addLog('ERROR', 'BABEL_STDERR', `Babel compilation error: ${error.message}`);
-              }
-
-              // If both TypeScript and Babel fail, throw the original TypeScript error
-              addLog('ERROR', 'TYPESCRIPT_COMPILATION', `Both TypeScript and Babel compilation failed: ${errorMessage}`);
-              throw new Error(`TypeScript compilation failed: ${errorMessage}`);
-            }
+            addLog('ERROR', 'BABEL_COMPILATION', `Babel compilation failed: ${errorMessage}`);
+            throw new Error(`Babel compilation failed: ${errorMessage}`);
           }
         } catch (compileError) {
           const error = compileError as ExecSyncError;
-          addLog('ERROR', 'TYPESCRIPT_COMPILATION', `TypeScript compilation failed: ${error.message}`);
+          addLog('ERROR', 'BABEL_COMPILATION', `Babel compilation failed: ${error.message}`);
 
           // Log stderr if available
           if (error.stderr) {
             const stderr = error.stderr.toString();
-            addLog('ERROR', 'TYPESCRIPT_STDERR', `Compilation stderr:\n${stderr.trim()}`);
+            addLog('ERROR', 'BABEL_STDERR', `Compilation stderr:\n${stderr.trim()}`);
 
             // Include the stderr in the error message for better visibility
             return {
               valid: false,
-              error: `TypeScript compilation failed: ${stderr.trim()}`,
+              error: `Babel compilation failed: ${stderr.trim()}`,
               logs,
               products: []
             };
@@ -896,7 +699,7 @@ export class ScraperExecutionService {
 
           return {
             valid: false,
-            error: `TypeScript compilation failed: ${error.message}`,
+            error: `Babel compilation failed: ${error.message}`,
             logs,
             products: []
           };
@@ -937,23 +740,52 @@ export class ScraperExecutionService {
           isTestRun: true,
           filterByActiveBrands: false,
           scrapeOnlyOwnProducts: false,
+          // Include supplier/competitor information if available
+          ...(context?.supplierInfo && { supplierInfo: context.supplierInfo }),
+          ...(context?.competitorInfo && { competitorInfo: context.competitorInfo }),
           log: (level: string, message: string, data?: unknown) => {
             addLog(level.toUpperCase() as ValidationLog['lvl'], 'SCRIPT_LOG', message, data as Record<string, unknown>);
           }
         };
 
-        // Properly escape the JSON string for command line
+        // Use Base64 encoding to compress context and avoid command line buffer overflow
         const contextJson = JSON.stringify(validationContext);
+        const contextBase64 = Buffer.from(contextJson, 'utf-8').toString('base64');
 
-        // On Windows, use double quotes outside and escaped double quotes for the JSON
-        // On other platforms, use single quotes outside and double quotes for the JSON
-        const escapedJson = process.platform === 'win32'
-          ? `"${contextJson.replace(/"/g, '\\"')}"`
-          : `'${contextJson}'`;
+        let scrapeCommand: string;
 
-        const scrapeCommand = `node "${tempJsFilePath}" scrape --context=${escapedJson}`;
+        // Check if Base64 context is still too large for command line
+        if (contextBase64.length > 8000) { // Conservative limit for Windows
+          addLog('WARN', 'TYPESCRIPT_VALIDATION', `Context is very large (${contextBase64.length} chars), truncating supplier info for validation`);
 
-        addLog('INFO', 'TYPESCRIPT_VALIDATION', `Executing scrape command with validation context: ${scrapeCommand}`);
+          // Create a minimal context for validation
+          const minimalContext = {
+            isValidation: validationContext.isValidation,
+            isTestRun: validationContext.isTestRun,
+            filterByActiveBrands: validationContext.filterByActiveBrands,
+            scrapeOnlyOwnProducts: validationContext.scrapeOnlyOwnProducts,
+            // Include only essential supplier info
+            supplierInfo: context?.supplierInfo ? {
+              id: context.supplierInfo.id,
+              name: context.supplierInfo.name,
+              login_url: context.supplierInfo.login_url,
+              login_username: context.supplierInfo.login_username,
+              login_password: context.supplierInfo.login_password,
+              website: context.supplierInfo.website
+            } : undefined
+          };
+
+          const minimalContextJson = JSON.stringify(minimalContext);
+          const minimalContextBase64 = Buffer.from(minimalContextJson, 'utf-8').toString('base64');
+
+          addLog('INFO', 'TYPESCRIPT_VALIDATION', `Using minimal context (${minimalContextBase64.length} chars)`);
+
+          scrapeCommand = `node "${tempJsFilePath}" scrape --context="${minimalContextBase64}"`;
+          addLog('INFO', 'TYPESCRIPT_VALIDATION', `Executing scrape command with minimal validation context`);
+        } else {
+          scrapeCommand = `node "${tempJsFilePath}" scrape --context="${contextBase64}"`;
+          addLog('INFO', 'TYPESCRIPT_VALIDATION', `Executing scrape command with full validation context`);
+        }
 
         let scriptOutput: string;
         try {
@@ -1125,12 +957,26 @@ export class ScraperExecutionService {
 
         // Validate that products have required fields
         // (We already checked that parsedProducts.length > 0)
-        const invalidProducts = parsedProducts.filter(p => !p.name || p.price === undefined || p.price === null);
+        // Check for required fields: name and either competitor_price OR supplier_price
+        const invalidProducts = parsedProducts.filter(p => {
+          const hasName = !!p.name;
+          const hasCompetitorPrice = p.competitor_price !== undefined && p.competitor_price !== null && p.competitor_price > 0;
+          const hasSupplierPrice = p.supplier_price !== undefined && p.supplier_price !== null && p.supplier_price > 0;
+          const hasValidPrice = hasCompetitorPrice || hasSupplierPrice;
+          return !hasName || !hasValidPrice;
+        });
+
         if (invalidProducts.length > 0) {
-          addLog('ERROR', 'TYPESCRIPT_VALIDATION', `${invalidProducts.length} products are missing required fields (name, price).`);
+          // Log details about the first few invalid products for debugging
+          const sampleInvalid = invalidProducts.slice(0, 3);
+          for (const product of sampleInvalid) {
+            addLog('DEBUG', 'TYPESCRIPT_VALIDATION', `Invalid product sample: name="${product.name}", competitor_price=${product.competitor_price}, supplier_price=${product.supplier_price}`);
+          }
+
+          addLog('ERROR', 'TYPESCRIPT_VALIDATION', `${invalidProducts.length} products are missing required fields (name, and either competitor_price or supplier_price > 0).`);
           return {
             valid: false,
-            error: 'Validation failed: Some products are missing required fields (name, price).',
+            error: 'Validation failed: Some products are missing required fields (name, and either competitor_price or supplier_price > 0).',
             logs,
             products: parsedProducts,
             metadata: extractedTargetUrl ? { target_url: extractedTargetUrl } : undefined

@@ -2,13 +2,27 @@
 
 import { useState, useEffect } from "react";
 import { UploadIcon, CheckCircleIcon, XCircleIcon, DownloadIcon } from "lucide-react";
-import { uploadProductsCSV } from "@/lib/services/product-client-service";
+import { uploadProductsCSV, uploadOwnProductsCSVViaIntegration } from "@/lib/services/product-client-service";
+import { uploadSupplierProductsCSV } from "@/lib/services/supplier-client-service";
 import Image from "next/image";
 
 interface Competitor {
   id: string;
   name: string;
 }
+
+interface Integration {
+  id: string;
+  name: string;
+  platform: string;
+}
+
+interface Supplier {
+  id: string;
+  name: string;
+}
+
+type ProductType = 'own' | 'competitor' | 'supplier';
 
 interface CSVUploadFormProps {
   onSuccess: () => void;
@@ -19,14 +33,21 @@ export default function CSVUploadForm({
   onSuccess,
   onCancel,
 }: CSVUploadFormProps) {
+  const [productType, setProductType] = useState<ProductType>('competitor');
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
+  const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [selectedCompetitorId, setSelectedCompetitorId] = useState<string>("");
+  const [selectedIntegrationId, setSelectedIntegrationId] = useState<string>("");
+  const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [csvPreview, setCsvPreview] = useState<{
     headers: string[];
     rows: Record<string, string>[];
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [delimiter, setDelimiter] = useState<',' | ';'>(',');
+  const [_fieldMapping, _setFieldMapping] = useState<Record<string, string>>({});
   interface UploadResult {
     success: boolean;
     productsAdded: number;
@@ -36,7 +57,7 @@ export default function CSVUploadForm({
 
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
 
-  // Fetch competitors when component mounts
+  // Fetch competitors and integrations when component mounts
   useEffect(() => {
     const fetchCompetitors = async () => {
       try {
@@ -55,7 +76,43 @@ export default function CSVUploadForm({
       }
     };
 
+    const fetchIntegrations = async () => {
+      try {
+        const response = await fetch('/api/integrations');
+        if (response.ok) {
+          const data = await response.json();
+          setIntegrations(data);
+          if (data.length > 0) {
+            setSelectedIntegrationId(data[0].id);
+          }
+        } else {
+          console.error("Failed to fetch integrations");
+        }
+      } catch (error) {
+        console.error("Error fetching integrations:", error);
+      }
+    };
+
+    const fetchSuppliers = async () => {
+      try {
+        const response = await fetch('/api/suppliers');
+        if (response.ok) {
+          const data = await response.json();
+          setSuppliers(data);
+          if (data.length > 0) {
+            setSelectedSupplierId(data[0].id);
+          }
+        } else {
+          console.error("Failed to fetch suppliers");
+        }
+      } catch (error) {
+        console.error("Error fetching suppliers:", error);
+      }
+    };
+
     fetchCompetitors();
+    fetchIntegrations();
+    fetchSuppliers();
   }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -75,7 +132,22 @@ export default function CSVUploadForm({
     reader.readAsText(file);
   };
 
-  const parseCSVLine = (line: string): string[] => {
+  // Re-parse CSV when delimiter changes
+  const handleDelimiterChange = (newDelimiter: ',' | ';') => {
+    setDelimiter(newDelimiter);
+    if (uploadedFile) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          const content = event.target.result as string;
+          previewCSV(content);
+        }
+      };
+      reader.readAsText(uploadedFile);
+    }
+  };
+
+  const parseCSVLine = (line: string, delimiter: ',' | ';' = ','): string[] => {
     const result: string[] = [];
     let currentField = '';
     let inQuotes = false;
@@ -86,7 +158,7 @@ export default function CSVUploadForm({
       if (char === '"') {
         // Toggle quote state
         inQuotes = !inQuotes;
-      } else if (char === ',' && !inQuotes) {
+      } else if (char === delimiter && !inQuotes) {
         // End of field
         result.push(currentField.trim());
         currentField = '';
@@ -116,15 +188,49 @@ export default function CSVUploadForm({
       return;
     }
 
-    // Parse header row
-    const headers = parseCSVLine(lines[0]);
+    // Parse header row with selected delimiter
+    const headers = parseCSVLine(lines[0], delimiter);
 
-    // Check for required headers
-    const requiredHeaders = ['name', 'price'];
-    const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
-    if (missingHeaders.length > 0) {
-      alert(`CSV file is missing required headers: ${missingHeaders.join(', ')}`);
-      return;
+    // Check for required headers based on product type
+    let requiredHeaders: string[];
+    let missingHeaders: string[];
+
+    if (productType === 'own') {
+      // For own products, only name is required, but we should have either our_retail_price or our_wholesale_price
+      requiredHeaders = ['name'];
+      missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
+
+      // Check if we have at least one price field (support both old and new names)
+      const hasOurPrice = headers.includes('our_price') || headers.includes('our_retail_price');
+      const hasWholesalePrice = headers.includes('wholesale_price') || headers.includes('our_wholesale_price');
+
+      if (missingHeaders.length > 0) {
+        alert(`CSV file is missing required headers: ${missingHeaders.join(', ')}`);
+        return;
+      }
+
+      if (!hasOurPrice && !hasWholesalePrice) {
+        alert(`CSV file is missing required price headers: either 'our_retail_price' (or 'our_price') or 'our_wholesale_price' (or 'wholesale_price') is required for own products`);
+        return;
+      }
+    } else if (productType === 'competitor') {
+      // For competitor products, name and competitor_price are required
+      requiredHeaders = ['name', 'competitor_price'];
+      missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
+
+      if (missingHeaders.length > 0) {
+        alert(`CSV file is missing required headers: ${missingHeaders.join(', ')}`);
+        return;
+      }
+    } else {
+      // For supplier products, name and supplier_price are required
+      requiredHeaders = ['name', 'supplier_price'];
+      missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
+
+      if (missingHeaders.length > 0) {
+        alert(`CSV file is missing required headers: ${missingHeaders.join(', ')}`);
+        return;
+      }
     }
 
     // Parse data rows (limit to 5 for preview)
@@ -132,7 +238,7 @@ export default function CSVUploadForm({
     const previewLimit = Math.min(lines.length - 1, 5);
 
     for (let i = 1; i <= previewLimit; i++) {
-      const values = parseCSVLine(lines[i]);
+      const values = parseCSVLine(lines[i], delimiter);
       if (values.length !== headers.length) {
         alert(`Row ${i+1} has ${values.length} fields, expected ${headers.length}`);
         return;
@@ -150,7 +256,7 @@ export default function CSVUploadForm({
 
   const handleDownloadTemplate = async () => {
     try {
-      const templateUrl = '/api/products/csv-template';
+      const templateUrl = `/api/products/csv-template-enhanced?type=${productType}`;
       window.open(templateUrl, '_blank');
     } catch (error) {
       console.error("Error downloading template:", error);
@@ -161,8 +267,18 @@ export default function CSVUploadForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!selectedCompetitorId) {
+    if (productType === 'competitor' && !selectedCompetitorId) {
       alert("Please select a competitor");
+      return;
+    }
+
+    if (productType === 'own' && !selectedIntegrationId) {
+      alert("Please select an integration");
+      return;
+    }
+
+    if (productType === 'supplier' && !selectedSupplierId) {
+      alert("Please select a supplier");
       return;
     }
 
@@ -174,7 +290,15 @@ export default function CSVUploadForm({
     setIsSubmitting(true);
 
     try {
-      const result = await uploadProductsCSV(selectedCompetitorId, uploadedFile);
+      // Use appropriate upload method based on product type
+      let result;
+      if (productType === 'own') {
+        result = await uploadOwnProductsCSVViaIntegration(selectedIntegrationId, uploadedFile, delimiter);
+      } else if (productType === 'competitor') {
+        result = await uploadProductsCSV(selectedCompetitorId, uploadedFile, delimiter);
+      } else {
+        result = await uploadSupplierProductsCSV(selectedSupplierId, uploadedFile, delimiter);
+      }
       setUploadResult(result as UploadResult);
 
       // Only call onSuccess if we actually succeeded
@@ -194,13 +318,134 @@ export default function CSVUploadForm({
   return (
     <div className="w-full max-w-4xl mx-auto rounded-lg border border-gray-200 bg-white shadow-sm">
       <div className="border-b border-gray-200 px-6 py-4">
-        <h2 className="text-lg font-medium text-gray-900">Upload Product Prices</h2>
+        <h2 className="text-lg font-medium text-gray-900">Upload Products</h2>
         <p className="mt-1 text-sm text-gray-500">
-          Upload a CSV file with product prices for a specific competitor
+          Upload a CSV file with products and prices
         </p>
       </div>
 
       <form onSubmit={handleSubmit} className="px-6 py-4 space-y-6">
+        {/* Product Type Selection */}
+        <div>
+          <label className="text-base font-medium text-gray-900">Product Type</label>
+          <p className="text-sm leading-5 text-gray-500">Choose what type of products you're uploading</p>
+          <fieldset className="mt-4">
+            <legend className="sr-only">Product type</legend>
+            <div className="space-y-4">
+              <div className="flex items-center">
+                <input
+                  id="own-products"
+                  name="product-type"
+                  type="radio"
+                  checked={productType === 'own'}
+                  onChange={() => setProductType('own')}
+                  className="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <label htmlFor="own-products" className="ml-3 block text-sm font-medium text-gray-700">
+                  Our Products
+                </label>
+              </div>
+              <div className="flex items-center">
+                <input
+                  id="competitor-products"
+                  name="product-type"
+                  type="radio"
+                  checked={productType === 'competitor'}
+                  onChange={() => setProductType('competitor')}
+                  className="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <label htmlFor="competitor-products" className="ml-3 block text-sm font-medium text-gray-700">
+                  Competitor Products
+                </label>
+              </div>
+              <div className="flex items-center">
+                <input
+                  id="supplier-products"
+                  name="product-type"
+                  type="radio"
+                  checked={productType === 'supplier'}
+                  onChange={() => setProductType('supplier')}
+                  className="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <label htmlFor="supplier-products" className="ml-3 block text-sm font-medium text-gray-700">
+                  Supplier Products
+                </label>
+              </div>
+            </div>
+          </fieldset>
+          <p className="mt-2 text-sm text-gray-500">
+            {productType === 'own'
+              ? 'Upload your own products with pricing information (our_price, wholesale_price)'
+              : productType === 'competitor'
+              ? 'Upload competitor products for price comparison'
+              : 'Upload supplier products for sourcing and procurement'
+            }
+          </p>
+        </div>
+
+        {/* CSV Configuration */}
+        <div className="space-y-4">
+          <div>
+            <label className="text-base font-medium text-gray-900">CSV Configuration</label>
+            <p className="text-sm leading-5 text-gray-500">Configure how your CSV file should be parsed</p>
+
+            {/* Delimiter Selection */}
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700">Field Delimiter</label>
+              <div className="mt-2 space-x-4">
+                <label className="inline-flex items-center">
+                  <input
+                    type="radio"
+                    name="delimiter"
+                    value=","
+                    checked={delimiter === ','}
+                    onChange={(e) => handleDelimiterChange(e.target.value as ',' | ';')}
+                    className="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span className="ml-2 text-sm text-gray-700">Comma (,)</span>
+                </label>
+                <label className="inline-flex items-center">
+                  <input
+                    type="radio"
+                    name="delimiter"
+                    value=";"
+                    checked={delimiter === ';'}
+                    onChange={(e) => handleDelimiterChange(e.target.value as ',' | ';')}
+                    className="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span className="ml-2 text-sm text-gray-700">Semicolon (;)</span>
+                </label>
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                Choose the character that separates fields in your CSV file
+              </p>
+            </div>
+
+            {/* Field Requirements */}
+            <div className="mt-4 p-3 bg-blue-50 rounded-md">
+              <h4 className="text-sm font-medium text-blue-900 mb-2">Required Fields for {productType === 'own' ? 'Own Products' : productType === 'competitor' ? 'Competitor Products' : 'Supplier Products'}</h4>
+              <div className="text-xs text-blue-800 space-y-1">
+                {productType === 'own' ? (
+                  <>
+                    <div><strong>Required:</strong> name</div>
+                    <div><strong>Price fields (at least one):</strong> our_retail_price, our_wholesale_price</div>
+                    <div><strong>Optional:</strong> currency_code, sku, brand, ean, image_url, url, category, description</div>
+                  </>
+                ) : productType === 'competitor' ? (
+                  <>
+                    <div><strong>Required:</strong> name, competitor_price</div>
+                    <div><strong>Optional:</strong> currency_code, sku, brand, ean, image_url, url</div>
+                  </>
+                ) : (
+                  <>
+                    <div><strong>Required:</strong> name, supplier_price</div>
+                    <div><strong>Optional:</strong> supplier_recommended_price, currency_code, sku, brand, ean, image_url, url, minimum_order_quantity, lead_time_days</div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
         {uploadResult ? (
           <div className={`p-4 rounded-md ${uploadResult.success ? 'bg-green-50' : 'bg-red-50'}`}>
             <div className="flex">
@@ -227,25 +472,80 @@ export default function CSVUploadForm({
           </div>
         ) : (
           <div className="space-y-4">
-            <div>
-              <label htmlFor="competitor" className="block text-sm font-medium text-gray-700">
-                Competitor
-              </label>
-              <select
-                id="competitor"
-                value={selectedCompetitorId}
-                onChange={(e) => setSelectedCompetitorId(e.target.value)}
-                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
-                required
-              >
-                <option value="">Select a competitor</option>
-                {competitors.map((competitor) => (
-                  <option key={competitor.id} value={competitor.id}>
-                    {competitor.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {/* Competitor Selection - Only show for competitor products */}
+            {productType === 'competitor' && (
+              <div>
+                <label htmlFor="competitor" className="block text-sm font-medium text-gray-700">
+                  Competitor
+                </label>
+                <select
+                  id="competitor"
+                  value={selectedCompetitorId}
+                  onChange={(e) => setSelectedCompetitorId(e.target.value)}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+                  required
+                >
+                  <option value="">Select a competitor</option>
+                  {competitors.map((competitor) => (
+                    <option key={competitor.id} value={competitor.id}>
+                      {competitor.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Integration Selection - Only show for own products */}
+            {productType === 'own' && (
+              <div>
+                <label htmlFor="integration" className="block text-sm font-medium text-gray-700">
+                  Integration
+                </label>
+                <select
+                  id="integration"
+                  value={selectedIntegrationId}
+                  onChange={(e) => setSelectedIntegrationId(e.target.value)}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+                  required
+                >
+                  <option value="">Select an integration</option>
+                  {integrations.map((integration) => (
+                    <option key={integration.id} value={integration.id}>
+                      {integration.name} ({integration.platform})
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-sm text-gray-500">
+                  Choose which integration this CSV upload belongs to. This helps organize your products and track price history.
+                </p>
+              </div>
+            )}
+
+            {/* Supplier Selection - Only show for supplier products */}
+            {productType === 'supplier' && (
+              <div>
+                <label htmlFor="supplier" className="block text-sm font-medium text-gray-700">
+                  Supplier
+                </label>
+                <select
+                  id="supplier"
+                  value={selectedSupplierId}
+                  onChange={(e) => setSelectedSupplierId(e.target.value)}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+                  required
+                >
+                  <option value="">Select a supplier</option>
+                  {suppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.id}>
+                      {supplier.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-sm text-gray-500">
+                  Choose which supplier this CSV upload belongs to. This helps track supplier pricing and sourcing.
+                </p>
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-gray-700">
@@ -345,8 +645,25 @@ export default function CSVUploadForm({
                   </table>
                 </div>
                 <p className="mt-2 text-xs text-gray-500">
-                  Required columns: name, price<br />
-                  Optional columns: currency, sku, brand, ean, image_url, url
+                  {productType === 'own' ? (
+                    <>
+                      Required columns: name<br />
+                      Optional columns: our_retail_price, our_wholesale_price, currency_code, sku, brand, ean, image_url, our_url, category, description<br />
+                      <span className="text-gray-400">Note: old field names (our_price, wholesale_price, url) are still supported</span>
+                    </>
+                  ) : productType === 'competitor' ? (
+                    <>
+                      Required columns: name, competitor_price<br />
+                      Optional columns: currency_code, sku, brand, ean, image_url, competitor_url<br />
+                      <span className="text-gray-400">Note: old field name (url) is still supported</span>
+                    </>
+                  ) : (
+                    <>
+                      Required columns: name, supplier_price<br />
+                      Optional columns: supplier_recommended_price, currency_code, sku, brand, ean, image_url, supplier_url, minimum_order_quantity, lead_time_days<br />
+                      <span className="text-gray-400">Note: old field name (url) is still supported</span>
+                    </>
+                  )}
                 </p>
               </div>
             )}
@@ -364,7 +681,7 @@ export default function CSVUploadForm({
           {!uploadResult && (
             <button
               type="submit"
-              disabled={isSubmitting || !uploadedFile || !selectedCompetitorId}
+              disabled={isSubmitting || !uploadedFile || (productType === 'competitor' && !selectedCompetitorId) || (productType === 'own' && !selectedIntegrationId) || (productType === 'supplier' && !selectedSupplierId)}
               className="rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
             >
               {isSubmitting ? "Uploading..." : "Upload Products"}

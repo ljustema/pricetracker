@@ -50,13 +50,17 @@ export class ScraperCreationService {
     // Import here to avoid circular dependencies
     const { createSupabaseAdminClient } = await import('@/lib/supabase/server');
     const supabase = createSupabaseAdminClient();
-    
+
+    if (!config.competitor_id) {
+      throw new Error('competitor_id is required for Python scrapers');
+    }
+
     const { data: competitor, error: competitorError } = await supabase
       .from('competitors')
       .select('name')
       .eq('id', config.competitor_id)
       .single();
-    
+
     if (competitorError) {
       throw new Error(`Failed to get competitor: ${competitorError.message}`);
     }
@@ -99,8 +103,7 @@ export class ScraperCreationService {
       python_script: config.python_script,
       script_metadata: scriptMetadata,
       schedule: config.schedule,
-      is_active: false, // Default to inactive until tested and approved
-      is_approved: false, // Default to not approved until tested
+      is_active: false, // Default to inactive until tested
     };
     
     // Create the scraper
@@ -165,6 +168,10 @@ export class ScraperCreationService {
     const { createSupabaseAdminClient } = await import('@/lib/supabase/server');
     const supabase = createSupabaseAdminClient();
 
+    if (!config.competitor_id) {
+      throw new Error('competitor_id is required for TypeScript scrapers');
+    }
+
     const { data: competitor, error: competitorError } = await supabase
       .from('competitors')
       .select('name')
@@ -214,7 +221,6 @@ export class ScraperCreationService {
       script_metadata: scriptMetadata,
       schedule: config.schedule,
       is_active: false, // Default to inactive
-      is_approved: false, // Default to not approved
     };
 
     // Create the scraper

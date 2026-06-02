@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -35,15 +35,8 @@ export function IntegrationRunsDialog({ open, onOpenChange, integration }: Integ
   const [refreshing, setRefreshing] = useState(false);
   const { toast } = useToast();
 
-  // Fetch integration runs when the dialog opens
-  useEffect(() => {
-    if (open && integration) {
-      fetchRuns();
-    }
-  }, [open, integration]);
-
   // Fetch integration runs
-  const fetchRuns = async () => {
+  const fetchRuns = useCallback(async () => {
     if (!integration) return;
 
     setLoading(true);
@@ -65,7 +58,14 @@ export function IntegrationRunsDialog({ open, onOpenChange, integration }: Integ
     } finally {
       setLoading(false);
     }
-  };
+  }, [integration, toast]);
+
+  // Fetch integration runs when the dialog opens
+  useEffect(() => {
+    if (open && integration) {
+      fetchRuns();
+    }
+  }, [open, integration, fetchRuns]);
 
   // Refresh integration runs
   const handleRefresh = async () => {
@@ -97,7 +97,7 @@ export function IntegrationRunsDialog({ open, onOpenChange, integration }: Integ
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[800px]">
+      <DialogContent className="sm:max-w-[800px] max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Integration Runs</DialogTitle>
           <DialogDescription>
@@ -117,74 +117,76 @@ export function IntegrationRunsDialog({ open, onOpenChange, integration }: Integ
           </Button>
         </div>
 
-        {loading ? (
-          // Loading skeleton
-          <div className="space-y-2">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="flex space-x-2">
-                <Skeleton className="h-10 w-full" />
-              </div>
-            ))}
-          </div>
-        ) : runs.length === 0 ? (
-          // Empty state
-          <div className="text-center py-8 border rounded-lg bg-gray-50">
-            <AlertCircle className="h-8 w-8 mx-auto text-gray-400 mb-2" />
-            <h3 className="text-lg font-medium mb-1">No sync history</h3>
-            <p className="text-gray-500">
-              This integration hasn't been synced yet.
-            </p>
-          </div>
-        ) : (
-          // Table of runs
-          <div className="border rounded-lg overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[100px]">Status</TableHead>
-                  <TableHead>Started</TableHead>
-                  <TableHead>Completed</TableHead>
-                  <TableHead className="text-right">Processed</TableHead>
-                  <TableHead className="text-right">Updated</TableHead>
-                  <TableHead className="text-right">Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {runs.map((run) => (
-                  <TableRow key={run.id}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center space-x-1">
-                        {getStatusIcon(run.status)}
-                        <span className="capitalize">{run.status}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>{formatDate(run.started_at || run.created_at)}</TableCell>
-                    <TableCell>{formatDate(run.completed_at)}</TableCell>
-                    <TableCell className="text-right">{run.products_processed}</TableCell>
-                    <TableCell className="text-right">{run.products_updated}</TableCell>
-                    <TableCell className="text-right">{run.products_created}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-
-        {runs.length > 0 && runs.some(run => run.error_message) && (
-          <div className="mt-4">
-            <h4 className="text-sm font-medium mb-2">Errors</h4>
+        <div className="flex-1 overflow-y-auto pr-4">
+          {loading ? (
+            // Loading skeleton
             <div className="space-y-2">
-              {runs
-                .filter(run => run.error_message)
-                .map(run => (
-                  <div key={`${run.id}-error`} className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
-                    <div className="font-medium mb-1">Error on {formatDate(run.completed_at || run.created_at)}</div>
-                    <div>{run.error_message}</div>
-                  </div>
-                ))}
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="flex space-x-2">
+                  <Skeleton className="h-10 w-full" />
+                </div>
+              ))}
             </div>
-          </div>
-        )}
+          ) : runs.length === 0 ? (
+            // Empty state
+            <div className="text-center py-8 border rounded-lg bg-gray-50">
+              <AlertCircle className="h-8 w-8 mx-auto text-gray-400 mb-2" />
+              <h3 className="text-lg font-medium mb-1">No sync history</h3>
+              <p className="text-gray-500">
+                This integration hasn't been synced yet.
+              </p>
+            </div>
+          ) : (
+            // Table of runs
+            <div className="border rounded-lg overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[100px]">Status</TableHead>
+                    <TableHead>Started</TableHead>
+                    <TableHead>Completed</TableHead>
+                    <TableHead className="text-right">Processed</TableHead>
+                    <TableHead className="text-right">Updated</TableHead>
+                    <TableHead className="text-right">Created</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {runs.map((run) => (
+                    <TableRow key={run.id}>
+                      <TableCell className="font-medium">
+                        <div className="flex items-center space-x-1">
+                          {getStatusIcon(run.status)}
+                          <span className="capitalize">{run.status}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>{formatDate(run.started_at || run.created_at)}</TableCell>
+                      <TableCell>{formatDate(run.completed_at)}</TableCell>
+                      <TableCell className="text-right">{run.products_processed}</TableCell>
+                      <TableCell className="text-right">{run.products_updated}</TableCell>
+                      <TableCell className="text-right">{run.products_created}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {runs.length > 0 && runs.some(run => run.error_message) && (
+            <div className="mt-4">
+              <h4 className="text-sm font-medium mb-2">Errors</h4>
+              <div className="space-y-2">
+                {runs
+                  .filter(run => run.error_message)
+                  .map(run => (
+                    <div key={`${run.id}-error`} className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+                      <div className="font-medium mb-1">Error on {formatDate(run.completed_at || run.created_at)}</div>
+                      <div>{run.error_message}</div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );

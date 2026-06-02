@@ -30,7 +30,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     let body: { userFeedback?: string } = {};
     try {
       body = await request.json();
-    } catch (error) {
+    } catch (_error) {
       // If parsing fails, assume empty body
       logger.warn(routeContext, 'Failed to parse request body, assuming no feedback');
     }

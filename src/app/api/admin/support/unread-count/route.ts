@@ -3,7 +3,7 @@ import { validateAdminApiAccess } from '@/lib/admin/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 
 // GET /api/admin/support/unread-count - Get unread user message count for admin
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Validate admin access
     await validateAdminApiAccess();

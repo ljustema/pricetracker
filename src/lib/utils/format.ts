@@ -4,7 +4,15 @@
  * @param currencyCode The ISO currency code (default: 'SEK')
  * @returns Formatted currency string
  */
-export function formatCurrency(value: number, currencyCode: string = 'SEK'): string {
+export function formatCurrency(value: number | null | undefined, currencyCode: string = 'SEK'): string {
+  if (value === null || value === undefined || isNaN(value)) {
+    return new Intl.NumberFormat('sv-SE', {
+      style: 'currency',
+      currency: currencyCode,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(0);
+  }
   return new Intl.NumberFormat('sv-SE', {
     style: 'currency',
     currency: currencyCode,
@@ -19,7 +27,10 @@ export function formatCurrency(value: number, currencyCode: string = 'SEK'): str
  * @param decimals Number of decimal places (default: 2)
  * @returns Formatted percentage string
  */
-export function formatPercentage(value: number, decimals: number = 2): string {
+export function formatPercentage(value: number | null | undefined, decimals: number = 2): string {
+  if (value === null || value === undefined || isNaN(value)) {
+    return '0.0%';
+  }
   return `${value.toFixed(decimals)}%`;
 }
 
@@ -47,7 +58,13 @@ export function formatDate(
  * @param decimals Number of decimal places (default: 0)
  * @returns Formatted number string
  */
-export function formatNumber(value: number, decimals: number = 0): string {
+export function formatNumber(value: number | null | undefined, decimals: number = 0): string {
+  if (value === null || value === undefined || isNaN(value)) {
+    return new Intl.NumberFormat('sv-SE', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    }).format(0);
+  }
   return new Intl.NumberFormat('sv-SE', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,

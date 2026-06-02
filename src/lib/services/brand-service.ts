@@ -11,6 +11,18 @@ import { Database } from '@/lib/supabase/database.types';
 type Brand = Database['public']['Tables']['brands']['Row'];
 // Product type removed as it's not used in this file
 
+interface BrandWithAnalytics {
+  id: string;
+  name: string;
+  is_active: boolean;
+  needs_review: boolean;
+  product_count: number;
+  our_products_count: number;
+  competitor_count: number;
+}
+
+
+
 export class BrandService {
   // Using the admin client to bypass RLS and session issues, aligning with product-service.ts.
   // WARNING: This bypasses RLS. Security relies solely on filtering by user_id in the service methods.
@@ -103,25 +115,31 @@ export class BrandService {
    * Identifies potential duplicate brands based on normalized names and similarity.
    * Returns a list of brands that share a normalized name or are very similar to at least one other active brand.
    * Excludes brand pairs that have been previously dismissed as duplicates.
+   * Includes product counts for each brand.
    */
-  async findPotentialDuplicateBrands(userId: string): Promise<Brand[]> {
+  async findPotentialDuplicateBrands(userId: string): Promise<Array<Brand & { product_count?: number; our_products_count?: number; competitor_count?: number; }>> {
     const supabase = createSupabaseAdminClient();
 
-    // 1. Fetch all active brands for the user
-    const { data: activeBrands, error: fetchError } = await supabase
-      .from('brands')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('is_active', true); // Only consider active brands for duplication checks
+    // 1. Fetch all active brands with analytics data (including product counts)
+    const { data: activeBrands, error: fetchError } = await supabase.rpc(
+      'get_brand_analytics',
+      {
+        p_user_id: userId,
+        p_brand_id: null
+      }
+    );
 
     if (fetchError) {
-      console.error('Error fetching active brands:', fetchError);
+      console.error('Error fetching active brands with analytics:', fetchError);
       throw fetchError;
     }
 
     if (!activeBrands || activeBrands.length < 2) {
       return []; // Need at least two brands to have duplicates
     }
+
+    // Filter to only active brands for duplication checks
+    const activeOnlyBrands = activeBrands.filter((brand: BrandWithAnalytics) => brand.is_active);
 
     // 1.5. Fetch dismissed duplicate pairs to exclude them
     const { data: dismissedPairs, error: dismissedError } = await supabase
@@ -156,7 +174,7 @@ export class BrandService {
     const processedBrands = new Set<string>();
 
     // First pass: exact normalized name matches
-    for (const brand of activeBrands) {
+    for (const brand of activeOnlyBrands) {
       const normalized = this.normalizeBrandName(brand.name);
       if (normalized) { // Ignore empty names after normalization
         const group = brandsByNormalizedName.get(normalized) || [];
@@ -179,8 +197,8 @@ export class BrandService {
     }
 
     // Second pass: find similar brands that weren't caught in the first pass
-    for (let i = 0; i < activeBrands.length; i++) {
-      const brand1 = activeBrands[i];
+    for (let i = 0; i < activeOnlyBrands.length; i++) {
+      const brand1 = activeOnlyBrands[i];
 
       // Skip if this brand is already in a duplicate group
       if (processedBrands.has(brand1.id)) continue;
@@ -190,8 +208,8 @@ export class BrandService {
 
       const similarBrands: Brand[] = [brand1];
 
-      for (let j = i + 1; j < activeBrands.length; j++) {
-        const brand2 = activeBrands[j];
+      for (let j = i + 1; j < activeOnlyBrands.length; j++) {
+        const brand2 = activeOnlyBrands[j];
 
         // Skip if this brand is already in a duplicate group
         if (processedBrands.has(brand2.id)) continue;
@@ -560,10 +578,13 @@ export class BrandService {
       return; // Nothing to insert
     }
 
-    // Insert the entries
+    // Insert the entries, ignoring conflicts for pairs that are already dismissed
     const { error } = await supabase
       .from('dismissed_duplicates')
-      .insert(entries);
+      .upsert(entries, {
+        onConflict: 'user_id,brand_id_1,brand_id_2',
+        ignoreDuplicates: true
+      });
 
     if (error) {
       console.error(`Error dismissing duplicates:`, error);
@@ -894,7 +915,7 @@ export class BrandService {
 
         // Fallback to a simpler query if RPC fails
         const { count, error: fallbackError } = await supabase
-          .from('price_changes')
+          .from('price_changes_competitors')
           .select('competitor_id', { count: 'exact', head: true })
           .eq('user_id', userId)
           .eq('brand_id', brandId);
@@ -977,7 +998,7 @@ export class BrandService {
       }
 
       // Get competitor names for each brand with competitors
-      const brandsWithCompetitors = brandsWithAnalytics.filter((brand: any) => brand.competitor_count > 0);
+      const brandsWithCompetitors = brandsWithAnalytics.filter((brand: BrandWithAnalytics) => brand.competitor_count > 0);
 
       // Create a map to store competitor names for each brand
       const competitorNamesMap = new Map<string, string[]>();
@@ -986,7 +1007,7 @@ export class BrandService {
       // Make this optional to avoid breaking the entire function if it fails
       if (brandsWithCompetitors.length > 0) {
         try {
-          await Promise.all(brandsWithCompetitors.map(async (brand: any) => {
+          await Promise.all(brandsWithCompetitors.map(async (brand: BrandWithAnalytics) => {
             try {
               const { data: competitorNames, error: competitorNamesError } = await supabase.rpc(
                 'get_competitor_names_for_brand',
@@ -1001,21 +1022,27 @@ export class BrandService {
 
                 // Fallback: try a direct query if RPC fails
                 try {
+                  // First get the product IDs for this brand
+                  const { data: productIds, error: productIdsError } = await supabase
+                    .from('products')
+                    .select('id')
+                    .eq('user_id', userId)
+                    .eq('brand_id', brand.id);
+
+                  if (productIdsError || !productIds || productIds.length === 0) {
+                    return;
+                  }
+
                   const { data: fallbackData, error: fallbackError } = await supabase
-                    .from('price_changes')
+                    .from('price_changes_competitors')
                     .select(`
                       competitors!inner(name)
                     `)
                     .eq('user_id', userId)
-                    .in('product_id', (subquery) => {
-                      subquery
-                        .from('products')
-                        .select('id')
-                        .eq('user_id', userId)
-                        .eq('brand_id', brand.id);
-                    });
+                    .in('product_id', productIds.map(p => p.id));
 
                   if (!fallbackError && fallbackData) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const names = [...new Set(fallbackData.map((item: any) => item.competitors.name))];
                     competitorNamesMap.set(brand.id, names);
                   }
@@ -1045,15 +1072,7 @@ export class BrandService {
       }
 
       // Add aliases and competitor names to each brand
-      const result = brandsWithAnalytics.map((brand: {
-        id: string;
-        name: string;
-        is_active: boolean;
-        needs_review: boolean;
-        product_count: number;
-        our_products_count: number;
-        competitor_count: number;
-      }) => ({
+      const result = brandsWithAnalytics.map((brand: BrandWithAnalytics) => ({
         ...brand,
         aliases: aliasMap.get(brand.id) || [],
         competitor_names: competitorNamesMap.get(brand.id) || []

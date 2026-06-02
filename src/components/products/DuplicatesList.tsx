@@ -1,16 +1,18 @@
 "use client";
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { MergeModal } from './MergeModal';
 import { BulkMergeProgress } from './BulkMergeProgress';
-import { X, Merge, Eye } from 'lucide-react';
+import { X, Merge, Eye, ArrowLeft } from 'lucide-react';
 
 interface PriceInfo {
   price: number;
-  currency: string;
+  currency_code: string;
   source: string;
   platform?: string;
   website?: string;
@@ -26,10 +28,10 @@ interface Product {
   ean: string | null;
   brand: string | null;
   brand_id: string | null;
-  our_price?: number | null;
-  wholesale_price?: number | null;
+  our_retail_price?: number | null; // Renamed from our_price
+  our_wholesale_price?: number | null; // Renamed from wholesale_price
   currency_code?: string | null;
-  url?: string | null;
+  our_url?: string | null; // Renamed from url
   image_url?: string | null;
   category?: string | null;
   description?: string | null;
@@ -46,6 +48,7 @@ interface DuplicateGroup {
 }
 
 export function DuplicatesList() {
+  const router = useRouter();
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -216,7 +219,7 @@ export function DuplicatesList() {
       if (result.errorCount > 0) {
         setError(`Automatic merge completed: ${result.mergedCount} successful merges, ${result.errorCount} errors. Check console for details.`);
       } else if (result.mergedCount === 0) {
-        setError('No products were eligible for automatic merging. Automatic merge only works for products with same brand and SKU where one has EAN and the other doesn\'t.');
+        setError('No products were eligible for automatic merging. Automatic merge works for groups of 2-10 products with same brand and SKU.');
       }
 
     } catch (err: unknown) {
@@ -356,20 +359,25 @@ export function DuplicatesList() {
     window.open(productUrl, '_blank', 'noopener,noreferrer');
   };
 
-  const formatPrice = (price: number, currency: string | null | undefined = 'SEK') => {
-    // Ensure currency is valid and not null/undefined
-    const validCurrency = currency && currency.length === 3 ? currency : 'SEK';
+  const formatPrice = (price: number | null | undefined, currencyCode: string | null | undefined = 'SEK') => {
+    // Check if price is valid
+    if (price === null || price === undefined || isNaN(price)) {
+      return 'N/A';
+    }
+
+    // Ensure currency code is valid and not null/undefined
+    const validCurrencyCode = currencyCode && currencyCode.length === 3 ? currencyCode : 'SEK';
 
     try {
       return new Intl.NumberFormat('sv-SE', {
         style: 'currency',
-        currency: validCurrency,
+        currency: validCurrencyCode,
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
       }).format(price);
     } catch (_error) {
-      // Fallback if currency is invalid
-      console.warn(`Invalid currency code: ${currency}, falling back to SEK`);
+      // Fallback if currency code is invalid
+      console.warn(`Invalid currency code: ${currencyCode}, falling back to SEK`);
       return new Intl.NumberFormat('sv-SE', {
         style: 'currency',
         currency: 'SEK',
@@ -418,7 +426,18 @@ export function DuplicatesList() {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold">Potential Duplicate Products</h1>
+        <div className="flex items-center gap-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => router.back()}
+            className="flex items-center gap-2"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Go Back
+          </Button>
+          <h1 className="text-2xl font-bold">Potential Duplicate Products</h1>
+        </div>
 
         {duplicateGroups.length > 0 && (
           <div className="flex items-center gap-4">
@@ -542,6 +561,23 @@ export function DuplicatesList() {
                         </div>
                       </div>
 
+                      {/* Product image */}
+                      {product.image_url && (
+                        <div className="flex-shrink-0">
+                          <Image
+                            src={`/api/proxy-image?url=${encodeURIComponent(product.image_url)}`}
+                            alt={product.name}
+                            width={80}
+                            height={80}
+                            className="w-20 h-20 object-cover rounded-lg border border-gray-200"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement;
+                              target.style.display = 'none';
+                            }}
+                          />
+                        </div>
+                      )}
+
                       {/* Product info */}
                       <div className="flex-1">
                         <div className="flex items-start justify-between">
@@ -576,15 +612,15 @@ export function DuplicatesList() {
                             {latestOurPrice ? (
                               <div className="text-sm bg-green-50 p-2 rounded">
                                 <span className="font-medium">Latest ({latestOurPrice.source}): </span>
-                                {formatPrice(latestOurPrice.price, latestOurPrice.currency)}
+                                {formatPrice(latestOurPrice.price, latestOurPrice.currency_code)}
                                 <div className="text-xs text-gray-500 mt-1">
                                   Updated: {new Date(latestOurPrice.updated_at).toLocaleDateString()}
                                 </div>
                               </div>
-                            ) : product.our_price ? (
+                            ) : product.our_retail_price ? (
                               <div className="text-sm bg-blue-50 p-2 rounded">
                                 <span className="font-medium">Base Price: </span>
-                                {formatPrice(product.our_price, product.currency_code || 'SEK')}
+                                {formatPrice(product.our_retail_price, product.currency_code || 'SEK')}
                               </div>
                             ) : (
                               <div className="text-sm text-gray-500 italic">No price data</div>
@@ -601,7 +637,7 @@ export function DuplicatesList() {
                                   .map((competitorPrice, index) => (
                                     <div key={index} className="text-sm bg-orange-50 p-2 rounded">
                                       <span className="font-medium">{competitorPrice.source}: </span>
-                                      {formatPrice(competitorPrice.price, competitorPrice.currency)}
+                                      {formatPrice(competitorPrice.price, competitorPrice.currency_code)}
                                       <div className="text-xs text-gray-500 mt-1">
                                         Updated: {new Date(competitorPrice.updated_at).toLocaleDateString()}
                                       </div>

@@ -81,8 +81,8 @@ export interface ApiResponseData {
  * const mapApiResponseToProductData: ApiDataMappingFunction = async (apiResponse) => {
  *   return {
  *     name: apiResponse.name,
- *     price: parseFloat(apiResponse.price),
- *     currency: apiResponse.currency || 'SEK',
+ *     competitor_price: parseFloat(apiResponse.price),
+ *     currency_code: apiResponse.currency || 'SEK',
  *     url: apiResponse.url,
  *     sku: apiResponse.sku,
  *     brand: apiResponse.brand,
@@ -153,8 +153,8 @@ export type PaginationHandlingFunction = (
  *
  *   return {
  *     name,
- *     price,
- *     currency: 'SEK',
+ *     competitor_price: price,
+ *     currency_code: 'SEK',
  *     url,
  *     is_available: true
  *   };
@@ -172,8 +172,8 @@ export type ProductDataExtractionFunction = (
 export interface ScrapedProductData {
   url: string;
   name: string;
-  price: number | null;
-  currency: string | null;
+  competitor_price: number | null; // Updated field name to match new pricing structure
+  currency_code: string | null; // Updated field name to match new pricing structure
   sku?: string | null;
   brand?: string | null;
   ean?: string | null;

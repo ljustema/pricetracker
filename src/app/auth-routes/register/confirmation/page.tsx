@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -13,18 +13,8 @@ export default function ConfirmationPage() {
   const [resendSuccess, setResendSuccess] = useState(false);
   const [error, setError] = useState("");
 
-  // Check if this is a confirmation link with token
-  useEffect(() => {
-    const token = searchParams?.get("token");
-    const type = searchParams?.get("type");
-    
-    if (token && type === "signup") {
-      handleConfirmation(token);
-    }
-  }, [searchParams]);
-
   // Handle email confirmation
-  const handleConfirmation = async (token: string) => {
+  const handleConfirmation = useCallback(async (token: string) => {
     try {
       const supabase = createClient();
       const { error } = await supabase.auth.verifyOtp({
@@ -46,7 +36,17 @@ export default function ConfirmationPage() {
           : "An error occurred during email confirmation. Please try again."
       );
     }
-  };
+  }, [router, setError]);
+
+  // Check if this is a confirmation link with token
+  useEffect(() => {
+    const token = searchParams?.get("token");
+    const type = searchParams?.get("type");
+
+    if (token && type === "signup") {
+      handleConfirmation(token);
+    }
+  }, [searchParams, handleConfirmation]);
 
   // Handle resend confirmation email
   const handleResendConfirmation = async (e: React.FormEvent) => {

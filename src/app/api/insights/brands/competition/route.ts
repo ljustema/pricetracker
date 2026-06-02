@@ -9,7 +9,7 @@ const CACHE_MAX_AGE = 60; // Cache for 60 seconds
 /**
  * GET handler to fetch competition data for brands
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Get the authenticated user's session
     const session = await getServerSession(authOptions);
@@ -96,13 +96,13 @@ export async function GET(request: NextRequest) {
 
         // Process in chunks to avoid URL size limits
         const CHUNK_SIZE = 20;
-        let allPriceChanges = [];
+        let allPriceChanges: { competitor_id: string; competitors: { name: string } | null }[] = [];
         let hasError = false;
 
         for (let i = 0; i < productIds.length; i += CHUNK_SIZE) {
           const chunk = productIds.slice(i, i + CHUNK_SIZE);
           const { data: priceChangesChunk, error: priceChangesError } = await supabase
-            .from('price_changes')
+            .from('price_changes_competitors')
             .select(`
               competitor_id,
               competitors(name)
@@ -118,7 +118,7 @@ export async function GET(request: NextRequest) {
           }
 
           if (priceChangesChunk) {
-            allPriceChanges = [...allPriceChanges, ...priceChangesChunk];
+            allPriceChanges = [...allPriceChanges, ...(priceChangesChunk as unknown as { competitor_id: string; competitors: { name: string } | null }[])];
           }
         }
 
@@ -132,7 +132,7 @@ export async function GET(request: NextRequest) {
         }
 
         // Count distinct competitors
-        const competitorMap = new Map();
+        const competitorMap = new Map<string, { competitor_id: string; competitor_name: string }>();
         allPriceChanges.forEach(pc => {
           if (pc.competitor_id && !competitorMap.has(pc.competitor_id)) {
             competitorMap.set(pc.competitor_id, {

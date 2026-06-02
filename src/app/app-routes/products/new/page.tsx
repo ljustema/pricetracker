@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import Link from "next/link";
 
 export default function NewProductPage() {
   const router = useRouter();
@@ -19,8 +18,8 @@ export default function NewProductPage() {
     description: "",
     image_url: "",
     url: "", // Add URL field
-    our_price: "",
-    wholesale_price: "",
+    our_retail_price: "",
+    our_wholesale_price: "",
     is_active: true,
   });
 
@@ -60,12 +59,12 @@ export default function NewProductPage() {
       // Prepare the data for submission
       const productData = {
         ...formData,
-        our_price: formData.our_price ? parseFloat(formData.our_price) : null,
-        wholesale_price: formData.wholesale_price ? parseFloat(formData.wholesale_price) : null,
+        our_retail_price: formData.our_retail_price ? parseFloat(formData.our_retail_price) : null,
+        our_wholesale_price: formData.our_wholesale_price ? parseFloat(formData.our_wholesale_price) : null,
       };
 
       // Call the API route to create a new product
-      const response = await fetch('/api/products', {
+      const response = await fetch('/api/products/create', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -215,20 +214,20 @@ export default function NewProductPage() {
             </div>
 
             <div>
-              <label htmlFor="our_price" className="block text-sm font-medium">
-                Our Price
+              <label htmlFor="our_retail_price" className="block text-sm font-medium">
+                Our Retail Price
               </label>
               <div className="relative mt-1 rounded-md shadow-sm">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                   <span className="text-gray-500 sm:text-sm">$</span>
                 </div>
                 <input
-                  id="our_price"
-                  name="our_price"
+                  id="our_retail_price"
+                  name="our_retail_price"
                   type="number"
                   step="0.01"
                   min="0"
-                  value={formData.our_price}
+                  value={formData.our_retail_price}
                   onChange={handleChange}
                   className="block w-full rounded-md border border-gray-300 pl-7 pr-12 py-2 focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
                   placeholder="0.00"
@@ -237,20 +236,20 @@ export default function NewProductPage() {
             </div>
 
             <div>
-              <label htmlFor="wholesale_price" className="block text-sm font-medium">
-                Wholesale Price
+              <label htmlFor="our_wholesale_price" className="block text-sm font-medium">
+                Our Wholesale Price
               </label>
               <div className="relative mt-1 rounded-md shadow-sm">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                   <span className="text-gray-500 sm:text-sm">$</span>
                 </div>
                 <input
-                  id="wholesale_price"
-                  name="wholesale_price"
+                  id="our_wholesale_price"
+                  name="our_wholesale_price"
                   type="number"
                   step="0.01"
                   min="0"
-                  value={formData.wholesale_price}
+                  value={formData.our_wholesale_price}
                   onChange={handleChange}
                   className="block w-full rounded-md border border-gray-300 pl-7 pr-12 py-2 focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
                   placeholder="0.00"
@@ -289,12 +288,13 @@ export default function NewProductPage() {
           </div>
 
           <div className="flex justify-end space-x-3">
-            <Link
-              href="/app-routes/products"
+            <button
+              type="button"
+              onClick={() => router.back()}
               className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
             >
               Cancel
-            </Link>
+            </button>
             <button
               type="submit"
               disabled={isLoading}

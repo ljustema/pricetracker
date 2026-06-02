@@ -6,6 +6,11 @@ import { createSupabaseAdminClient } from '@/lib/supabase/server';
 // Add cache headers to improve performance
 const CACHE_MAX_AGE = 60; // Cache for 60 seconds
 
+interface BrandForCompetitorItem {
+  brand_id: string;
+  brand_name: string;
+}
+
 /**
  * GET handler to fetch brand focus data for competitors
  */
@@ -41,7 +46,7 @@ export async function GET(request: NextRequest) {
         // Process the data to get top brands by product count
         const brandCounts = new Map();
         
-        functionData.forEach((item: any) => {
+        functionData.forEach((item: BrandForCompetitorItem) => {
           const brandId = item.brand_id;
           const brandName = item.brand_name;
           
@@ -79,7 +84,7 @@ export async function GET(request: NextRequest) {
       
       // Get all price changes for this competitor
       const { data: priceChanges, error: priceChangesError } = await supabase
-        .from('price_changes')
+        .from('price_changes_competitors')
         .select(`
           product_id
         `)
@@ -117,13 +122,13 @@ export async function GET(request: NextRequest) {
       }
 
       // Count products by brand
-      const brandCounts = new Map();
+      const brandCounts = new Map<string, { brand_id: string; brand_name: string; product_count: number }>();
       
       products.forEach(product => {
         if (!product.brand_id) return;
         
         const brandId = product.brand_id;
-        const brandName = product.brands?.name || 'Unknown';
+        const brandName = (product.brands as unknown as { name: string } | null)?.name || 'Unknown';
         
         if (!brandCounts.has(brandId)) {
           brandCounts.set(brandId, {
@@ -133,7 +138,7 @@ export async function GET(request: NextRequest) {
           });
         }
         
-        brandCounts.get(brandId).product_count += 1;
+        brandCounts.get(brandId)!.product_count += 1;
       });
 
       // Convert to array, sort by count, and limit
@@ -186,9 +191,9 @@ export async function GET(request: NextRequest) {
 
           if (!functionError && functionData) {
             // Process the data to get top brand by product count
-            const brandCounts = new Map();
+            const brandCounts = new Map<string, { brand_id: string; brand_name: string; product_count: number }>();
             
-            functionData.forEach((item: any) => {
+            functionData.forEach((item: BrandForCompetitorItem) => {
               const brandId = item.brand_id;
               const brandName = item.brand_name;
               
@@ -200,7 +205,7 @@ export async function GET(request: NextRequest) {
                 });
               }
               
-              brandCounts.get(brandId).product_count += 1;
+              brandCounts.get(brandId)!.product_count += 1;
             });
 
             // Convert to array, sort by count, and get top brand
@@ -218,7 +223,7 @@ export async function GET(request: NextRequest) {
           // Fallback to direct query if the function doesn't exist or fails
           // Get all price changes for this competitor
           const { data: priceChanges, error: priceChangesError } = await supabase
-            .from('price_changes')
+            .from('price_changes_competitors')
             .select(`
               product_id
             `)
@@ -266,13 +271,13 @@ export async function GET(request: NextRequest) {
           }
 
           // Count products by brand
-          const brandCounts = new Map();
+          const brandCounts = new Map<string, { brand_id: string; brand_name: string; product_count: number }>();
           
           products.forEach(product => {
             if (!product.brand_id) return;
             
             const brandId = product.brand_id;
-            const brandName = product.brands?.name || 'Unknown';
+            const brandName = (product.brands as unknown as { name: string } | null)?.name || 'Unknown';
             
             if (!brandCounts.has(brandId)) {
               brandCounts.set(brandId, {
@@ -282,7 +287,7 @@ export async function GET(request: NextRequest) {
               });
             }
             
-            brandCounts.get(brandId).product_count += 1;
+            brandCounts.get(brandId)!.product_count += 1;
           });
 
           // Convert to array, sort by count, and get top brand

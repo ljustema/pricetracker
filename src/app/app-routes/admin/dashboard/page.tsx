@@ -1,21 +1,21 @@
 import { Metadata } from "next";
 import { requireAdmin } from "@/lib/admin/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { 
-  Users, 
-  UserCheck, 
-  UserPlus, 
-  Crown, 
-  Shield, 
+import {
+  Users,
+  UserCheck,
+  UserPlus,
+  Crown,
+  Shield,
   UserX,
-  TrendingUp,
   Calendar,
   MessageSquare
 } from "lucide-react";
+import ScraperHealthWidget from "@/components/admin/scraper-health-widget";
 
 export const metadata: Metadata = {
   title: "Admin Dashboard - PriceTracker",
@@ -38,7 +38,7 @@ export default async function AdminDashboardPage() {
 
   // Fetch user statistics
   const { data: userStats, error: statsError } = await supabase
-    .rpc('get_admin_user_stats') as { data: UserStats[] | null, error: any };
+    .rpc('get_admin_user_stats') as { data: UserStats[] | null, error: unknown };
 
   const stats = userStats?.[0] || {
     total_users: 0,
@@ -146,7 +146,7 @@ export default async function AdminDashboardPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
         <p className="text-gray-600">
-          Welcome back, {adminUser.name}. Here's an overview of your system.
+          Welcome back, {adminUser.name}. Here&apos;s an overview of your system.
         </p>
       </div>
 
@@ -207,6 +207,9 @@ export default async function AdminDashboardPage() {
           })}
         </div>
       </div>
+
+      {/* Scraper Health */}
+      <ScraperHealthWidget />
 
       {/* Admin Info */}
       <Card>

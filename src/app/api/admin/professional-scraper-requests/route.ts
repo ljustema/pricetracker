@@ -141,7 +141,12 @@ export async function PUT(request: NextRequest) {
     }
 
     // Update the request
-    const updateData: any = {
+    const updateData: {
+      status: string;
+      admin_notes: string | null;
+      quoted_price?: number;
+      estimated_delivery_days?: number;
+    } = {
       status,
       admin_notes: adminNotes || null
     };

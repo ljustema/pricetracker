@@ -106,7 +106,7 @@ export default function TestResultsModal({
                     </td>
                     <td className="whitespace-nowrap px-6 py-4">
                       <div className="text-sm text-gray-900">
-                        {product.price} {product.currency}
+                        {product.competitor_price} {product.currency_code}
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-6 py-4">

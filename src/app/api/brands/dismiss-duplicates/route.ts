@@ -7,7 +7,6 @@ import { authOptions } from '@/lib/auth/options';
 // Define a type for database errors
 interface DatabaseError extends Error {
   code?: string;
-  message?: string;
 }
 
 // Define schema for the dismiss-duplicates request body
@@ -53,7 +52,7 @@ export async function POST(request: NextRequest) {
 
       // Check for specific database errors
       const dbError = error as DatabaseError;
-      if (dbError.code === '23514' && dbError.message?.includes('brand_id_order')) {
+      if (dbError.code === '23514' && dbError.message.includes('brand_id_order')) {
         errorMessage = 'Database constraint violation';
         errorDetails = 'There was an issue with the order of brand IDs. This has been fixed, please try again.';
       } else if (dbError.code) {

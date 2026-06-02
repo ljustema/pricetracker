@@ -2,12 +2,13 @@ import { Metadata } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
 import { redirect } from "next/navigation";
-import Image from "next/image";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import crypto from 'crypto';
 import BrandStatisticsServer from "@/components/brands/BrandStatisticsServer";
 import GenerateReportButton from "@/components/dashboard/generate-report-button";
+import ExportPriceMatchingButton from "@/components/dashboard/ExportPriceMatchingButton";
+import TopPriceDropsCard, { TopPriceDrop } from "@/components/dashboard/TopPriceDropsCard";
 import { Database } from "@/lib/supabase/database.types";
 
 // Helper function to ensure user ID is a valid UUID
@@ -53,19 +54,19 @@ export default async function DashboardPage() {
     .select("*", { count: "exact", head: true })
     .eq("user_id", userId);
 
-  // Get product count - only count products with our_price
+  // Get product count - only count products with our_retail_price
   const { count: productCount, error: productError } = await supabase
     .from("products")
     .select("*", { count: "exact", head: true })
     .eq("user_id", userId)
-    .not("our_price", "is", null);
+    .not("our_retail_price", "is", null);
 
   // Get recent price changes (last 7 days)
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  // Use a fixed calculation to avoid hydration mismatches
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   const { count: priceChangesCount, error: priceChangesError } = await supabase
-    .from("price_changes")
+    .from("price_changes_competitors")
     .select("*", { count: "exact", head: true })
     .eq("user_id", userId)
     .gte("changed_at", sevenDaysAgo.toISOString());
@@ -74,8 +75,12 @@ export default async function DashboardPage() {
   type PriceChange = {
     id: string;
     product_id: string;
-    old_price: number;
-    new_price: number;
+    old_competitor_price?: number;
+    new_competitor_price?: number;
+    old_our_retail_price?: number;
+    new_our_retail_price?: number;
+    competitor_id?: string;
+    integration_id?: string;
     changed_at: string;
     price_change_percentage: number;
     products: {
@@ -89,7 +94,6 @@ export default async function DashboardPage() {
     integrations?: {
       name: string;
     };
-    integration_id?: string;
     source_type?: 'competitor' | 'integration';
   };
 
@@ -101,14 +105,19 @@ export default async function DashboardPage() {
     aliases?: string[];
   };
 
-  // Get top price drops
-  const { data: topPriceDrops, error: topPriceDropsError } = await supabase
-    .from("price_changes")
+  // Get top price drops from the last 7 days
+  // Fetch more results to allow for deduplication by product
+  const { data: allPriceDrops, error: topPriceDropsError } = await supabase
+    .from("price_changes_competitors")
     .select(`
       id,
       product_id,
-      old_price,
-      new_price,
+      old_competitor_price,
+      new_competitor_price,
+      old_our_retail_price,
+      new_our_retail_price,
+      competitor_id,
+      integration_id,
       changed_at,
       price_change_percentage,
       products (
@@ -125,8 +134,25 @@ export default async function DashboardPage() {
     `)
     .eq("user_id", userId)
     .lt("price_change_percentage", 0) // Only price drops
+    .gte("changed_at", sevenDaysAgo.toISOString()) // Only last 7 days
     .order("price_change_percentage", { ascending: true }) // Biggest drops first
-    .limit(5) as { data: PriceChange[] | null; error: Error | null };
+    .limit(500) as { data: PriceChange[] | null; error: Error | null };
+
+  // Deduplicate by product_id to show only the biggest drop per product
+  const topPriceDrops = allPriceDrops ?
+    Array.from(
+      allPriceDrops
+        .reduce((map, priceChange) => {
+          const existing = map.get(priceChange.product_id);
+          // Keep the one with the bigger drop (more negative percentage)
+          if (!existing || priceChange.price_change_percentage < existing.price_change_percentage) {
+            map.set(priceChange.product_id, priceChange);
+          }
+          return map;
+        }, new Map<string, PriceChange>())
+        .values()
+    ).slice(0, 100) // Take top 100 after deduplication
+    : null;
 
   // Get brands with analytics data using the RPC function
   // Add timeout handling for the brands query that was causing issues
@@ -172,7 +198,7 @@ export default async function DashboardPage() {
   // Create a map of competitor_id to stats for quick lookup
   const statsMap = new Map<string, { product_count: number, brand_count: number }>();
   if (competitorStatsData) {
-    competitorStatsData.forEach((stat: any) => {
+    competitorStatsData.forEach((stat: { competitor_id: string; product_count: number; brand_count: number }) => {
       statsMap.set(stat.competitor_id, {
         product_count: stat.product_count || 0,
         brand_count: stat.brand_count || 0
@@ -226,7 +252,7 @@ export default async function DashboardPage() {
               </h3>
               <div className="mt-2 text-sm text-yellow-700">
                 <p>
-                  We're experiencing high database load. Brand statistics will be available shortly.
+                  We&apos;re experiencing high database load. Brand statistics will be available shortly.
                   Other dashboard features are working normally.
                 </p>
               </div>
@@ -342,67 +368,8 @@ export default async function DashboardPage() {
 
       {/* Top price drops */}
       <div className="mb-8">
-        <h2 className="mb-4 text-xl font-semibold">Top Price Drops</h2>
-        <div className="rounded-lg bg-white p-6 shadow-sm">
-          {topPriceDrops && topPriceDrops.length > 0 ? (
-            <div className="divide-y">
-              {topPriceDrops.map((priceChange) => (
-                <div key={priceChange.id} className="py-4 first:pt-0 last:pb-0">
-                  <div className="flex items-center">
-                    <div className="flex-shrink-0">
-                      {priceChange.products.image_url ? (
-                        <Image
-                          src={priceChange.products.image_url}
-                          alt={priceChange.products.name}
-                          width={48}
-                          height={48}
-                          className="rounded-md"
-                        />
-                      ) : (
-                        <div className="flex h-12 w-12 items-center justify-center rounded-md bg-gray-100">
-                          <svg
-                            className="h-6 w-6 text-gray-400"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                            />
-                          </svg>
-                        </div>
-                      )}
-                    </div>
-                    <div className="ml-4 flex-1">
-                      <Link href={`/app-routes/products/${priceChange.product_id}`}>
-                        <h3 className="text-lg font-medium text-gray-900 hover:text-indigo-600">
-                          {priceChange.products.name}
-                        </h3>
-                      </Link>
-                      <p className="text-sm text-gray-500">
-                        {priceChange.competitors?.name || priceChange.integrations?.name || "Unknown"} • SKU: {priceChange.products.sku}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-lg font-medium text-red-600">
-                        {priceChange.price_change_percentage.toFixed(2)}%
-                      </p>
-                      <p className="text-sm text-gray-500">
-                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(priceChange.old_price)} →{' '}
-                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(priceChange.new_price)}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-center text-gray-500">No price drops detected in the last 7 days.</p>
-          )}
-        </div>
+        <h2 className="mb-4 text-xl font-semibold">Top Price Drops (Last 7 Days)</h2>
+        <TopPriceDropsCard drops={(topPriceDrops || []) as TopPriceDrop[]} />
       </div>
 
       {/* Quick actions */}
@@ -433,6 +400,8 @@ export default async function DashboardPage() {
           </Link>
 
           <GenerateReportButton />
+
+          <ExportPriceMatchingButton />
 
           <Link
             href="/app-routes/integrations"

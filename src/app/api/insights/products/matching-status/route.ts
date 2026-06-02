@@ -9,7 +9,7 @@ const CACHE_MAX_AGE = 60; // Cache for 60 seconds
 /**
  * GET handler to fetch product matching status data
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Get the authenticated user's session
     const session = await getServerSession(authOptions);
@@ -37,8 +37,8 @@ export async function GET(request: NextRequest) {
     }
 
     // Get products with at least one price change (matched products)
-    const { data: matchedProductsData, error: matchedProductsError } = await supabase
-      .from('price_changes')
+    const { data: _matchedProductsData, error: matchedProductsError } = await supabase
+      .from('price_changes_competitors')
       .select('product_id', { count: 'exact', head: true })
       .eq('user_id', userId)
       .not('competitor_id', 'is', null);
@@ -51,15 +51,15 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get count of distinct product IDs in price_changes
+    // Get count of distinct product IDs in price_changes_competitors
     const { count: matchedProducts } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select('product_id', { count: 'exact', head: true })
       .eq('user_id', userId)
       .not('competitor_id', 'is', null);
 
     // Calculate unmatched products
-    const unmatchedProducts = totalProducts - matchedProducts;
+    const unmatchedProducts = (totalProducts || 0) - (matchedProducts || 0);
 
     // Get matching status by brand
     const { data: products, error: productsError } = await supabase
@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
 
     // Get all price changes to determine which products have matches
     const { data: priceChanges, error: priceChangesError } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select('product_id')
       .eq('user_id', userId)
       .not('competitor_id', 'is', null);
@@ -105,7 +105,7 @@ export async function GET(request: NextRequest) {
       if (!product.brand_id) return;
       
       const brandId = product.brand_id;
-      const brandName = product.brands?.name || 'Unknown Brand';
+      const brandName = (product.brands as unknown as { name: string } | null)?.name || 'Unknown Brand';
       const isMatched = matchedProductIds.has(product.id);
       
       if (!brandMatchingStatus.has(brandId)) {
@@ -139,10 +139,10 @@ export async function GET(request: NextRequest) {
 
     // Add cache headers to the response
     const response = NextResponse.json({
-      total_products: totalProducts,
-      matched_products: matchedProducts,
+      total_products: totalProducts || 0,
+      matched_products: matchedProducts || 0,
       unmatched_products: unmatchedProducts,
-      matching_percentage: totalProducts > 0 ? (matchedProducts / totalProducts) * 100 : 0,
+      matching_percentage: (totalProducts || 0) > 0 ? ((matchedProducts || 0) / (totalProducts || 0)) * 100 : 0,
       brand_matching: brandMatching
     });
     response.headers.set('Cache-Control', `public, max-age=${CACHE_MAX_AGE}`);

@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
     // Delete price changes if requested
     if (include_price_changes) {
       const { data: priceChangesData, error: priceChangesError } = await supabase
-        .from("price_changes")
+        .from("price_changes_competitors")
         .delete()
         .eq("user_id", userId)
         .lt("changed_at", cutoffDateString)
@@ -108,7 +108,6 @@ export async function POST(request: NextRequest) {
         .select("count");
 
       if (productsError) {
-        console.error("Error deleting products:", productsError);
         return NextResponse.json(
           { error: "Failed to delete products. This may be due to foreign key constraints." },
           { status: 500 }

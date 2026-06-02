@@ -26,7 +26,7 @@ export function validateDependencies(requiredLibraries: string[]): {
     try {
       // Try to require the library to check if it's installed
       require.resolve(library);
-    } catch (error) {
+    } catch (_error) {
       missingDependencies.push(library);
     }
   }

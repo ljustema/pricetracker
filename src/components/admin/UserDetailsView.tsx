@@ -8,24 +8,24 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { 
-  ArrowLeft, 
-  User, 
-  Mail, 
-  Calendar, 
-  Crown, 
-  Shield, 
-  UserX, 
+import {
+  ArrowLeft,
+  User,
+  Crown,
+  Shield,
+  UserX,
   UserCheck,
   Package,
   Users,
   Bot,
   Zap,
   Activity,
-  MessageSquare
+  MessageSquare,
+  AlertTriangle
 } from 'lucide-react';
 import { SubscriptionEditor } from './SubscriptionEditor';
 import { UserStatusEditor } from './UserStatusEditor';
+import { DeleteAllProductsButton } from './DeleteAllProductsButton';
 
 interface UserData {
   user: {
@@ -46,8 +46,8 @@ interface UserData {
   };
   recentActivity: Array<{
     id: string;
-    old_price: number;
-    new_price: number;
+    old_competitor_price: number;
+    new_competitor_price: number;
     changed_at: string;
     products: {
       name: string;
@@ -68,9 +68,9 @@ interface UserDetailsViewProps {
   userId: string;
 }
 
-export function UserDetailsView({ userData, adminUser, userId }: UserDetailsViewProps) {
+export function UserDetailsView({ userData, adminUser, userId: _userId }: UserDetailsViewProps) {
   const { user, statistics, recentActivity, communications } = userData;
-  const [isUpdating, setIsUpdating] = useState(false);
+  const [_isUpdating, _setIsUpdating] = useState(false);
 
   // Format date
   const formatDate = (dateString: string) => {
@@ -84,10 +84,10 @@ export function UserDetailsView({ userData, adminUser, userId }: UserDetailsView
   };
 
   // Format price
-  const formatPrice = (price: number) => {
+  const formatPrice = (price: number, currencyCode: string = 'SEK') => {
     return new Intl.NumberFormat('sv-SE', {
       style: 'currency',
-      currency: 'SEK'
+      currency: currencyCode
     }).format(price);
   };
 
@@ -277,9 +277,9 @@ export function UserDetailsView({ userData, adminUser, userId }: UserDetailsView
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center space-x-2">
-                            <span className="text-gray-500">{formatPrice(activity.old_price)}</span>
+                            <span className="text-gray-500">{formatPrice(activity.old_competitor_price)}</span>
                             <span>→</span>
-                            <span className="font-medium">{formatPrice(activity.new_price)}</span>
+                            <span className="font-medium">{formatPrice(activity.new_competitor_price)}</span>
                           </div>
                         </TableCell>
                         <TableCell className="text-sm text-gray-500">
@@ -344,9 +344,46 @@ export function UserDetailsView({ userData, adminUser, userId }: UserDetailsView
 
         {adminUser.adminRole === 'super_admin' && (
           <TabsContent value="admin">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <SubscriptionEditor user={user} onUpdate={() => window.location.reload()} />
-              <UserStatusEditor user={user} onUpdate={() => window.location.reload()} />
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <SubscriptionEditor user={user} onUpdate={() => window.location.reload()} />
+                <UserStatusEditor user={user} onUpdate={() => window.location.reload()} />
+              </div>
+
+              {/* Dangerous Actions */}
+              <Card className="border-red-200">
+                <CardHeader>
+                  <CardTitle className="flex items-center text-red-600">
+                    <AlertTriangle className="h-5 w-5 mr-2" />
+                    Dangerous Actions
+                  </CardTitle>
+                  <CardDescription>
+                    These actions are irreversible and will permanently delete user data.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <h3 className="text-sm font-medium text-red-800">Delete All Products</h3>
+                          <p className="text-sm text-red-600 mt-1">
+                            Permanently delete all products ({statistics.products}), price history, stock history,
+                            and custom fields for this user. This will NOT delete user settings, competitors,
+                            suppliers, integrations, or scrapers.
+                          </p>
+                        </div>
+                        <div className="ml-4">
+                          <DeleteAllProductsButton
+                            userId={user.id}
+                            userName={user.name || user.email}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
           </TabsContent>
         )}

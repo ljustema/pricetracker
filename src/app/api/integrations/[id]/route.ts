@@ -174,12 +174,7 @@ export async function PATCH(
     if (body.api_url) updateData.api_url = body.api_url;
     if (body.api_key) updateData.api_key = body.api_key;
     if (body.sync_frequency) updateData.sync_frequency = body.sync_frequency;
-    if (body.is_active !== undefined) {
-      if (typeof body.is_active !== 'boolean') {
-        return NextResponse.json({ error: 'is_active must be a boolean' }, { status: 400 });
-      }
-      updateData.is_active = body.is_active;
-    }
+    if (body.is_active !== undefined) updateData.is_active = body.is_active;
     if (body.configuration) updateData.configuration = body.configuration;
 
 
@@ -256,7 +251,22 @@ export async function DELETE(
       );
     }
 
-    // Then delete the integration
+    // Delete any temp_integrations_scraped_data records
+    const { error: tempDataError } = await supabase
+      .from('temp_integrations_scraped_data')
+      .delete()
+      .eq('integration_id', integrationId)
+      .eq('user_id', userId);
+
+    if (tempDataError) {
+      console.error('Error deleting temp integration data:', tempDataError);
+      return NextResponse.json(
+        { error: 'Failed to delete temp integration data' },
+        { status: 500 }
+      );
+    }
+
+    // Delete the integration (price_changes will be automatically deleted via CASCADE)
     const { error } = await supabase
       .from('integrations')
       .delete()

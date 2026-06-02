@@ -67,12 +67,12 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
   ]);
 
   // Get recent activity (last 10 price changes)
-  const { data: recentActivity, error: activityError } = await supabase
-    .from('price_changes')
+  const { data: recentActivity, error: _activityError } = await supabase
+    .from('price_changes_competitors')
     .select(`
       id,
-      old_price,
-      new_price,
+      old_competitor_price,
+      new_competitor_price,
       changed_at,
       products!inner(name, user_id)
     `)
@@ -81,7 +81,7 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
     .limit(10);
 
   // Get communication history
-  const { data: communications, error: commError } = await supabase
+  const { data: communications, error: _commError } = await supabase
     .from('admin_communication_log')
     .select(`
       id,
@@ -102,7 +102,12 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
       scrapers: scraperCount || 0,
       integrations: integrationCount || 0
     },
-    recentActivity: recentActivity || [],
+    recentActivity: (recentActivity || []).map(activity => ({
+      ...activity,
+      products: {
+        name: (activity.products as unknown as { name: string }[])[0]?.name || 'Unknown Product'
+      }
+    })),
     communications: communications || []
   };
 

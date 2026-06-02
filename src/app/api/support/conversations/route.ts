@@ -49,12 +49,12 @@ export async function GET(request: NextRequest) {
     // Process conversations to add metadata
     const processedConversations = conversations?.map(conversation => {
       const messages = conversation.support_messages || [];
-      const unreadCount = messages.filter(msg => 
+      const unreadCount = messages.filter((msg: { sender_type: string; read_by_recipient: boolean }) =>
         msg.sender_type === 'admin' && !msg.read_by_recipient
       ).length;
       
-      const latestMessage = messages.length > 0 
-        ? messages.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
+      const latestMessage = messages.length > 0
+        ? messages.sort((a: { created_at: string }, b: { created_at: string }) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
         : null;
 
       return {

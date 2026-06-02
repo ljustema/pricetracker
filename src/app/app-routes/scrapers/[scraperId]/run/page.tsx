@@ -89,7 +89,7 @@ export default function RunScraperPage() {
     try {
       // Add a timeout to the fetch request
       const controller = new AbortController();
-      const TIMEOUT_MS = 30000; // Increase to 30 seconds to give worker more time to start
+      const TIMEOUT_MS = 120000; // Increase to 2 minutes to give TypeScript worker time to compile and set up dependencies
       const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
       try {
@@ -120,8 +120,9 @@ export default function RunScraperPage() {
       // Check if it's an abort error (timeout)
       if (err instanceof Error && err.name === 'AbortError') {
         setError(
-          "Connection timed out when starting the scraper. This is often due to the worker not being ready yet. " +
-          "Try again in a few seconds. If the problem persists, check that the worker is running properly."
+          "Connection timed out when starting the scraper (after 2 minutes). This may be due to the TypeScript worker " +
+          "taking longer than usual to compile the script and set up dependencies. Try again in a few moments. " +
+          "If the problem persists, check that the worker is running properly."
         );
       } else if (err instanceof Error && err.message.includes('Network error')) {
         // Handle the common "Network error" case

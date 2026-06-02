@@ -9,15 +9,22 @@ import ProductsPageContent from "./products-page-content";
 export interface ComplexFiltersState {
   brand: string;
   competitor: string[];  // Changed to array to support multiple competitors
+  supplier: string[];   // New filter for suppliers
   search: string;
   inactive: boolean;
   has_price: boolean;
+  not_our_products: boolean; // New filter for products without our price
   // # Reason: Add sort properties to ComplexFiltersState to manage sort state centrally.
   sortBy: string;
   sortOrder: 'asc' | 'desc';
   // New price comparison filters
   price_lower_than_competitors: boolean;
   price_higher_than_competitors: boolean;
+  // New stock filters
+  in_stock_only: boolean;
+  // New combined filters for price matching
+  our_products_with_competitor_prices: boolean;
+  our_products_with_supplier_prices: boolean;
   // Add itemsPerPage to manage pagination size
   itemsPerPage: number;
 }
@@ -27,6 +34,7 @@ interface ProductsClientWrapperProps {
   // Data fetched from the server parent
   initialCompetitors: Competitor[];
   initialBrands: { id: string; name: string }[];
+  initialSuppliers: { id: string; name: string }[];
   cookieHeader: string | null;
   // Accept the plain searchParams object from the server parent
   searchParams: { [key: string]: string | string[] | undefined };
@@ -44,6 +52,7 @@ function LoadingFallback() {
 export default function ProductsClientWrapper({
   initialCompetitors,
   initialBrands,
+  initialSuppliers,
   cookieHeader,
   searchParams: initialSearchParams // Receive plain object from server parent
 }: ProductsClientWrapperProps) {
@@ -61,15 +70,30 @@ export default function ProductsClientWrapper({
       }
       return [];
     })(),
+    supplier: (() => {
+      // Parse supplier parameter - can be comma-separated string or array
+      if (typeof initialSearchParams.supplier === 'string') {
+        return initialSearchParams.supplier ? initialSearchParams.supplier.split(',').filter(Boolean) : [];
+      } else if (Array.isArray(initialSearchParams.supplier)) {
+        return initialSearchParams.supplier.filter(Boolean);
+      }
+      return [];
+    })(),
     search: typeof initialSearchParams.search === 'string' ? initialSearchParams.search : "",
     inactive: initialSearchParams.inactive === "true",
     has_price: initialSearchParams.has_price === "true",
+    not_our_products: initialSearchParams.not_our_products === "true",
     // # Reason: Initialize sort properties from initialSearchParams.
     sortBy: typeof initialSearchParams.sort === 'string' ? initialSearchParams.sort : 'created_at',
     sortOrder: typeof initialSearchParams.sortOrder === 'string' && (initialSearchParams.sortOrder === 'asc' || initialSearchParams.sortOrder === 'desc') ? initialSearchParams.sortOrder : 'desc',
     // Initialize new price comparison filters
     price_lower_than_competitors: initialSearchParams.price_lower_than_competitors === "true",
     price_higher_than_competitors: initialSearchParams.price_higher_than_competitors === "true",
+    // Initialize stock filters
+    in_stock_only: initialSearchParams.in_stock_only === "true",
+    // Initialize new combined filters
+    our_products_with_competitor_prices: initialSearchParams.our_products_with_competitor_prices === "true",
+    our_products_with_supplier_prices: initialSearchParams.our_products_with_supplier_prices === "true",
     // Initialize itemsPerPage from URL params, default to 16, validate allowed values
     itemsPerPage: (() => {
       if (typeof initialSearchParams.itemsPerPage === 'string') {
@@ -86,17 +110,41 @@ export default function ProductsClientWrapper({
   // # Reason: Ref to track the first render to avoid overriding initial deep links.
   const isFirstRender = useRef(true);
 
+  // # Reason: Ref to track previous filter values to detect changes that should reset pagination
+  const prevFiltersRef = useRef<ComplexFiltersState>(complexFilters);
+
   // # Reason: Effect to synchronize complexFilters state with the URL.
   // This effect runs whenever complexFilters or searchParams change.
   useEffect(() => {
     // Skip URL update on first render to avoid overriding initial deep links.
     if (isFirstRender.current) {
       isFirstRender.current = false;
+      prevFiltersRef.current = complexFilters;
       return;
     }
 
     // # Reason: Build the new URLSearchParams based on the current URL and complexFilters state.
     const params = new URLSearchParams(searchParams.toString());
+
+    // # Reason: Check if any filter that should reset pagination has changed
+    const shouldResetPage = (
+      prevFiltersRef.current.search !== complexFilters.search ||
+      prevFiltersRef.current.brand !== complexFilters.brand ||
+      JSON.stringify(prevFiltersRef.current.competitor) !== JSON.stringify(complexFilters.competitor) ||
+      JSON.stringify(prevFiltersRef.current.supplier) !== JSON.stringify(complexFilters.supplier) ||
+      prevFiltersRef.current.inactive !== complexFilters.inactive ||
+      prevFiltersRef.current.has_price !== complexFilters.has_price ||
+      prevFiltersRef.current.not_our_products !== complexFilters.not_our_products ||
+      prevFiltersRef.current.price_lower_than_competitors !== complexFilters.price_lower_than_competitors ||
+      prevFiltersRef.current.price_higher_than_competitors !== complexFilters.price_higher_than_competitors ||
+      prevFiltersRef.current.in_stock_only !== complexFilters.in_stock_only ||
+      prevFiltersRef.current.itemsPerPage !== complexFilters.itemsPerPage
+    );
+
+    // # Reason: Reset page to 1 when filters change (except for sort and itemsPerPage changes)
+    if (shouldResetPage) {
+      params.delete("page"); // Deleting page param defaults to page 1
+    }
 
     // # Reason: Update/delete complex filter parameters in the URL based on the state.
     if (complexFilters.brand) {
@@ -108,6 +156,11 @@ export default function ProductsClientWrapper({
       params.set("competitor", complexFilters.competitor.join(','));
     } else {
       params.delete("competitor");
+    }
+    if (complexFilters.supplier && complexFilters.supplier.length > 0) {
+      params.set("supplier", complexFilters.supplier.join(','));
+    } else {
+      params.delete("supplier");
     }
     if (complexFilters.search) {
       params.set("search", complexFilters.search);
@@ -124,6 +177,11 @@ export default function ProductsClientWrapper({
     } else {
       params.delete("has_price");
     }
+    if (complexFilters.not_our_products) {
+      params.set("not_our_products", "true");
+    } else {
+      params.delete("not_our_products");
+    }
     // Add price comparison filters to URL
     if (complexFilters.price_lower_than_competitors) {
       params.set("price_lower_than_competitors", "true");
@@ -134,6 +192,23 @@ export default function ProductsClientWrapper({
       params.set("price_higher_than_competitors", "true");
     } else {
       params.delete("price_higher_than_competitors");
+    }
+    // Add stock filters to URL
+    if (complexFilters.in_stock_only) {
+      params.set("in_stock_only", "true");
+    } else {
+      params.delete("in_stock_only");
+    }
+    // Add new combined filters to URL
+    if (complexFilters.our_products_with_competitor_prices) {
+      params.set("our_products_with_competitor_prices", "true");
+    } else {
+      params.delete("our_products_with_competitor_prices");
+    }
+    if (complexFilters.our_products_with_supplier_prices) {
+      params.set("our_products_with_supplier_prices", "true");
+    } else {
+      params.delete("our_products_with_supplier_prices");
     }
     // # Reason: Add sort parameters to the URL based on the state.
     if (complexFilters.sortBy) {
@@ -153,6 +228,8 @@ export default function ProductsClientWrapper({
         params.delete("itemsPerPage");
     }
 
+    // # Reason: Update the previous filters reference for next comparison
+    prevFiltersRef.current = complexFilters;
 
     // # Reason: Construct the new URL and push it using the router.
     const queryString = params.toString();
@@ -163,7 +240,8 @@ export default function ProductsClientWrapper({
        router.push(newUrl, { scroll: false });
     }
 
-  }, [complexFilters, searchParams, router]); // Depend on complexFilters, searchParams, and router
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [complexFilters, router]); // Only depend on complexFilters and router, not searchParams to avoid circular updates
 
   // Callback function for ProductsFilter to update complex filters
   const handleComplexFilterChange = useCallback((newFilters: Partial<ComplexFiltersState>) => {
@@ -180,6 +258,7 @@ export default function ProductsClientWrapper({
         onComplexFilterChange={handleComplexFilterChange} // Pass callback down
         initialCompetitors={initialCompetitors}
         initialBrands={initialBrands}
+        initialSuppliers={initialSuppliers}
         cookieHeader={cookieHeader}
         // # Reason: No longer passing initialSearchParams or searchParams hook result down.
         // URL state management is centralized in ProductsClientWrapper.

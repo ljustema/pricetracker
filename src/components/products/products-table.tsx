@@ -3,8 +3,9 @@
 import Link from "next/link";
 import Image from "next/image";
 import DeleteButton from "@/components/ui/delete-button";
-import type { Product } from "@/lib/services/product-service"; // Import the shared type
+import type { Product, StockChange } from "@/lib/services/product-service"; // Import the shared type
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter"; // Import our new hook
+import { StockBadgeCompact } from "@/components/ui/stock-badge";
 
 // Removed unused CompetitorPrice interface
 
@@ -13,10 +14,11 @@ import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter"; // Import o
 interface ProductsTableProps {
   products: Product[];
   competitors: { id: string; name: string }[];
+  stockData?: Map<string, StockChange[]>;
   onDelete?: (productId: string) => void;
 }
 
-export default function ProductsTable({ products, competitors, onDelete }: ProductsTableProps) {
+export default function ProductsTable({ products, competitors, stockData, onDelete }: ProductsTableProps) {
   const { formatPrice } = useCurrencyFormatter();
 
   // Ensure products have competitor_prices and source_prices
@@ -105,6 +107,16 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                 {competitor.name}
               </th>
             ))}
+            {/* Stock columns for each competitor */}
+            {sortedCompetitors.map((competitor) => (
+              <th
+                key={`${competitor.id}-stock`}
+                scope="col"
+                className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+              >
+                {competitor.name} Stock
+              </th>
+            ))}
             <th scope="col" className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
               Actions
             </th>
@@ -126,16 +138,24 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                         style={{ aspectRatio: '1/1' }}
                         unoptimized // Skip Next.js image optimization for external images
                         onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
-                          console.error(`Failed to load image: ${product.image_url}`);
-                          // Replace with a div that looks like the fallback
+                          console.error(`Failed to load image via proxy: ${product.image_url}`);
                           const imgElement = e.currentTarget;
-                          const parent = imgElement.parentElement;
-                          if (parent) {
-                            // Create a fallback div
-                            const fallbackDiv = document.createElement('div');
-                            fallbackDiv.className = "h-10 w-10 flex-shrink-0 rounded-full bg-gray-200";
-                            // Replace the image with the fallback
-                            parent.replaceChild(fallbackDiv, imgElement);
+
+                          // Try direct image URL as fallback
+                          if (imgElement.src.includes('/api/proxy-image')) {
+                            console.log('Attempting direct image load as fallback');
+                            imgElement.src = product.image_url || '';
+                          } else {
+                            console.error('Direct image load also failed, using placeholder');
+                            // Replace with a div that looks like the fallback
+                            const parent = imgElement.parentElement;
+                            if (parent) {
+                              // Create a fallback div
+                              const fallbackDiv = document.createElement('div');
+                              fallbackDiv.className = "h-10 w-10 flex-shrink-0 rounded-full bg-gray-200";
+                              // Replace the image with the fallback
+                              parent.replaceChild(fallbackDiv, imgElement);
+                            }
                           }
                         }}
                       />
@@ -162,9 +182,9 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                 <div className="text-xs text-gray-500">{product.sku || "-"}</div>
               </td>
               <td className="whitespace-nowrap px-6 py-4">
-                {product.our_price ? (
+                {product.our_retail_price ? (
                   <div className="text-sm font-medium text-gray-900">
-                    {formatPrice(product.our_price)}
+                    {formatPrice(product.our_retail_price)}
                   </div>
                 ) : (
                   <div className="text-sm text-gray-500">-</div>
@@ -233,9 +253,9 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                     {price !== undefined ? (
                       <div className="flex items-center">
                         <div className={`text-sm font-medium ${
-                          product.our_price && price < product.our_price
+                          product.our_retail_price && price < product.our_retail_price
                             ? "text-red-600"
-                            : product.our_price && price > product.our_price
+                            : product.our_retail_price && price > product.our_retail_price
                               ? "text-green-600"
                               : "text-gray-900"
                         }`}>
@@ -247,6 +267,28 @@ export default function ProductsTable({ products, competitors, onDelete }: Produ
                           </span>
                         )}
                       </div>
+                    ) : (
+                      <div className="text-sm text-gray-500">-</div>
+                    )}
+                  </td>
+                );
+              })}
+              {/* Stock cells for each competitor */}
+              {sortedCompetitors.map((competitor) => {
+                // Get stock data for this product and competitor
+                const productStockData = stockData?.get(product.id) || [];
+                const competitorStock = productStockData.find(
+                  (stock) => stock.competitor_id === competitor.id || stock.integration_id === competitor.id
+                );
+
+                return (
+                  <td key={`${competitor.id}-stock`} className="whitespace-nowrap px-6 py-4">
+                    {competitorStock ? (
+                      <StockBadgeCompact
+                        stockQuantity={competitorStock.current_stock_quantity ?? null}
+                        stockStatus={competitorStock.current_stock_status ?? null}
+                        availabilityDate={competitorStock.current_availability_date ?? null}
+                      />
                     ) : (
                       <div className="text-sm text-gray-500">-</div>
                     )}

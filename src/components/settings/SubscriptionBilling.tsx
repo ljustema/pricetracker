@@ -36,7 +36,7 @@ export default function SubscriptionBilling({ userId }: SubscriptionBillingProps
     },
     {
       name: "Pro",
-      price: "29",
+      price: "49",
       features: ["20 competitors", "Advanced analytics", "Automated scraping", "Email alerts"],
       current: subscription?.price_id === "pro",
     },
@@ -53,13 +53,13 @@ export default function SubscriptionBilling({ userId }: SubscriptionBillingProps
     {
       id: "inv_123456",
       date: "2023-05-01",
-      amount: "29.00",
+      amount: "49.00",
       status: "paid",
     },
     {
       id: "inv_123455",
       date: "2023-04-01",
-      amount: "29.00",
+      amount: "49.00",
       status: "paid",
     },
   ];

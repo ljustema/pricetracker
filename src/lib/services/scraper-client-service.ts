@@ -143,7 +143,8 @@ export class ScraperClientService {
    * Create a script-based scraper (Python or TypeScript)
    */
   static async createScriptScraper(config: {
-    competitor_id: string;
+    competitor_id?: string; // Made optional for supplier scrapers
+    supplier_id?: string; // Added for supplier scrapers
     url: string;
     scraper_type: 'python' | 'typescript'; // Updated type
     scriptContent: string;
@@ -163,6 +164,7 @@ export class ScraperClientService {
       },
       body: JSON.stringify({
         competitor_id: config.competitor_id,
+        supplier_id: config.supplier_id,
         url: config.url,
         scraper_type: config.scraper_type, // Use updated type 'typescript'
         schedule: config.schedule,
@@ -202,11 +204,11 @@ export class ScraperClientService {
       competitor_id: competitorId,
       name: `AI Generated Scraper for ${new URL(url).hostname}`,
       url,
-      scraper_type: 'ai',
+      scraper_type: 'typescript',
       selectors: {
         product: '.product-item',
         name: '.product-name',
-        price: '.product-price',
+        competitor_price: '.product-price',
         image: '.product-image img',
         sku: '.product-sku',
         brand: '.product-brand',
@@ -217,7 +219,6 @@ export class ScraperClientService {
         time: '02:00', // Run at 2 AM
       },
       is_active: false, // Default to inactive until tested
-      is_approved: false, // Default to not approved until tested
     };
 
     return mockConfig;
@@ -459,7 +460,7 @@ export class ScraperClientService {
           try {
             const error = await response.json();
             errorMessage = error.error || errorMessage;
-          } catch (error) {
+          } catch (_error) {
             // If response.json() fails, use the status text
             errorMessage = `${errorMessage}: ${response.statusText}`;
           }

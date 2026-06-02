@@ -19,14 +19,15 @@ export interface ScraperMetadata {
 export interface ScraperConfig {
   id?: string;
   user_id: string;
-  competitor_id: string;
+  competitor_id?: string; // Made optional since supplier scrapers don't have competitor_id
+  supplier_id?: string; // Added for supplier scrapers
   name: string;
   url: string;
   scraper_type: 'python' | 'typescript'; // Only Python and TypeScript scrapers are supported
   selectors?: {
     product: string;
     name: string;
-    price: string;
+    competitor_price: string; // Updated field name to match new pricing structure
     image?: string;
     sku?: string;
     brand?: string;
@@ -38,12 +39,10 @@ export interface ScraperConfig {
     day?: number; // Day of week (0-6) or day of month (1-31)
   };
   is_active: boolean;
-  is_approved: boolean;
   python_script?: string;
   script_metadata?: ScraperMetadata; // Use the extracted interface
   typescript_script?: string; // Added for TypeScript scrapers
   test_results?: Record<string, unknown>;
-  approved_at?: string;
   created_at?: string;
   updated_at?: string;
   last_run?: string;
@@ -60,8 +59,8 @@ export interface ScrapedProduct {
   competitor_id: string;
   product_id?: string; // Optional, will be set during matching
   name: string;
-  price: number;
-  currency: string;
+  competitor_price: number; // Updated field name to match new pricing structure
+  currency_code: string; // Updated field name to match new pricing structure
   image_url?: string;
   sku?: string;
   brand?: string;
@@ -74,8 +73,8 @@ export interface ScrapedProduct {
 // Interface for scraped product data from Python scripts
 export interface ScrapedProductData {
   name: string;
-  price: number;
-  currency?: string;
+  competitor_price: number; // Updated field name to match new pricing structure
+  currency_code?: string; // Updated field name to match new pricing structure
   image_url?: string;
   sku?: string;
   brand?: string;
@@ -88,13 +87,21 @@ export interface ScrapedProductData {
 // Define expected product structure for validation results
 export interface ValidationProduct {
   name: string;
-  price: number | null; // Allow null if price not found
-  currency?: string;
+  competitor_price?: number | null; // For competitor scrapers
+  supplier_price?: number | null; // For supplier scrapers
+  supplier_recommended_price?: number | null; // For supplier scrapers
+  currency_code?: string;
   url?: string;
+  supplier_url?: string; // For supplier scrapers
+  competitor_url?: string; // For competitor scrapers
   image_url?: string;
   sku?: string;
   brand?: string;
   ean?: string;
+  stock_quantity?: number | null; // For supplier scrapers
+  stock_status?: string; // For supplier scrapers
+  minimum_order_quantity?: number | null; // For supplier scrapers
+  lead_time_days?: number | null; // For supplier scrapers
   [key: string]: unknown; // Allow other potential fields
 }
 

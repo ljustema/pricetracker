@@ -1,462 +1,497 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Card, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
-import { formatPercentage, formatNumber } from '@/lib/utils/format';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell
-} from 'recharts';
+import { Filter } from 'lucide-react';
+import BrandOverviewCards from '@/components/insights/brand-analysis/BrandOverviewCards';
+import BrandCompetitivenessTable from '@/components/insights/brand-analysis/BrandCompetitivenessTable';
+import BrandOpportunitiesSection from '@/components/insights/brand-analysis/BrandOpportunitiesSection';
+import BrandPricePressureSection from '@/components/insights/brand-analysis/BrandPricePressureSection';
+import BrandPriceCompetitivenessTrendChart from '@/components/insights/brand-analysis/BrandPriceCompetitivenessTrendChart';
 
-// Types for brand analysis data
-interface BrandCompetition {
-  brand_id: string;
+// Types for new brand analysis data
+interface BrandCompetitivenessData {
   brand_name: string;
+  total_products_with_prices: number;
+  products_we_are_cheapest: number;
+  products_we_are_same_price: number;
+  products_we_are_more_expensive: number;
+  cheapest_percentage: number;
+  same_price_percentage: number;
+  more_expensive_percentage: number;
+  avg_price_difference_when_higher: number;
+  avg_price_difference_percentage_when_higher: number;
+  market_dominance_percentage: number;
+}
+
+interface BrandMarketPositioningData {
+  brand_name: string;
+  total_products: number;
+  market_position_score: number;
+  competitive_strength: string;
+  cheapest_percentage: number;
+  same_price_percentage: number;
+  more_expensive_percentage: number;
+  avg_competitor_count: number;
+  positioning_category: string;
+}
+
+interface BrandsWithoutPricesData {
+  brand_name: string;
+  competitor_product_count: number;
   competitor_count: number;
-  competitors: {
-    competitor_id: string;
-    competitor_name: string;
-  }[];
+  avg_competitor_price: number;
+  min_competitor_price: number;
+  max_competitor_price: number;
+  avg_stock_level: number;
+  products_in_stock: number;
+  products_out_of_stock: number;
+  opportunity_score: number;
 }
 
-interface BrandUniqueness {
-  brand_id: string;
+interface CrossDockingOpportunitiesData {
   brand_name: string;
   total_products: number;
-  unique_products: number;
-  uniqueness_percentage: number;
+  competitor_count: number;
+  avg_stock_level: number;
+  products_with_low_stock: number;
+  low_stock_percentage: number;
+  avg_competitor_price: number;
+  stock_turnover_indicator: string;
+  cross_docking_suitability_score: number;
+  suitability_reason: string;
 }
 
-interface BrandPricePositioning {
-  brand_id: string;
+interface TrendingBrandsData {
+  brand_name: string;
+  first_seen_date: string;
+  days_since_first_seen: number;
+  current_product_count: number;
+  competitor_count: number;
+  product_growth_rate: number;
+  avg_competitor_price: number;
+  price_trend: string;
+  avg_stock_level: number;
+  trending_score: number;
+  trend_category: string;
+}
+
+interface BrandPricePressureData {
   brand_name: string;
   total_products: number;
-  cheaper_count: number;
-  same_count: number;
-  more_expensive_count: number;
-  avg_price_difference: number;
+  total_price_changes: number;
+  avg_price_changes_per_product: number;
+  price_change_frequency_score: number;
+  avg_price_change_percentage: number;
+  price_increases: number;
+  price_decreases: number;
+  net_price_direction: string;
+  most_volatile_product_name: string;
+  most_volatile_product_changes: number;
+  pressure_level: string;
 }
 
-interface BrandChangeActivity {
-  days: number;
-  brands: {
-    brand_id: string;
-    brand_name: string;
-    total_products: number;
-    total_changes: number;
-    changes_per_product: number;
-  }[];
+interface Competitor {
+  id: string;
+  name: string;
+  website?: string;
 }
-
-// Custom tooltip for competition chart
-const CompetitionTooltip = ({ active, payload, label }: any) => {
-  if (active && payload && payload.length) {
-    const data = payload[0].payload;
-    return (
-      <div className="bg-white p-3 border border-gray-200 shadow-sm rounded-md">
-        <p className="font-medium">{data.brand_name}</p>
-        <p className="text-sm">
-          Competitors: {formatNumber(data.competitor_count)}
-        </p>
-        <p className="text-sm">
-          Products: {formatNumber(data.total_products || 0)}
-        </p>
-      </div>
-    );
-  }
-  return null;
-};
-
-// Custom tooltip for uniqueness chart
-const UniquenessTooltip = ({ active, payload, label }: any) => {
-  if (active && payload && payload.length) {
-    const data = payload[0].payload;
-    return (
-      <div className="bg-white p-3 border border-gray-200 shadow-sm rounded-md">
-        <p className="font-medium">{data.brand_name}</p>
-        <p className="text-sm">
-          Uniqueness: {formatPercentage(data.uniqueness_percentage)}
-        </p>
-        <p className="text-sm">
-          Unique Products: {formatNumber(data.unique_products)} of {formatNumber(data.total_products)}
-        </p>
-      </div>
-    );
-  }
-  return null;
-};
-
-// Custom tooltip for price positioning chart
-const PricePositioningTooltip = ({ active, payload, label }: any) => {
-  if (active && payload && payload.length) {
-    const data = payload[0].payload;
-    return (
-      <div className="bg-white p-3 border border-gray-200 shadow-sm rounded-md">
-        <p className="font-medium">{data.brand_name}</p>
-        <p className="text-sm">
-          Avg. Price Difference: <span className={data.avg_price_difference > 0 ? 'text-red-500' : 'text-green-500'}>
-            {formatPercentage(data.avg_price_difference)}
-          </span>
-        </p>
-        <p className="text-sm">
-          Cheaper: {formatNumber(data.cheaper_count)} products
-        </p>
-        <p className="text-sm">
-          Same: {formatNumber(data.same_count)} products
-        </p>
-        <p className="text-sm">
-          More Expensive: {formatNumber(data.more_expensive_count)} products
-        </p>
-      </div>
-    );
-  }
-  return null;
-};
-
-// Custom tooltip for change activity chart
-const ChangeActivityTooltip = ({ active, payload, label }: any) => {
-  if (active && payload && payload.length) {
-    const data = payload[0].payload;
-    return (
-      <div className="bg-white p-3 border border-gray-200 shadow-sm rounded-md">
-        <p className="font-medium">{data.brand_name}</p>
-        <p className="text-sm">
-          Changes per Product: {data.changes_per_product.toFixed(2)}
-        </p>
-        <p className="text-sm">
-          Total Changes: {formatNumber(data.total_changes)}
-        </p>
-        <p className="text-sm">
-          Products: {formatNumber(data.total_products)}
-        </p>
-      </div>
-    );
-  }
-  return null;
-};
-
-// Colors for charts
-const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088fe', '#00C49F', '#FFBB28', '#FF8042'];
-const PRICE_POSITION_COLORS = ['#10b981', '#6366f1', '#ef4444']; // Green for cheaper, blue for same, red for more expensive
 
 const BrandAnalysisTab: React.FC = () => {
-  const [competitionData, setCompetitionData] = useState<BrandCompetition[]>([]);
-  const [uniquenessData, setUniquenessData] = useState<BrandUniqueness[]>([]);
-  const [pricePositioningData, setPricePositioningData] = useState<BrandPricePositioning[]>([]);
-  const [changeActivityData, setChangeActivityData] = useState<BrandChangeActivity | null>(null);
+  // State for all analysis data
+  const [competitivenessData, setCompetitivenessData] = useState<BrandCompetitivenessData[]>([]);
+  const [positioningData, setPositioningData] = useState<BrandMarketPositioningData[]>([]);
+  const [brandsWithoutPricesData, setBrandsWithoutPricesData] = useState<BrandsWithoutPricesData[]>([]);
+  const [crossDockingData, setCrossDockingData] = useState<CrossDockingOpportunitiesData[]>([]);
+  const [trendingBrandsData, setTrendingBrandsData] = useState<TrendingBrandsData[]>([]);
+  const [pricePressureData, setPricePressureData] = useState<BrandPricePressureData[]>([]);
+  
+  // Competitors state
+  const [competitors, setCompetitors] = useState<Competitor[]>([]);
+  const [selectedCompetitor, setSelectedCompetitor] = useState<string>('all');
+  
+  // Loading and error states
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const { toast } = useToast();
 
-  // Fetch brand analysis data
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
+  // Fetch competitors
+  const fetchCompetitors = useCallback(async () => {
+    try {
+      const response = await fetch('/api/competitors');
+      if (!response.ok) throw new Error('Failed to fetch competitors');
 
-        // Fetch competition data
-        const competitionResponse = await fetch('/api/insights/brands/competition');
-        if (!competitionResponse.ok) {
-          throw new Error(`Failed to fetch competition data: ${competitionResponse.statusText}`);
-        }
-        const competitionData = await competitionResponse.json();
-
-        // Fetch uniqueness data
-        const uniquenessResponse = await fetch('/api/insights/brands/uniqueness');
-        if (!uniquenessResponse.ok) {
-          throw new Error(`Failed to fetch uniqueness data: ${uniquenessResponse.statusText}`);
-        }
-        const uniquenessData = await uniquenessResponse.json();
-
-        // Fetch price positioning data
-        const pricePositioningResponse = await fetch('/api/insights/brands/price-positioning');
-        if (!pricePositioningResponse.ok) {
-          throw new Error(`Failed to fetch price positioning data: ${pricePositioningResponse.statusText}`);
-        }
-        const pricePositioningData = await pricePositioningResponse.json();
-
-        // Fetch change activity data
-        const changeActivityResponse = await fetch('/api/insights/brands/change-activity?days=30');
-        if (!changeActivityResponse.ok) {
-          throw new Error(`Failed to fetch change activity data: ${changeActivityResponse.statusText}`);
-        }
-        const changeActivityData = await changeActivityResponse.json();
-
-        // Update state with fetched data
-        setCompetitionData(competitionData);
-        setUniquenessData(uniquenessData);
-        setPricePositioningData(pricePositioningData);
-        setChangeActivityData(changeActivityData);
-      } catch (err) {
-        console.error('Error fetching brand analysis data:', err);
-        setError(err instanceof Error ? err.message : 'Failed to fetch brand analysis data');
-        toast({
-          title: 'Error',
-          description: 'Failed to load brand analysis data',
-          variant: 'destructive',
-        });
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchData();
+      const competitorsData = await response.json();
+      setCompetitors(competitorsData || []);
+    } catch (error) {
+      console.error('Error fetching competitors:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch competitors",
+        variant: "destructive",
+      });
+    }
   }, [toast]);
 
+  // Fetch brand competitiveness data
+  const fetchBrandCompetitiveness = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (selectedCompetitor !== 'all') {
+        params.append('competitor_id', selectedCompetitor);
+      }
+
+      const response = await fetch(`/api/insights/brand-analysis/competitiveness?${params}`);
+      if (!response.ok) throw new Error('Failed to fetch brand competitiveness data');
+
+      const result = await response.json();
+      setCompetitivenessData(result.data || []);
+    } catch (error) {
+      console.error('Error fetching brand competitiveness:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch brand competitiveness data",
+        variant: "destructive",
+      });
+    }
+  }, [selectedCompetitor, toast]);
+
+  // Fetch brand positioning data
+  const fetchBrandPositioning = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (selectedCompetitor !== 'all') {
+        params.append('competitor_id', selectedCompetitor);
+      }
+
+      const response = await fetch(`/api/insights/brand-analysis/positioning?${params}`);
+      if (!response.ok) throw new Error('Failed to fetch brand positioning data');
+
+      const result = await response.json();
+      setPositioningData(result.data || []);
+    } catch (error) {
+      console.error('Error fetching brand positioning:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch brand positioning data",
+        variant: "destructive",
+      });
+    }
+  }, [selectedCompetitor, toast]);
+
+  // Fetch brands without our prices
+  const fetchBrandsWithoutPrices = useCallback(async () => {
+    try {
+      const response = await fetch('/api/insights/brand-analysis/brands-without-prices?min_products=50');
+      if (!response.ok) throw new Error('Failed to fetch brands without prices data');
+
+      const result = await response.json();
+      setBrandsWithoutPricesData(result.data || []);
+    } catch (error) {
+      console.error('Error fetching brands without prices:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch brand opportunities data",
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
+
+  // Fetch cross-docking opportunities
+  const fetchCrossDockingOpportunities = useCallback(async () => {
+    try {
+      const response = await fetch('/api/insights/brand-analysis/cross-docking-opportunities?min_products=50');
+      if (!response.ok) throw new Error('Failed to fetch cross-docking opportunities data');
+
+      const result = await response.json();
+      setCrossDockingData(result.data || []);
+    } catch (error) {
+      console.error('Error fetching cross-docking opportunities:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch cross-docking opportunities data",
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
+
+  // Fetch trending brands
+  const fetchTrendingBrands = useCallback(async () => {
+    try {
+      const response = await fetch('/api/insights/brand-analysis/trending-brands?days_back=90');
+      if (!response.ok) throw new Error('Failed to fetch trending brands data');
+
+      const result = await response.json();
+      setTrendingBrandsData(result.data || []);
+    } catch (error) {
+      console.error('Error fetching trending brands:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch trending brands data",
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
+
+  // Fetch price pressure data
+  const fetchPricePressure = useCallback(async () => {
+    try {
+      const response = await fetch('/api/insights/brand-analysis/price-pressure?days_back=30');
+      if (!response.ok) throw new Error('Failed to fetch price pressure data');
+
+      const result = await response.json();
+      setPricePressureData(result.data || []);
+    } catch (error) {
+      console.error('Error fetching price pressure:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch price pressure data",
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
+
+  // Fetch all data
+  const fetchAllData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      await Promise.all([
+        fetchCompetitors(),
+        fetchBrandCompetitiveness(),
+        fetchBrandPositioning(),
+        fetchBrandsWithoutPrices(),
+        fetchCrossDockingOpportunities(),
+        fetchTrendingBrands(),
+        fetchPricePressure()
+      ]);
+    } catch (err) {
+      console.error('Error fetching brand analysis data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch brand analysis data');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [
+    fetchCompetitors,
+    fetchBrandCompetitiveness,
+    fetchBrandPositioning,
+    fetchBrandsWithoutPrices,
+    fetchCrossDockingOpportunities,
+    fetchTrendingBrands,
+    fetchPricePressure
+  ]);
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchAllData();
+  }, [fetchAllData]);
+
+  // Refetch when competitor selection changes
+  useEffect(() => {
+    if (competitors.length > 0) {
+      fetchBrandCompetitiveness();
+      fetchBrandPositioning();
+    }
+  }, [selectedCompetitor, competitors.length, fetchBrandCompetitiveness, fetchBrandPositioning]);
+
+  // Event handlers
+  const handleBrandClick = (brandName: string) => {
+    const url = `/app-routes/products?brand=${encodeURIComponent(brandName)}`;
+    window.open(url, '_blank');
+  };
+
+  const handleExport = async (type: 'brands-without-prices' | 'cross-docking' | 'trending') => {
+    try {
+      let endpoint = '';
+      let filename = '';
+
+      switch (type) {
+        case 'brands-without-prices':
+          endpoint = '/api/insights/brand-analysis/brands-without-prices';
+          filename = 'brand-opportunities.csv';
+          break;
+        case 'cross-docking':
+          endpoint = '/api/insights/brand-analysis/cross-docking-opportunities';
+          filename = 'cross-docking-opportunities.csv';
+          break;
+        case 'trending':
+          endpoint = '/api/insights/brand-analysis/trending-brands';
+          filename = 'trending-brands.csv';
+          break;
+      }
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format: 'csv' })
+      });
+
+      if (!response.ok) throw new Error('Failed to export data');
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      toast({
+        title: "Success",
+        description: "Data exported successfully",
+      });
+    } catch (error) {
+      console.error('Export error:', error);
+      toast({
+        title: "Error",
+        description: "Failed to export data",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Prepare summary data for overview cards
+  const competitivenessSummary = {
+    total_brands: competitivenessData.length,
+    total_products: competitivenessData.reduce((sum, brand) => sum + brand.total_products_with_prices, 0),
+    avg_market_dominance: competitivenessData.length > 0
+      ? competitivenessData.reduce((sum, brand) => sum + brand.market_dominance_percentage, 0) / competitivenessData.length
+      : 0,
+    top_performing_brand: competitivenessData.length > 0 ? competitivenessData[0].brand_name : null,
+    worst_performing_brand: competitivenessData.length > 0
+      ? competitivenessData.sort((a, b) => a.cheapest_percentage - b.cheapest_percentage)[0].brand_name
+      : null
+  };
+
+  const positioningSummary = {
+    ...competitivenessSummary,
+    worst_performing_brand: positioningData.length > 0
+      ? positioningData.sort((a, b) => a.market_position_score - b.market_position_score)[0].brand_name
+      : null
+  };
+
+  const opportunitySummary = {
+    ...competitivenessSummary,
+    opportunity_brands: brandsWithoutPricesData.length
+  };
+
+  const pressureSummary = {
+    ...competitivenessSummary,
+    brands_under_pressure: pricePressureData.filter(brand =>
+      brand.pressure_level === 'Very High' || brand.pressure_level === 'High'
+    ).length,
+    brands_under_high_pressure: pricePressureData.filter(brand =>
+      brand.pressure_level === 'Very High' || brand.pressure_level === 'High'
+    ).length,
+    most_pressured_brand: pricePressureData.length > 0
+      ? pricePressureData.sort((a, b) => b.price_change_frequency_score - a.price_change_frequency_score)[0].brand_name
+      : null
+  };
+
   if (isLoading) {
-    return <div className="text-center py-8">Loading brand analysis data...</div>;
+    return (
+      <div className="space-y-6">
+        <div className="text-center py-8">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="mt-2 text-sm text-gray-500">Loading brand analysis data...</p>
+        </div>
+      </div>
+    );
   }
 
   if (error) {
-    return <div className="text-center py-8 text-red-500">Error: {error}</div>;
+    return (
+      <div className="space-y-6">
+        <div className="text-center py-8">
+          <p className="text-red-600 font-medium">Error loading brand analysis data</p>
+          <p className="text-sm text-gray-500 mt-1">{error}</p>
+          <Button onClick={fetchAllData} className="mt-4">
+            Try Again
+          </Button>
+        </div>
+      </div>
+    );
   }
-
-  // Prepare data for price positioning pie chart
-  const pricePositioningPieData = pricePositioningData.length > 0
-    ? pricePositioningData
-        .filter(brand => brand.total_products > 0)
-        .map(brand => [
-          { name: 'Cheaper', value: brand.cheaper_count },
-          { name: 'Same', value: brand.same_count },
-          { name: 'More Expensive', value: brand.more_expensive_count }
-        ])
-        .reduce((acc, curr) => {
-          acc[0].value += curr[0].value;
-          acc[1].value += curr[1].value;
-          acc[2].value += curr[2].value;
-          return acc;
-        }, [
-          { name: 'Cheaper', value: 0 },
-          { name: 'Same', value: 0 },
-          { name: 'More Expensive', value: 0 }
-        ])
-    : [];
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 gap-6">
-        {/* Brand Competition Card */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Brand Competition</CardTitle>
-            <CardDescription>
-              Number of competitors per brand
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {competitionData.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <p>No brand competition data available</p>
-              </div>
-            ) : (
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={competitionData
-                      .sort((a, b) => b.competitor_count - a.competitor_count)
-                      .slice(0, 15)} // Show top 15 brands
-                    margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="brand_name"
-                      angle={-45}
-                      textAnchor="end"
-                      height={70}
-                    />
-                    <YAxis />
-                    <Tooltip content={<CompetitionTooltip />} />
-                    <Legend />
-                    <Bar
-                      dataKey="competitor_count"
-                      name="Competitors"
-                      fill="#8884d8"
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      {/* Brand Price Competitiveness Trend Chart */}
+      <BrandPriceCompetitivenessTrendChart
+        title="Brand Price Competitiveness Trends"
+        description="Historical price competitiveness trends with brand filtering capability"
+      />
 
-        {/* Brand Uniqueness Card */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Brand Uniqueness</CardTitle>
-            <CardDescription>
-              Percentage of products that are unique (only you or a single competitor has them)
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {uniquenessData.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <p>No brand uniqueness data available</p>
+      {/* Filter Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Brand Analysis</span>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Filter className="h-4 w-4" />
+                <Select value={selectedCompetitor} onValueChange={setSelectedCompetitor}>
+                  <SelectTrigger className="w-48">
+                    <SelectValue placeholder="Select competitor" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Competitors</SelectItem>
+                    {competitors.map((competitor) => (
+                      <SelectItem key={competitor.id} value={competitor.id}>
+                        {competitor.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-            ) : (
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={uniquenessData
-                      .filter(brand => brand.total_products >= 3) // Only show brands with at least 3 products
-                      .sort((a, b) => b.uniqueness_percentage - a.uniqueness_percentage)
-                      .slice(0, 15)} // Show top 15 brands
-                    margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="brand_name"
-                      angle={-45}
-                      textAnchor="end"
-                      height={70}
-                    />
-                    <YAxis
-                      tickFormatter={(value) => `${value}%`}
-                      domain={[0, 100]}
-                    />
-                    <Tooltip content={<UniquenessTooltip />} />
-                    <Legend />
-                    <Bar
-                      dataKey="uniqueness_percentage"
-                      name="Uniqueness %"
-                      fill="#82ca9d"
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+            </div>
+          </CardTitle>
+          <p className="text-sm text-gray-500">
+            Comprehensive brand analysis including competitiveness, opportunities, and market positioning
+          </p>
+        </CardHeader>
+      </Card>
 
-        {/* Price Positioning Card */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Price Positioning</CardTitle>
-            <CardDescription>
-              Average price position per brand compared to competitors
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {pricePositioningData.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <p>No price positioning data available</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={pricePositioningData
-                        .filter(brand => brand.total_products >= 3) // Only show brands with at least 3 products
-                        .sort((a, b) => a.avg_price_difference - b.avg_price_difference)
-                        .slice(0, 15)} // Show top 15 brands
-                      margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis
-                        dataKey="brand_name"
-                        angle={-45}
-                        textAnchor="end"
-                        height={70}
-                      />
-                      <YAxis
-                        tickFormatter={(value) => `${value}%`}
-                        domain={['auto', 'auto']}
-                      />
-                      <Tooltip content={<PricePositioningTooltip />} />
-                      <Legend />
-                      <Bar
-                        dataKey="avg_price_difference"
-                        name="Avg. Price Difference (%)"
-                        fill={(data) => data.avg_price_difference > 0 ? '#ef4444' : '#10b981'}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={pricePositioningPieData}
-                        cx="50%"
-                        cy="50%"
-                        labelLine={false}
-                        outerRadius={80}
-                        fill="#8884d8"
-                        dataKey="value"
-                        nameKey="name"
-                        label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                      >
-                        {pricePositioningPieData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={PRICE_POSITION_COLORS[index % PRICE_POSITION_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                      <Legend />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      {/* Overview Cards */}
+      <BrandOverviewCards
+        competitivenessData={competitivenessSummary}
+        positioningData={positioningSummary}
+        opportunityData={opportunitySummary}
+        pressureData={pressureSummary}
+        isLoading={false}
+        onBrandClick={handleBrandClick}
+      />
 
-        {/* Change Activity Card */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Change Activity</CardTitle>
-            <CardDescription>
-              Price change frequency per brand in the last {changeActivityData?.days || 30} days
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {!changeActivityData || changeActivityData.brands.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <p>No change activity data available</p>
-              </div>
-            ) : (
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={changeActivityData.brands
-                      .filter(brand => brand.total_products >= 3) // Only show brands with at least 3 products
-                      .sort((a, b) => b.changes_per_product - a.changes_per_product)
-                      .slice(0, 15)} // Show top 15 brands
-                    margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="brand_name"
-                      angle={-45}
-                      textAnchor="end"
-                      height={70}
-                    />
-                    <YAxis />
-                    <Tooltip content={<ChangeActivityTooltip />} />
-                    <Legend />
-                    <Bar
-                      dataKey="changes_per_product"
-                      name="Changes per Product"
-                      fill="#ff8042"
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      {/* Brand Competitiveness Table */}
+      <BrandCompetitivenessTable
+        data={competitivenessData}
+        isLoading={false}
+        onBrandClick={handleBrandClick}
+      />
+
+      {/* Brand Price Pressure Section */}
+      <BrandPricePressureSection
+        data={pricePressureData}
+        isLoading={false}
+        onBrandClick={handleBrandClick}
+      />
+
+      {/* Brand Opportunities Section */}
+      <BrandOpportunitiesSection
+        brandsWithoutPricesData={brandsWithoutPricesData}
+        crossDockingData={crossDockingData}
+        trendingBrandsData={trendingBrandsData}
+        isLoading={false}
+        onBrandClick={handleBrandClick}
+        onExport={handleExport}
+      />
     </div>
   );
 };

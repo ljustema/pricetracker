@@ -54,10 +54,10 @@ export async function GET(
     }
 
     // Filter out internal messages (admin-only notes)
-    const publicMessages = conversation.support_messages?.filter(msg => !msg.is_internal) || [];
+    const publicMessages = conversation.support_messages?.filter((msg: { is_internal: boolean }) => !msg.is_internal) || [];
 
     // Mark admin messages as read
-    const unreadAdminMessages = publicMessages.filter(msg =>
+    const unreadAdminMessages = publicMessages.filter((msg: { sender_type: string; read_by_recipient: boolean }) =>
       msg.sender_type === 'admin' && !msg.read_by_recipient
     );
 
@@ -65,7 +65,7 @@ export async function GET(
     console.log(`Found ${unreadAdminMessages.length} unread admin messages`);
 
     if (unreadAdminMessages.length > 0) {
-      const messageIds = unreadAdminMessages.map(msg => msg.id);
+      const messageIds = unreadAdminMessages.map((msg: { id: string }) => msg.id);
       console.log(`Marking admin messages as read using admin client:`, messageIds);
 
       // Use admin client to bypass RLS
@@ -85,7 +85,7 @@ export async function GET(
     }
 
     // Sort messages by creation time
-    const sortedMessages = publicMessages.sort((a, b) =>
+    const sortedMessages = publicMessages.sort((a: { created_at: string }, b: { created_at: string }) =>
       new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     );
 

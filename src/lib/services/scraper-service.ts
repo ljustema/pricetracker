@@ -111,8 +111,10 @@ export class ScraperService {
    * The actual approval update is handled by the API route.
    */
   static async checkScraperExistsForApproval(scraperId: string) {
-    // Delegate to the renamed method in ScraperManagementService
-    return ScraperManagementService.checkScraperExistsForApproval(scraperId);
+    // Since approval logic was removed from ScraperManagementService,
+    // we'll just check if the scraper exists using the CRUD service
+    const scraper = await ScraperCrudService.getScraper(scraperId);
+    return scraper !== null;
   }
   
   /**

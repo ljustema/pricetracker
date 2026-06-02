@@ -10,8 +10,9 @@ export interface Product {
   category?: string;
   description?: string;
   image_url?: string;
-  our_price?: number;
-  wholesale_price?: number;
+  our_url?: string; // Renamed from url
+  our_retail_price?: number; // Renamed from our_price
+  our_wholesale_price?: number; // Renamed from wholesale_price
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -58,9 +59,11 @@ export interface PriceChange {
   source_id?: string; // Either competitor_id or integration_id
   source_name?: string; // Name of the competitor or integration
   source_type?: 'competitor' | 'integration';
-  old_price: number;
-  new_price: number;
-  price_change_percentage: number;
+  old_competitor_price?: number | string; // For competitor price changes - can be string from DB
+  new_competitor_price?: number | string; // For competitor price changes - can be string from DB
+  old_our_retail_price?: number | string; // For our retail price changes (integrations) - can be string from DB
+  new_our_retail_price?: number | string; // For our retail price changes (integrations) - can be string from DB
+  price_change_percentage: number | string; // Can be string from DB
   changed_at: string;
   url?: string; // URL to the product on the competitor's website
   currency_code?: string;
@@ -83,8 +86,9 @@ export interface CreateProductData {
   category?: string;
   description?: string;
   image_url?: string;
-  our_price?: number;
-  wholesale_price?: number;
+  our_url?: string;
+  our_retail_price?: number;
+  our_wholesale_price?: number;
   is_active?: boolean;
 }
 
@@ -271,13 +275,63 @@ export async function getProductPriceHistory(
  */
 export async function uploadProductsCSV(
   competitorId: string,
-  file: File
+  file: File,
+  delimiter: ',' | ';' = ','
 ): Promise<{ success: boolean; productsAdded: number; pricesUpdated: number }> {
   const formData = new FormData();
   formData.append('competitorId', competitorId);
   formData.append('file', file);
+  formData.append('delimiter', delimiter);
 
-  const response = await fetch('/api/products/csv-upload', {
+  const response = await fetch('/api/products/csv-upload-competitors', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to upload CSV file');
+  }
+
+  return response.json();
+}
+
+/**
+ * Upload a CSV file with own products (legacy - direct processing)
+ */
+export async function uploadOwnProductsCSV(
+  file: File
+): Promise<{ success: boolean; productsAdded: number; pricesUpdated: number }> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch('/api/products/csv-upload-enhanced', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to upload CSV file');
+  }
+
+  return response.json();
+}
+
+/**
+ * Upload a CSV file with own products via integration system
+ */
+export async function uploadOwnProductsCSVViaIntegration(
+  integrationId: string,
+  file: File,
+  delimiter: ',' | ';' = ','
+): Promise<{ success: boolean; productsAdded: number; pricesUpdated: number }> {
+  const formData = new FormData();
+  formData.append('integrationId', integrationId);
+  formData.append('file', file);
+  formData.append('delimiter', delimiter);
+
+  const response = await fetch('/api/products/csv-upload-via-integration', {
     method: 'POST',
     body: formData,
   });
@@ -315,11 +369,22 @@ export async function exportProductsCSV(filters: {
   search?: string;
   isActive?: boolean;
   sourceId?: string | string[];
+  supplierId?: string | string[];
   hasPrice?: boolean;
+  notOurProducts?: boolean;
   sortBy?: string;
   sortOrder?: string;
   price_lower_than_competitors?: boolean;
   price_higher_than_competitors?: boolean;
+  in_stock_only?: boolean;
+  our_products_with_competitor_prices?: boolean;
+  our_products_with_supplier_prices?: boolean;
+  includeCompetitorFields?: boolean;
+  includeSupplierFields?: boolean;
+  includeCompetitorPrices?: boolean;
+  includeSupplierPrices?: boolean;
+  includeCompetitorStock?: boolean;
+  includeSupplierStock?: boolean;
 } = {}): Promise<void> {
   try {
     const response = await fetch('/api/products/csv-export', {

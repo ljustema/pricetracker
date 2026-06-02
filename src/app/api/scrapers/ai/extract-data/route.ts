@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
       sitemapUrls: session_data.analysisData?.sitemapUrls || [],
       brandPages: session_data.analysisData?.brandPages || [],
       categoryPages: session_data.analysisData?.categoryPages || [],
-      productListingPages: session_data.analysisData?.productListingPages || [],
+      productPages: session_data.analysisData?.productListingPages || [],
       apiEndpoints: apiEndpoints,
       proposedStrategy: session_data.analysisData.proposedStrategy as 'api' | 'scraping',
       strategyDescription: session_data.analysisData?.strategyDescription || '',
@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
         listItem: '',
         name: '',
         price: '',
-        image: '',
+        imageUrl: '',
         link: ''
       }
     };

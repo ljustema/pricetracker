@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Group products by brand
-    const productsByBrand = products.reduce((acc, product) => {
+    const productsByBrand = products.reduce((acc: Record<string, string[]>, product) => {
       if (!acc[product.brand_id]) {
         acc[product.brand_id] = [];
       }
@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
 
     // Get price changes within the time period
     const { data: priceChanges, error: priceChangesError } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select(`
         product_id,
         changed_at

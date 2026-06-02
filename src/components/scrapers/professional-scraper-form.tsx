@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ShoppingCartIcon, CheckCircleIcon } from "lucide-react";
 
 interface ProfessionalScraperFormProps {
@@ -26,7 +26,7 @@ export default function ProfessionalScraperForm({
   const [error, setError] = useState<string | null>(null);
 
   // Fetch competitor name when component mounts
-  useState(() => {
+  useEffect(() => {
     const fetchCompetitorName = async () => {
       try {
         if (!competitorId) {

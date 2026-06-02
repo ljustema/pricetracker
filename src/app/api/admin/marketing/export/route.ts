@@ -6,7 +6,7 @@ import { validateAdminApiAccess } from "@/lib/admin/auth";
 export async function GET(request: NextRequest) {
   try {
     // Validate admin access
-    const adminUser = await validateAdminApiAccess();
+    const _adminUser = await validateAdminApiAccess();
 
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type'); // 'contacts' or 'subscribers'

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -62,6 +62,7 @@ interface ScheduledScraper {
     day?: number;
   };
   last_run: string | null;
+  next_run_time: string | null;
   is_active: boolean;
   scraper_type: string;
   user_id: string;
@@ -80,6 +81,7 @@ interface ScheduledIntegration {
   platform: string;
   sync_frequency: string;
   last_sync_at: string | null;
+  next_run_time: string | null;
   status: string;
   user_id: string;
   user_profiles: {
@@ -148,7 +150,7 @@ export default function SchedulingDashboard() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const { toast } = useToast();
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       const response = await fetch('/api/admin/scheduling');
@@ -167,7 +169,7 @@ export default function SchedulingDashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
 
   const executeAction = async (action: string, description: string) => {
     try {
@@ -209,7 +211,7 @@ export default function SchedulingDashboard() {
     // Auto-refresh every 30 seconds
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchData]);
 
   if (loading && !data) {
     return (
@@ -240,74 +242,17 @@ export default function SchedulingDashboard() {
     );
   };
 
-  const calculateNextRunTime = (schedule: ScheduledScraper['schedule'], lastRun: string | null): Date => {
-    const now = new Date();
-    const timeOfDay = schedule.time || '02:00';
-    const [hours, minutes] = timeOfDay.split(':').map(Number);
 
-    let nextRun = new Date();
-    nextRun.setHours(hours, minutes, 0, 0);
-
-    if (schedule.frequency === 'daily') {
-      // If last run was today, schedule for tomorrow
-      if (lastRun) {
-        const lastRunDate = new Date(lastRun);
-        if (lastRunDate.toDateString() === now.toDateString()) {
-          nextRun.setDate(nextRun.getDate() + 1);
-        } else if (nextRun <= now) {
-          // Time has passed today, schedule for tomorrow
-          nextRun.setDate(nextRun.getDate() + 1);
-        }
-      } else if (nextRun <= now) {
-        // Never run before and time has passed today
-        nextRun.setDate(nextRun.getDate() + 1);
-      }
-    } else if (schedule.frequency === 'weekly') {
-      const dayOfWeek = schedule.day || 1; // Default to Monday
-      const daysUntilNext = (dayOfWeek - now.getDay() + 7) % 7;
-      nextRun.setDate(now.getDate() + (daysUntilNext || 7));
-    } else if (schedule.frequency === 'monthly') {
-      nextRun.setMonth(nextRun.getMonth() + 1, 1);
-    }
-
-    return nextRun;
-  };
 
   const isScraperDue = (scraper: ScheduledScraper): boolean => {
-    const nextRun = calculateNextRunTime(scraper.schedule, scraper.last_run);
+    if (!scraper.next_run_time) return false;
+    const nextRun = new Date(scraper.next_run_time);
     return nextRun <= new Date();
   };
 
-  const calculateNextIntegrationRunTime = (syncFrequency: string, lastSyncAt: string | null): Date => {
-    const now = new Date();
-    let nextRun = new Date();
-
-    if (syncFrequency === 'daily') {
-      nextRun.setHours(3, 0, 0, 0); // 3 AM
-      if (lastSyncAt) {
-        const lastSync = new Date(lastSyncAt);
-        if (lastSync.toDateString() === now.toDateString()) {
-          nextRun.setDate(nextRun.getDate() + 1);
-        } else if (nextRun <= now) {
-          nextRun.setDate(nextRun.getDate() + 1);
-        }
-      } else if (nextRun <= now) {
-        nextRun.setDate(nextRun.getDate() + 1);
-      }
-    } else if (syncFrequency === 'weekly') {
-      nextRun.setHours(3, 0, 0, 0);
-      const daysUntilMonday = (1 - now.getDay() + 7) % 7;
-      nextRun.setDate(now.getDate() + (daysUntilMonday || 7));
-    } else if (syncFrequency === 'monthly') {
-      nextRun.setMonth(nextRun.getMonth() + 1, 1);
-      nextRun.setHours(3, 0, 0, 0);
-    }
-
-    return nextRun;
-  };
-
   const isIntegrationDue = (integration: ScheduledIntegration): boolean => {
-    const nextRun = calculateNextIntegrationRunTime(integration.sync_frequency, integration.last_sync_at);
+    if (!integration.next_run_time) return false;
+    const nextRun = new Date(integration.next_run_time);
     return nextRun <= new Date();
   };
 
@@ -512,9 +457,9 @@ export default function SchedulingDashboard() {
             <CardContent>
               <div className="space-y-2">
                 {data?.scheduledScrapers.map((scraper) => {
-                  const nextRun = calculateNextRunTime(scraper.schedule, scraper.last_run);
                   const isDue = isScraperDue(scraper);
                   const lastRunDate = scraper.last_run ? new Date(scraper.last_run) : null;
+                  const nextRun = scraper.next_run_time ? new Date(scraper.next_run_time) : null;
 
                   return (
                     <div key={scraper.id} className="flex items-center justify-between p-3 border rounded">
@@ -534,10 +479,10 @@ export default function SchedulingDashboard() {
                         )}
                         <div className="text-right">
                           <div className="text-sm font-medium">
-                            Next: {nextRun.toLocaleDateString()} {nextRun.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            Next: {nextRun ? `${nextRun.toLocaleDateString()} ${nextRun.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Not scheduled'}
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            {isDue ? 'Overdue' : `In ${Math.ceil((nextRun.getTime() - Date.now()) / (1000 * 60 * 60))} hours`}
+                            {isDue ? 'Overdue' : nextRun ? `In ${Math.ceil((nextRun.getTime() - Date.now()) / (1000 * 60 * 60))} hours` : 'N/A'}
                           </div>
                         </div>
                       </div>
@@ -563,9 +508,9 @@ export default function SchedulingDashboard() {
             <CardContent>
               <div className="space-y-2">
                 {data?.scheduledIntegrations.map((integration) => {
-                  const nextRun = calculateNextIntegrationRunTime(integration.sync_frequency, integration.last_sync_at);
                   const isDue = isIntegrationDue(integration);
                   const lastSyncDate = integration.last_sync_at ? new Date(integration.last_sync_at) : null;
+                  const nextRun = integration.next_run_time ? new Date(integration.next_run_time) : null;
 
                   return (
                     <div key={integration.id} className="flex items-center justify-between p-3 border rounded">
@@ -584,10 +529,10 @@ export default function SchedulingDashboard() {
                         )}
                         <div className="text-right">
                           <div className="text-sm font-medium">
-                            Next: {nextRun.toLocaleDateString()} {nextRun.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            Next: {nextRun ? `${nextRun.toLocaleDateString()} ${nextRun.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Not scheduled'}
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            {isDue ? 'Overdue' : `In ${Math.ceil((nextRun.getTime() - Date.now()) / (1000 * 60 * 60))} hours`}
+                            {isDue ? 'Overdue' : nextRun ? `In ${Math.ceil((nextRun.getTime() - Date.now()) / (1000 * 60 * 60))} hours` : 'N/A'}
                           </div>
                         </div>
                       </div>

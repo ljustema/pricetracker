@@ -4,7 +4,8 @@ import { authOptions } from "@/lib/auth/options";
 import { redirect } from "next/navigation";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import crypto from 'crypto';
-import { PriceChange as ServicePriceChange } from "@/lib/services/product-service";
+import { PriceChange as ServicePriceChange, StockChange } from "@/lib/services/product-service";
+import { SupplierPriceChange } from "@/lib/services/supplier-service";
 import ClientProductPage from "./client-page";
 
 // Removed unused type definitions
@@ -25,15 +26,63 @@ function ensureUUID(id: string): string {
   return crypto.createHash('md5').update(id).digest('hex').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
 }
 
-export const metadata: Metadata = {
-  title: "Product Details | PriceTracker",
-  description: "View product details and competitor prices",
-};
+export async function generateMetadata({ params }: ProductPageProps): Promise<Metadata> {
+  const { productId } = await params;
+
+  // Check if the user is authenticated
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return {
+      title: "Product Details | PriceTracker",
+      description: "View product details and competitor prices",
+    };
+  }
+
+  // Convert the NextAuth user ID to a UUID (same as in main component)
+  const userId = ensureUUID(session.user.id);
+  const supabase = createSupabaseAdminClient();
+
+  try {
+    // Fetch the product to get its name
+    const { data: product, error } = await supabase
+      .from("products")
+      .select("name, brand")
+      .eq("id", productId)
+      .eq("user_id", userId)
+      .single();
+
+    if (error) {
+      // Handle the specific case where no rows are returned (product doesn't exist)
+      if (error.code === 'PGRST116') {
+        // Product not found, return fallback metadata without logging error
+        return {
+          title: "Product Not Found | PriceTracker",
+          description: "The requested product could not be found",
+        };
+      }
+      console.error("Error fetching product for metadata:", error);
+    } else if (product) {
+      const productTitle = product.brand ? `${product.name} - ${product.brand}` : product.name;
+      return {
+        title: `${productTitle} | PriceTracker`,
+        description: `View details and competitor prices for ${product.name}`,
+      };
+    }
+  } catch (error) {
+    console.error("Error fetching product for metadata:", error);
+  }
+
+  // Fallback metadata
+  return {
+    title: "Product Details | PriceTracker",
+    description: "View product details and competitor prices",
+  };
+}
 
 interface ProductPageProps {
-  params: {
+  params: Promise<{
     productId: string;
-  };
+  }>;
 }
 
 export default async function ProductPage({ params }: ProductPageProps) {
@@ -75,6 +124,16 @@ export default async function ProductPage({ params }: ProductPageProps) {
     .single();
 
   if (productError) {
+    // Handle the specific case where no rows are returned (product doesn't exist)
+    if (productError.code === 'PGRST116') {
+      return (
+        <div className="container mx-auto px-4 py-8">
+          <div className="rounded-lg bg-yellow-50 p-4 text-yellow-800">
+            Product not found or you don&apos;t have permission to view it.
+          </div>
+        </div>
+      );
+    }
     console.error("Error fetching product:", productError);
     return (
       <div className="container mx-auto px-4 py-8">
@@ -95,29 +154,58 @@ export default async function ProductPage({ params }: ProductPageProps) {
     );
   }
 
-  // Import the product service
-  const { getLatestCompetitorPrices: getLatestPrices, getProductPriceHistory } = await import('@/lib/services/product-service');
+  // Import the product service and supplier service
+  const { getLatestCompetitorPrices: getLatestPrices, getProductPriceHistory, getLatestCompetitorStock, getProductStockHistory } = await import('@/lib/services/product-service');
+  const { getSupplierPriceChanges } = await import('@/lib/services/supplier-service');
 
-  // Fetch latest prices for this product from all sources
-  let competitorPrices: PriceChange[] = [];
+  // Fetch latest retail prices for this product from all sources (competitors and integrations)
+  let retailPrices: PriceChange[] = [];
   try {
-    competitorPrices = await getLatestPrices(userId, productId);
+    retailPrices = await getLatestPrices(userId, productId);
   } catch (error) {
-    console.error("Error fetching latest prices:", error);
+    console.error("Error fetching latest retail prices:", error);
   }
 
-  // Fetch price history for this product
-  let priceHistory: PriceChange[] = [];
+  // Fetch retail price history for this product
+  let retailPriceHistory: PriceChange[] = [];
   try {
-    priceHistory = await getProductPriceHistory(userId, productId, undefined, 20);
+    retailPriceHistory = await getProductPriceHistory(userId, productId, undefined, 20);
   } catch (error) {
-    console.error("Error fetching price history:", error);
+    console.error("Error fetching retail price history:", error);
     // Continue with empty price history
+  }
+
+  // Fetch supplier prices for this product
+  let supplierPrices: SupplierPriceChange[] = [];
+  try {
+    supplierPrices = await getSupplierPriceChanges(userId, productId);
+  } catch (error) {
+    console.error("Error fetching supplier prices:", error);
+  }
+
+  // Fetch stock data for this product
+  let stockData: StockChange[] = [];
+  try {
+    stockData = await getLatestCompetitorStock(userId, productId);
+  } catch (error) {
+    console.error("Error fetching stock data:", error);
+  }
+
+  // Fetch stock history for this product
+  let stockHistory: StockChange[] = [];
+  try {
+    stockHistory = await getProductStockHistory(userId, productId, undefined, 20);
+  } catch (error) {
+    console.error("Error fetching stock history:", error);
+    // Continue with empty stock history
   }
 
   return <ClientProductPage
     product={product}
-    competitorPrices={competitorPrices}
-    priceHistory={priceHistory}
+    retailPrices={retailPrices}
+    retailPriceHistory={retailPriceHistory}
+    supplierPrices={supplierPrices}
+    stockData={stockData}
+    stockHistory={stockHistory}
   />;
 }

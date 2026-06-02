@@ -72,6 +72,13 @@ export async function GET(
       .single();
 
     if (error) {
+      // Handle the specific case where no rows are returned (product doesn't exist)
+      if (error.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: "Product not found" },
+          { status: 404 }
+        );
+      }
       console.error("Error fetching product:", error);
       return NextResponse.json(
         { error: error.message },
@@ -152,7 +159,22 @@ export async function PUT(
       .eq("user_id", userId)
       .single();
 
-    if (fetchError || !existingProduct) {
+    if (fetchError) {
+      // Handle the specific case where no rows are returned (product doesn't exist)
+      if (fetchError.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: "Product not found or you don't have permission to update it" },
+          { status: 404 }
+        );
+      }
+      console.error("Error fetching product for update:", fetchError);
+      return NextResponse.json(
+        { error: fetchError.message },
+        { status: 500 }
+      );
+    }
+
+    if (!existingProduct) {
       return NextResponse.json(
         { error: "Product not found or you don't have permission to update it" },
         { status: 404 }
@@ -199,9 +221,9 @@ export async function PUT(
         category: body.category || null,
         description: body.description || null,
         image_url: body.image_url || null,
-        url: body.url || null, // Add URL field
-        our_price: body.our_price || null,
-        wholesale_price: body.wholesale_price || null,
+        our_url: body.our_url || body.url || null, // Updated field name, support both old and new
+        our_retail_price: body.our_retail_price || body.our_price || null, // Support both old and new field names
+        our_wholesale_price: body.our_wholesale_price || body.wholesale_price || null, // Support both old and new field names
         is_active: body.is_active !== undefined ? body.is_active : true,
         updated_at: new Date().toISOString(),
       })
@@ -230,7 +252,7 @@ export async function PUT(
 // DELETE handler to delete a specific product
 export async function DELETE(
   _request: NextRequest,
-  context: { params: { productId: string } }
+  { params }: { params: Promise<{ productId: string }> }
 ) {
   try {
     // Get the current user from the session
@@ -261,7 +283,7 @@ export async function DELETE(
     const userId = ensureUUID(session.user.id);
 
     // Extract productId from params - await it as required by Next.js
-    const { productId } = await context.params;
+    const { productId } = await params;
 
     // Validate UUID format
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -280,76 +302,160 @@ export async function DELETE(
       .eq("user_id", userId)
       .single();
 
-    if (fetchError || !existingProduct) {
+    if (fetchError) {
+      // Handle the specific case where no rows are returned (product doesn't exist)
+      if (fetchError.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: "Product not found or you don't have permission to delete it" },
+          { status: 404 }
+        );
+      }
+      console.error("Error fetching product for deletion:", fetchError);
+      return NextResponse.json(
+        { error: fetchError.message },
+        { status: 500 }
+      );
+    }
+
+    if (!existingProduct) {
       return NextResponse.json(
         { error: "Product not found or you don't have permission to delete it" },
         { status: 404 }
       );
     }
 
-    // First, check if there are price_changes referencing this product
+    // First, check if there are price_changes_competitors referencing this product
     const { count: priceChangesCount, error: countError } = await supabase
-      .from("price_changes")
+      .from("price_changes_competitors")
       .select("id", { count: 'exact', head: true })
       .eq("product_id", productId);
 
     if (countError) {
-      console.error("Error checking price_changes references:", countError);
+      console.error("Error checking price_changes_competitors references:", countError);
       return NextResponse.json(
-        { error: "Error checking price_changes references" },
+        { error: "Error checking price_changes_competitors references" },
         { status: 500 }
       );
     }
 
-    // Check if there are temp_integrations_scraped_data referencing this product
-    const { count: stagedProductsCount, error: stagedCountError } = await supabase
-      .from("temp_integrations_scraped_data")
+    // Check if there are product_custom_field_values referencing this product
+    const { count: customFieldValuesCount, error: customFieldCountError } = await supabase
+      .from("product_custom_field_values")
       .select("id", { count: 'exact', head: true })
       .eq("product_id", productId);
 
-    if (stagedCountError) {
-      console.error("Error checking temp_integrations_scraped_data references:", stagedCountError);
+    if (customFieldCountError) {
+      console.error("Error checking product_custom_field_values references:", customFieldCountError);
       return NextResponse.json(
-        { error: "Error checking temp_integrations_scraped_data references" },
+        { error: "Error checking product_custom_field_values references" },
         { status: 500 }
       );
     }
 
-    // Delete price_changes records if they exist
+    // Check if there are temp_competitors_scraped_data referencing this product
+    const { count: tempCompetitorsCount, error: tempCompetitorsCountError } = await supabase
+      .from("temp_competitors_scraped_data")
+      .select("id", { count: 'exact', head: true })
+      .eq("product_id", productId);
+
+    if (tempCompetitorsCountError) {
+      console.error("Error checking temp_competitors_scraped_data references:", tempCompetitorsCountError);
+      return NextResponse.json(
+        { error: "Error checking temp_competitors_scraped_data references" },
+        { status: 500 }
+      );
+    }
+
+    // Check if there are products_dismissed_duplicates referencing this product
+    const { count: dismissedDuplicatesCount, error: dismissedDuplicatesCountError } = await supabase
+      .from("products_dismissed_duplicates")
+      .select("id", { count: 'exact', head: true })
+      .or(`product_id_1.eq.${productId},product_id_2.eq.${productId}`);
+
+    if (dismissedDuplicatesCountError) {
+      console.error("Error checking products_dismissed_duplicates references:", dismissedDuplicatesCountError);
+      return NextResponse.json(
+        { error: "Error checking products_dismissed_duplicates references" },
+        { status: 500 }
+      );
+    }
+
+    // Note: temp_integrations_scraped_data table doesn't have a product_id column
+    // so we don't need to check for references there
+
+    // Delete ALL price_changes_competitors records for this product (both competitor and integration price changes)
     if (priceChangesCount && priceChangesCount > 0) {
       const { error: deleteChangesError } = await supabase
-        .from("price_changes")
+        .from("price_changes_competitors")
         .delete()
         .eq("product_id", productId);
 
       if (deleteChangesError) {
-        console.error("Error deleting price_changes:", deleteChangesError);
+        console.error("Error deleting price_changes_competitors:", deleteChangesError);
         return NextResponse.json(
           { error: `Cannot delete product: it has ${priceChangesCount} price change records. Please try again or contact support.` },
           { status: 409 }
         );
       }
 
-      console.log(`Deleted ${priceChangesCount} price_changes records for product ${productId}`);
+      console.log(`Deleted ${priceChangesCount} price_changes_competitors records for product ${productId}`);
     }
 
-    // Delete temp_integrations_scraped_data records if they exist
-    if (stagedProductsCount && stagedProductsCount > 0) {
-      const { error: deleteStagedError } = await supabase
-        .from("temp_integrations_scraped_data")
+    // Delete ALL product_custom_field_values records for this product
+    if (customFieldValuesCount && customFieldValuesCount > 0) {
+      const { error: deleteCustomFieldValuesError } = await supabase
+        .from("product_custom_field_values")
         .delete()
         .eq("product_id", productId);
 
-      if (deleteStagedError) {
-        console.error("Error deleting temp_integrations_scraped_data:", deleteStagedError);
+      if (deleteCustomFieldValuesError) {
+        console.error("Error deleting product_custom_field_values:", deleteCustomFieldValuesError);
         return NextResponse.json(
-          { error: `Cannot delete product: it has ${stagedProductsCount} temp integration product records. Please try again or contact support.` },
+          { error: `Cannot delete product: it has ${customFieldValuesCount} custom field value records. Please try again or contact support.` },
           { status: 409 }
         );
       }
 
-      console.log(`Deleted ${stagedProductsCount} temp_integrations_scraped_data records for product ${productId}`);
+      console.log(`Deleted ${customFieldValuesCount} product_custom_field_values records for product ${productId}`);
     }
+
+    // Delete ALL temp_competitors_scraped_data records for this product
+    if (tempCompetitorsCount && tempCompetitorsCount > 0) {
+      const { error: deleteTempCompetitorsError } = await supabase
+        .from("temp_competitors_scraped_data")
+        .delete()
+        .eq("product_id", productId);
+
+      if (deleteTempCompetitorsError) {
+        console.error("Error deleting temp_competitors_scraped_data:", deleteTempCompetitorsError);
+        return NextResponse.json(
+          { error: `Cannot delete product: it has ${tempCompetitorsCount} temp competitor records. Please try again or contact support.` },
+          { status: 409 }
+        );
+      }
+
+      console.log(`Deleted ${tempCompetitorsCount} temp_competitors_scraped_data records for product ${productId}`);
+    }
+
+    // Delete ALL products_dismissed_duplicates records for this product
+    if (dismissedDuplicatesCount && dismissedDuplicatesCount > 0) {
+      const { error: deleteDismissedDuplicatesError } = await supabase
+        .from("products_dismissed_duplicates")
+        .delete()
+        .or(`product_id_1.eq.${productId},product_id_2.eq.${productId}`);
+
+      if (deleteDismissedDuplicatesError) {
+        console.error("Error deleting products_dismissed_duplicates:", deleteDismissedDuplicatesError);
+        return NextResponse.json(
+          { error: `Cannot delete product: it has ${dismissedDuplicatesCount} dismissed duplicate records. Please try again or contact support.` },
+          { status: 409 }
+        );
+      }
+
+      console.log(`Deleted ${dismissedDuplicatesCount} products_dismissed_duplicates records for product ${productId}`);
+    }
+
+    // temp_integrations_scraped_data doesn't have product_id column, so no cleanup needed
 
     // Now delete the product
     const { error } = await supabase

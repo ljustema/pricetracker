@@ -9,7 +9,7 @@ const CACHE_MAX_AGE = 60; // Cache for 60 seconds
 /**
  * GET handler to fetch price positioning data for brands
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Get the authenticated user's session
     const session = await getServerSession(authOptions);
@@ -49,11 +49,11 @@ export async function GET(request: NextRequest) {
           .select(`
             id,
             name,
-            our_price
+            our_retail_price
           `)
           .eq('user_id', userId)
           .eq('brand_id', brand.id)
-          .not('our_price', 'is', null);
+          .not('our_retail_price', 'is', null);
 
         if (productsError) {
           console.error(`Error fetching products for brand ${brand.id}:`, productsError);
@@ -82,25 +82,25 @@ export async function GET(request: NextRequest) {
 
         const totalProducts = products.length;
         const productIds = products.map(p => p.id);
-        const productPrices = products.reduce((acc, p) => {
-          acc[p.id] = p.our_price;
+        const productPrices = products.reduce((acc: Record<string, number>, p) => {
+          acc[p.id] = p.our_retail_price;
           return acc;
         }, {});
 
         // Get latest price changes for these products
         // Process in chunks to avoid URL size limits
         const CHUNK_SIZE = 20;
-        let allPriceChanges = [];
+        let allPriceChanges: { product_id: string; competitor_id: string; new_competitor_price: number; changed_at: string }[] = [];
         let hasError = false;
 
         for (let i = 0; i < productIds.length; i += CHUNK_SIZE) {
           const chunk = productIds.slice(i, i + CHUNK_SIZE);
           const { data: priceChangesChunk, error: priceChangesError } = await supabase
-            .from('price_changes')
+            .from('price_changes_competitors')
             .select(`
               product_id,
               competitor_id,
-              new_price,
+              new_competitor_price,
               changed_at
             `)
             .eq('user_id', userId)
@@ -115,7 +115,7 @@ export async function GET(request: NextRequest) {
           }
 
           if (priceChangesChunk) {
-            allPriceChanges = [...allPriceChanges, ...priceChangesChunk];
+            allPriceChanges = [...allPriceChanges, ...(priceChangesChunk as unknown as { product_id: string; competitor_id: string; new_competitor_price: number; changed_at: string }[])];
           }
         }
 
@@ -132,12 +132,12 @@ export async function GET(request: NextRequest) {
         }
 
         // Get the latest price for each product-competitor pair
-        const latestPrices = new Map();
+        const latestPrices = new Map<string, number>();
 
         allPriceChanges.forEach(pc => {
           const key = `${pc.product_id}_${pc.competitor_id}`;
           if (!latestPrices.has(key)) {
-            latestPrices.set(key, pc.new_price);
+            latestPrices.set(key, pc.new_competitor_price);
           }
         });
 
@@ -153,7 +153,7 @@ export async function GET(request: NextRequest) {
           if (!ourPrice) continue;
 
           // Find all competitor prices for this product
-          const competitorPrices = [];
+          const competitorPrices: number[] = [];
 
           for (const [key, price] of latestPrices.entries()) {
             if (key.startsWith(`${productId}_`)) {

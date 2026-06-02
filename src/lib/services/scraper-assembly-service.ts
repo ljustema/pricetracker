@@ -225,7 +225,6 @@ const API_ENDPOINTS = {`
 
       // 2. Check if the script can be executed with the metadata command
       console.log('Checking if the script can be executed with the metadata command');
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { stdout } = await execAsync(`npx ts-node ${scriptPath} metadata`, {
         timeout: 30000 // 30 second timeout
       });

@@ -1,9 +1,26 @@
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
-import { SupabaseClient } from '@supabase/supabase-js';
 
 // Define configuration type for integrations
 export interface IntegrationConfiguration {
-  [key: string]: string | number | boolean | null;
+  activeOnly?: boolean;
+  selectiveImport?: {
+    enabled?: boolean;
+    fields?: {
+      name?: boolean;
+      sku?: boolean;
+      ean?: boolean;
+      brand?: boolean;
+      image_url?: boolean;
+      currency_code?: boolean;
+      url?: boolean;
+      our_retail_price?: boolean;
+      our_wholesale_price?: boolean;
+      stock_status?: boolean;
+      availability_date?: boolean;
+      raw_data?: boolean;
+    };
+  };
+  [key: string]: string | number | boolean | null | undefined | object;
 }
 
 // Define log details type
@@ -18,7 +35,7 @@ export interface Integration {
   name: string;
   api_url: string;
   api_key: string;
-  status: 'pending_setup' | 'active' | 'inactive' | 'error';
+  status: 'pending_setup' | 'active' | 'inactive' | 'error' | 'pending_test_run';
   is_active: boolean;
   last_sync_at: string | null;
   last_sync_status: 'success' | 'failed' | null;
@@ -56,7 +73,7 @@ export interface UpdateIntegrationData {
   name?: string;
   api_url?: string;
   api_key?: string;
-  status?: 'pending_setup' | 'active' | 'inactive' | 'error';
+  status?: 'pending_setup' | 'active' | 'inactive' | 'error' | 'pending_test_run';
   is_active?: boolean;
   sync_frequency?: string;
   configuration?: IntegrationConfiguration;
@@ -168,7 +185,6 @@ export async function updateIntegration(
     api_url?: string;
     api_key?: string;
     status?: 'pending_setup' | 'active' | 'inactive' | 'error';
-    is_active?: boolean;
     sync_frequency?: string;
     configuration?: IntegrationConfiguration;
   } = {
@@ -187,12 +203,8 @@ export async function updateIntegration(
     dataToUpdate.api_key = integrationData.api_key;
   }
 
-  if (integrationData.status !== undefined) {
+  if (integrationData.status !== undefined && integrationData.status !== 'pending_test_run') {
     dataToUpdate.status = integrationData.status;
-  }
-
-  if (integrationData.is_active !== undefined) {
-    dataToUpdate.is_active = integrationData.is_active;
   }
 
   if (integrationData.sync_frequency !== undefined) {
@@ -242,9 +254,9 @@ export async function deleteIntegration(userId: string, integrationId: string): 
  * Test an integration's API credentials
  */
 export async function testIntegrationCredentials(
-  platform: string,
-  apiUrl: string,
-  apiKey: string
+  _platform: string,
+  _apiUrl: string,
+  _apiKey: string
 ): Promise<{ success: boolean; message: string }> {
   // This would typically involve making a test call to the platform's API
   // For now, we'll just return success
@@ -274,7 +286,7 @@ export async function createIntegrationRun(
   const uuid = userId;
 
   // First, check if the integration exists and belongs to the user
-  const { data: integration, error: integrationError } = await supabase
+  const { data: _integration, error: integrationError } = await supabase
     .from('integrations')
     .select('id')
     .eq('id', integrationId)

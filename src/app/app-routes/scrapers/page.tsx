@@ -1,6 +1,6 @@
 "use client"; // Make this a client component to use state and effects
 
-import { useState, useEffect } from "react"; // Import hooks
+import { useState, useEffect, useCallback } from "react"; // Import hooks
 // import { Metadata } from "next"; // Removed as it's unused now
 import { useSession } from "next-auth/react"; // Use client-side session hook
 import { redirect, useRouter } from "next/navigation";
@@ -18,6 +18,7 @@ interface ScraperRun {
 import { Button } from "@/components/ui/button"; // Import Button component
 import DeleteButton from "@/components/ui/delete-button";
 import ScraperRunHistoryModal from "@/components/scrapers/scraper-run-history-modal"; // Import the modal
+import ScraperHealthBadge from "@/components/scrapers/scraper-health-badge";
 import ActivateButton from "./activate-button"; // Import ActivateButton component
 import { MoreHorizontal } from "lucide-react";
 import {
@@ -47,8 +48,12 @@ function formatExecutionTime(milliseconds?: number): string {
 
 export default function ScrapersPage() {
   const { data: session, status } = useSession(); // Use client hook
-  // Combined scraper and competitor data state
-  const [scraperData, setScraperData] = useState<(ScraperConfig & { competitor: { name: string; website: string } | null })[]>([]);
+  // Combined scraper and competitor/supplier data state
+  const [scraperData, setScraperData] = useState<(ScraperConfig & {
+    competitor: { name: string; website: string } | null;
+    supplier: { name: string; website: string } | null;
+    scraper_target_type: 'competitor' | 'supplier';
+  })[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [selectedScraperId, setSelectedScraperId] = useState<string | null>(null);
@@ -82,7 +87,7 @@ export default function ScrapersPage() {
   };
 
   // Function to fetch scraper data
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
       // Fetch combined scraper and competitor data from the new API route
@@ -104,7 +109,7 @@ export default function ScrapersPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   // Check for refresh parameter in URL
   useEffect(() => {
@@ -120,7 +125,7 @@ export default function ScrapersPage() {
       const newUrl = window.location.pathname;
       window.history.replaceState({}, '', newUrl);
     }
-  }, [router]);
+  }, [router, fetchData]);
 
   useEffect(() => {
     if (status === "authenticated" && session?.user?.id) {
@@ -132,7 +137,7 @@ export default function ScrapersPage() {
     } else if (status === "unauthenticated") {
       redirect("/auth-routes/login");
     }
-  }, [session, status]);
+  }, [session, status, fetchData]);
 
   // Handle loading state
   if (status === "loading" || isLoading) {
@@ -160,12 +165,20 @@ export default function ScrapersPage() {
     <div className="container mx-auto px-4 py-8">
       <div className="mb-8 flex items-center justify-between">
         <h1 className="text-3xl font-bold">Web Scrapers</h1>
-        <Link
-          href="/app-routes/competitors"
-          className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-        >
-          Manage Competitors
-        </Link>
+        <div className="flex space-x-3">
+          <Link
+            href="/app-routes/suppliers"
+            className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+          >
+            Manage Suppliers
+          </Link>
+          <Link
+            href="/app-routes/competitors"
+            className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+          >
+            Manage Competitors
+          </Link>
+        </div>
       </div>
 
       {scraperData.length > 0 ? ( // Use scraperData
@@ -184,7 +197,7 @@ export default function ScrapersPage() {
                   scope="col"
                   className="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
                 >
-                  Competitor
+                  Target
                 </th>
                 <th
                   scope="col"
@@ -203,6 +216,13 @@ export default function ScrapersPage() {
                   className="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
                 >
                   Status
+                </th>
+                <th
+                  scope="col"
+                  className="px-3 py-3 text-center text-xs font-medium uppercase tracking-wider text-gray-500"
+                  title="Automatisk hälsokontroll baserat på rolling median och drop-rate"
+                >
+                  Health
                 </th>
                 <th
                   scope="col"
@@ -245,8 +265,22 @@ export default function ScrapersPage() {
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-4">
-                      <div className="text-sm text-gray-900">
-                        {scraper.competitor?.name ?? "Unknown"}
+                      <div className="flex items-center space-x-2">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
+                            scraper.scraper_target_type === 'competitor'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-green-100 text-green-800'
+                          }`}
+                        >
+                          {scraper.scraper_target_type === 'competitor' ? 'Competitor' : 'Supplier'}
+                        </span>
+                        <span className="text-sm text-gray-900">
+                          {scraper.scraper_target_type === 'competitor'
+                            ? (scraper.competitor?.name ?? "Unknown")
+                            : (scraper.supplier?.name ?? "Unknown")
+                          }
+                        </span>
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-4">
@@ -269,12 +303,12 @@ export default function ScrapersPage() {
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-4">
-                      {activeRuns[scraper.id] ? (
+                      {scraper.id && activeRuns[scraper.id] ? (
                         <Link
-                          href={`/app-routes/scrapers/${scraper.id}/run?runId=${activeRuns[scraper.id]}`}
-                          className="inline-flex rounded-full px-2 text-xs font-semibold leading-5 bg-blue-100 text-blue-800 hover:bg-blue-200"
+                          href={`/app-routes/scrapers/${scraper.id}/run?runId=${activeRuns[scraper.id!]}`}
+                          className="inline-flex items-center rounded-full px-2 text-xs font-semibold leading-5 bg-blue-100 text-blue-800 hover:bg-blue-200"
                         >
-                          <span className="mr-1 inline-block h-2 w-2 rounded-full bg-blue-600 animate-pulse"></span>
+                          <span className="mr-1 h-2 w-2 rounded-full bg-blue-600 animate-pulse"></span>
                           running
                         </Link>
                       ) : (
@@ -293,9 +327,16 @@ export default function ScrapersPage() {
                         </span>
                       )}
                     </td>
+                    <td className="whitespace-nowrap px-3 py-4 text-center">
+                      {scraper.id ? (
+                        <span className="inline-flex items-center justify-center">
+                          <ScraperHealthBadge scraperId={scraper.id} />
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
                       {scraper.last_run
-                        ? new Date(scraper.last_run).toLocaleDateString()
+                        ? new Date(scraper.last_run).toLocaleString()
                         : "Never"}
                     </td>
                     <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
@@ -337,11 +378,11 @@ export default function ScrapersPage() {
                             </DropdownMenuItem>
                             <DropdownMenuItem asChild>
                               <Link
-                                href={`/app-routes/scrapers/${scraper.id}/run${activeRuns[scraper.id] ? `?runId=${activeRuns[scraper.id]}` : ''}`}
+                                href={`/app-routes/scrapers/${scraper.id}/run${scraper.id && activeRuns[scraper.id] ? `?runId=${activeRuns[scraper.id]}` : ''}`}
                                 className="text-green-700 flex items-center justify-between w-full"
                               >
                                 Run Scraper
-                                {activeRuns[scraper.id] && (
+                                {scraper.id && activeRuns[scraper.id] && (
                                   <span className="ml-2 inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
                                     Running
                                   </span>
@@ -365,22 +406,6 @@ export default function ScrapersPage() {
                                 isActive={scraper.is_active}
                                 onActivated={() => {
                                   // Refresh the list after activation
-                                  const fetchData = async () => {
-                                    setIsLoading(true);
-                                    try {
-                                      const response = await fetch('/api/scrapers/list');
-                                      if (!response.ok) {
-                                        throw new Error(`Failed to fetch scrapers: ${response.statusText}`);
-                                      }
-                                      const data = await response.json();
-                                      const sortedData = [...data].sort((a, b) => a.name.localeCompare(b.name));
-                                      setScraperData(sortedData);
-                                    } catch (error) {
-                                      console.error("Error fetching scraper data:", error);
-                                    } finally {
-                                      setIsLoading(false);
-                                    }
-                                  };
                                   fetchData();
                                 }}
                               />

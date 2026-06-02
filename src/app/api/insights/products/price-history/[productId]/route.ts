@@ -11,7 +11,7 @@ const CACHE_MAX_AGE = 60; // Cache for 60 seconds
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { productId: string } }
+  { params }: { params: Promise<{ productId: string }> }
 ) {
   try {
     // Get the authenticated user's session
@@ -23,7 +23,7 @@ export async function GET(
     const supabase = createSupabaseAdminClient();
 
     // Get the product ID from the route params
-    const { productId } = params;
+    const { productId } = await params;
 
     // Get time period from query params (default to 90 days)
     const url = new URL(request.url);
@@ -42,7 +42,7 @@ export async function GET(
       .select(`
         id,
         name,
-        our_price,
+        our_retail_price,
         currency_code
       `)
       .eq('id', productId)
@@ -59,14 +59,14 @@ export async function GET(
 
     // Get price changes for this product
     const { data: priceChanges, error: priceChangesError } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select(`
         id,
         competitor_id,
         competitors(name),
         integration_id,
-        old_price,
-        new_price,
+        old_competitor_price,
+        new_competitor_price,
         price_change_percentage,
         changed_at,
         currency_code
@@ -102,7 +102,7 @@ export async function GET(
         .in('id', integrationIds as string[]);
 
       if (!integrationsError && integrationsData) {
-        integrations = integrationsData.reduce((acc, integration) => {
+        integrations = integrationsData.reduce((acc: Record<string, string>, integration) => {
           acc[integration.id] = integration.name;
           return acc;
         }, {});
@@ -116,9 +116,9 @@ export async function GET(
       product,
       priceChanges: priceChanges.map(pc => ({
         ...pc,
-        source_name: pc.integration_id 
-          ? (integrations[pc.integration_id] || 'Unknown Integration')
-          : (pc.competitors?.name || 'Unknown Competitor'),
+        source_name: pc.integration_id
+          ? ((integrations as Record<string, string>)[pc.integration_id] || 'Unknown Integration')
+          : ((pc.competitors as unknown as { name: string } | null)?.name || 'Unknown Competitor'),
         source_type: pc.integration_id ? 'integration' : 'competitor'
       }))
     });

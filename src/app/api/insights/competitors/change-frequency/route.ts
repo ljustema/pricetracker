@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     // Get price change frequency data for each competitor within the time period
     // Since group() is not supported, we'll use a fallback approach
     const { data: priceChanges, error } = await supabase
-      .from('price_changes')
+      .from('price_changes_competitors')
       .select(`
         competitor_id,
         competitors(name)
@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
 
     priceChanges.forEach(priceChange => {
       const competitorId = priceChange.competitor_id;
-      const competitorName = priceChange.competitors?.name || 'Unknown';
+      const competitorName = (priceChange.competitors as unknown as { name: string } | null)?.name || 'Unknown';
 
       if (!competitorCounts.has(competitorId)) {
         competitorCounts.set(competitorId, {

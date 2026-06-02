@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,7 +53,7 @@ interface ConversationViewProps {
 
 export function ConversationView({
   conversationId,
-  user,
+  user: _user,
   onMessageSent,
   onBack,
   getStatusColor,
@@ -67,7 +67,7 @@ export function ConversationView({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { refreshNotifications } = useNotifications();
 
-  const fetchConversation = async () => {
+  const fetchConversation = useCallback(async () => {
     setLoading(true);
     try {
       const response = await fetch(`/api/support/conversations/${conversationId}`);
@@ -85,11 +85,11 @@ export function ConversationView({
     } finally {
       setLoading(false);
     }
-  };
+  }, [conversationId, refreshNotifications]);
 
   useEffect(() => {
     fetchConversation();
-  }, [conversationId]);
+  }, [conversationId, fetchConversation]);
 
   useEffect(() => {
     // Scroll to bottom when messages change

@@ -20,15 +20,26 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !supabaseServiceRoleKey) {
-  console.error('Missing Supabase URL or Service Role Key environment variables.');
   process.exit(1);
 }
 
-console.log('Using Supabase URL:', supabaseUrl);
-
-// Using `any` for now as Database types are not available, but defining RPC return type
-const supabase = createClient<any>(supabaseUrl, supabaseServiceRoleKey);
+// Using unknown for database types as specific types are not available
+const supabase = createClient<unknown>(supabaseUrl, supabaseServiceRoleKey);
 const operationalReportService = new OperationalReportService(supabase);
+
+// Type for integration data
+interface Integration {
+  id: string;
+  name: string;
+  platform: string;
+  api_url: string;
+  api_key: string;
+  configuration: Record<string, unknown> | null;
+  user_id: string;
+  created_at: string;
+  updated_at: string;
+  is_active: boolean;
+}
 
 // Type for the data returned by the claim_next_integration_job RPC
 interface ClaimedIntegrationJobData {
@@ -40,28 +51,26 @@ interface ClaimedIntegrationJobData {
   started_at: string | null; // TIMESTAMPTZ
   completed_at: string | null; // TIMESTAMPTZ
   error_message: string | null;
-  log_details: any | null; // JSONB
+  log_details: Record<string, unknown> | null; // JSONB
   products_processed: number | null;
   products_updated: number | null;
   products_created: number | null;
-  test_products: any | null; // JSONB
-  configuration: any | null; // JSONB
+  test_products: Record<string, unknown>[] | null; // JSONB
+  configuration: Record<string, unknown> | null; // JSONB
 }
 
 const POLLING_INTERVAL_MS = 30000; // Poll every 30 seconds (reduced from 5 seconds)
 const HEALTH_CHECK_INTERVAL_MS = 300000; // 5 minutes between health check logs
 const REPORT_CHECK_INTERVAL_MS = 15 * 60 * 1000;
 
-console.log(`Starting TypeScript Utility Worker (Polling interval: ${POLLING_INTERVAL_MS}ms)`);
-
 // Interface for sync results
-interface SyncResult {
+interface _SyncResult {
   success: boolean;
   productsProcessed: number;
   productsUpdated: number;
   productsCreated: number;
   errorMessage?: string;
-  logDetails?: Record<string, any>[];
+  logDetails?: Record<string, unknown>[];
 }
 
 // Track last poll message time and job time
@@ -75,7 +84,7 @@ let currentJobId: string | null = null;
 
 // Function to fetch and process integration jobs
 async function fetchAndProcessIntegrationJob() {
-  let job: any = null; // Define job variable in the outer scope for the catch block
+  let job: ClaimedIntegrationJobData | null = null; // Define job variable in the outer scope for the catch block
 
   try {
     // RACE CONDITION PROTECTION: Skip if already processing a job
@@ -131,19 +140,22 @@ async function fetchAndProcessIntegrationJob() {
     lastJobTime = Date.now();
 
     // 3. Fetch the integration details
-    const { data: integration, error: integrationError } = await supabase
+    const { data: integrationData, error: integrationError } = await supabase
       .from('integrations')
       .select('*')
       .eq('id', job.integration_id)
       .single();
 
-    if (integrationError) {
-      throw new Error(`Failed to fetch integration details: ${integrationError.message}`);
+    if (integrationError || !integrationData) {
+      throw new Error(`Failed to fetch integration details: ${integrationError?.message || 'Integration not found'}`);
     }
+
+    // Type assertion for the integration data
+    const integration = integrationData as Integration;
 
     // Check if this is a test run
     const isTestRun = job.configuration?.is_test_run === true;
-    const testRunLimit = job.configuration?.limit || 10;
+    const testRunLimit = Number(job.configuration?.limit) || 10;
     const activeOnly = job.configuration?.activeOnly !== false; // Default to true if not specified
 
     // Pass the activeOnly setting to the integration configuration if it's not already set
@@ -160,22 +172,27 @@ async function fetchAndProcessIntegrationJob() {
       console.log(`Starting TEST RUN for integration ${integration.name} (${integration.platform})`);
 
       try {
-        // Import the PrestashopClient dynamically
-        const { PrestashopClient } = await import('./prestashop-client');
+        let testResults;
 
-        // Initialize the Prestashop client
-        const client = new PrestashopClient(integration.api_url, integration.api_key);
+        // Handle test run based on platform
+        switch (integration.platform.toLowerCase()) {
+          case 'prestashop':
+            testResults = await runPrestashopTest(integration, testRunLimit, activeOnly);
+            break;
 
-        // Test the connection
-        console.log('Testing API connection...');
-        const connectionTest = await client.testConnection();
-        if (!connectionTest) {
-          throw new Error('Failed to connect to Prestashop API');
+          case 'google-feed':
+            testResults = await runGoogleFeedTest(integration, testRunLimit);
+            break;
+
+          default:
+            throw new Error(`Unsupported platform for test run: ${integration.platform}`);
         }
-        console.log('API connection successful');
+
+        console.log(`Test run successful for ${integration.platform}`);
 
         // Update run status to processing
-        await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const updateResult1 = await (supabase as any)
           .from('integration_runs')
           .update({
             status: 'processing',
@@ -189,46 +206,41 @@ async function fetchAndProcessIntegrationJob() {
           })
           .eq('id', job.id);
 
-        // Fetch a limited number of products for the test run using the optimized getProducts method
-        console.log(`Starting test run to fetch ${testRunLimit} random ${activeOnly ? 'active ' : ''}products...`);
-        const products = await client.getProducts({
-          limit: testRunLimit,
-          activeOnly,
-          random: true
-        });
+        if (updateResult1.error) {
+          console.error('Failed to update integration run status:', updateResult1.error);
+        }
 
-        console.log(`Fetched ${products.length} products for test run`);
-
-        // Debug: Log the active status of each product
-        products.forEach(product => {
-          console.log(`Product ${product.id}: ${product.name} - Active: ${product.active}`);
-        });
-
-        // Store the test products in the run
-        await supabase
+        // Store the test results in the run
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const updateResult2 = await (supabase as any)
           .from('integration_runs')
           .update({
             status: 'completed',
             completed_at: new Date().toISOString(),
-            products_processed: products.length,
-            test_products: products,
+            products_processed: testResults.productsFound,
+            test_products: testResults.sampleProducts,
             log_details: JSON.stringify([{
               timestamp: new Date().toISOString(),
               level: 'info',
               phase: 'TEST_RUN',
               message: 'Test run completed successfully',
-              data: { product_count: products.length }
+              data: testResults
             }])
           })
           .eq('id', job.id);
 
-        console.log(`Test run completed successfully. Fetched ${products.length} products.`);
+        if (updateResult2.error) {
+          console.error('Failed to update integration run with results:', updateResult2.error);
+        }
+
+        console.log(`Test run completed successfully. Found ${testResults.productsFound} products.`);
 
       } catch (error) {
         console.error('Test run failed:', error);
 
         // Update run status to failed
-        await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const updateResult3 = await (supabase as any)
           .from('integration_runs')
           .update({
             status: 'failed',
@@ -243,6 +255,10 @@ async function fetchAndProcessIntegrationJob() {
             }])
           })
           .eq('id', job.id);
+
+        if (updateResult3.error) {
+          console.error('Failed to update integration run with error:', updateResult3.error);
+        }
       }
 
     } else {
@@ -254,7 +270,8 @@ async function fetchAndProcessIntegrationJob() {
         job.user_id,
         job.integration_id,
         job.id,
-        supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        supabase as any // Type assertion to work around the unknown type
       );
 
       // Execute the sync process
@@ -275,7 +292,8 @@ async function fetchAndProcessIntegrationJob() {
     // Attempt to mark the job as failed if an error occurred after it was claimed
     if (job && job.id) { // Check if job was successfully fetched and potentially claimed
       try {
-        await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const updateResult4 = await (supabase as any)
           .from('integration_runs')
           .update({
             status: 'failed',
@@ -283,6 +301,10 @@ async function fetchAndProcessIntegrationJob() {
             error_message: error instanceof Error ? error.message : 'Unhandled worker error',
           })
           .eq('id', job.id);
+
+        if (updateResult4.error) {
+          console.error('Failed to update integration run with unhandled error:', updateResult4.error);
+        }
         console.error(`Job ${job.id} marked as failed due to unhandled worker error.`);
       } catch (updateError) {
         console.error(`Failed to update job ${job.id} status after unhandled error:`, updateError);
@@ -295,8 +317,183 @@ async function fetchAndProcessIntegrationJob() {
   }
 }
 
+// Helper function to run Prestashop test
+async function runPrestashopTest(integration: Integration, testRunLimit: number, activeOnly: boolean) {
+  // Import the PrestashopClient dynamically
+  const { PrestashopClient } = await import('./prestashop-client');
+
+  // Initialize the Prestashop client
+  const client = new PrestashopClient(integration.api_url, integration.api_key);
+
+  // Test the connection
+  console.log('Testing Prestashop API connection...');
+  const connectionTest = await client.testConnection();
+  if (!connectionTest) {
+    throw new Error('Failed to connect to Prestashop API');
+  }
+  console.log('Prestashop API connection successful');
+
+  // Fetch a limited number of products for the test run
+  console.log(`Starting test run to fetch ${testRunLimit} random ${activeOnly ? 'active ' : ''}products...`);
+  const productsResult = await client.getProducts({
+    limit: testRunLimit,
+    activeOnly,
+    random: true
+  });
+
+  // Type assertion to ensure products is treated as an array
+  const products = productsResult as { id: string; name: string; active: boolean }[];
+
+  console.log(`Fetched ${products.length} products for test run`);
+
+  // Debug: Log the active status of each product
+  products.forEach(product => {
+    console.log(`Product ${product.id}: ${product.name} - Active: ${product.active}`);
+  });
+
+  return {
+    productsFound: products.length,
+    sampleProducts: products,
+    platform: 'prestashop'
+  };
+}
+
+// Helper function to run Google Feed XML test
+async function runGoogleFeedTest(integration: Integration, testRunLimit: number) {
+  const { XMLParser } = await import('fast-xml-parser');
+
+  console.log('Testing Google Feed XML connection...');
+
+  // Fetch the XML feed
+  const response = await fetch(integration.api_url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch XML feed: ${response.status} ${response.statusText}`);
+  }
+
+  const xmlContent = await response.text();
+  console.log('Google Feed XML fetched successfully');
+
+  // Parse XML with fast-xml-parser
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '_',
+    parseAttributeValue: true,
+    processEntities: false,
+    htmlEntities: false,
+  });
+
+  const parsedXml = parser.parse(xmlContent);
+
+  // Extract items from the XML structure
+  let items: Record<string, unknown>[] = [];
+
+  if (parsedXml.rss?.channel?.item) {
+    items = Array.isArray(parsedXml.rss.channel.item)
+      ? parsedXml.rss.channel.item
+      : [parsedXml.rss.channel.item];
+  } else if (parsedXml.feed?.entry) {
+    items = Array.isArray(parsedXml.feed.entry)
+      ? parsedXml.feed.entry
+      : [parsedXml.feed.entry];
+  } else if (parsedXml.channel?.item) {
+    items = Array.isArray(parsedXml.channel.item)
+      ? parsedXml.channel.item
+      : [parsedXml.channel.item];
+  } else {
+    throw new Error('No product items found in XML feed. Expected RSS/channel/item or feed/entry structure.');
+  }
+
+  console.log(`Found ${items.length} items in XML feed`);
+
+  if (items.length === 0) {
+    throw new Error('No product items found in XML feed');
+  }
+
+  // Get a random sample of products for the test
+  const sampleItems: Record<string, unknown>[] = [];
+  const totalItems = items.length;
+  const sampleSize = Math.min(testRunLimit, totalItems);
+
+  // Create array of random indices
+  const randomIndices: number[] = [];
+  while (randomIndices.length < sampleSize) {
+    const randomIndex = Math.floor(Math.random() * totalItems);
+    if (!randomIndices.includes(randomIndex)) {
+      randomIndices.push(randomIndex);
+    }
+  }
+
+  // Get items at random indices
+  for (const index of randomIndices) {
+    sampleItems.push(items[index]);
+  }
+  const sampleProducts = sampleItems.map((item, index) => {
+    // Helper function to get value from XML item
+    const getValue = (obj: Record<string, unknown> | null, key: string): string | null => {
+      if (!obj || typeof obj !== 'object') return null;
+
+      const value = obj[key];
+      if (value === undefined || value === null) return null;
+
+      if (typeof value === 'string') {
+        return value.trim();
+      }
+
+      if (typeof value === 'object' && value && '#text' in value) {
+        const textValue = (value as Record<string, unknown>)['#text'];
+        return textValue ? textValue.toString().trim() : null;
+      }
+
+      return value.toString().trim();
+    };
+
+    // Helper function to parse price from string (e.g., "350 SEK" -> 350)
+    const parsePrice = (priceStr: string | null): number | null => {
+      if (!priceStr) return null;
+
+      // Extract numeric value from price string
+      const match = priceStr.match(/[\d,]+\.?\d*/);
+      if (match) {
+        const numericValue = match[0].replace(/,/g, '');
+        const parsed = parseFloat(numericValue);
+        return isNaN(parsed) ? null : parsed;
+      }
+
+      return null;
+    };
+
+    const priceStr = getValue(item, 'g:sale_price') || getValue(item, 'g:price');
+    const costStr = getValue(item, 'g:cost_of_goods_sold');
+
+    return {
+      id: getValue(item, 'g:id') || `item-${index}`,
+      name: getValue(item, 'title') || 'Unknown Product',
+      price: parsePrice(priceStr) || 0,
+      wholesale_price: parsePrice(costStr),
+      reference: getValue(item, 'g:mpn') || '',
+      ean13: getValue(item, 'g:gtin') || '',
+      manufacturer_name: getValue(item, 'g:brand') || '',
+      image_url: getValue(item, 'g:image_link') || '',
+      active: true // Google Feed products are typically active
+    };
+  });
+
+  console.log(`Processed ${sampleProducts.length} sample products for test run`);
+
+  return {
+    productsFound: items.length,
+    sampleProducts: sampleProducts,
+    platform: 'google-feed'
+  };
+}
+
 // Function to log structured messages
-function logStructured(level: string, phase: string, message: string, data?: any) {
+function logStructured(level: string, phase: string, message: string, data?: unknown) {
   const timestamp = new Date();
   const logEntry = {
     ts: timestamp.toISOString(),

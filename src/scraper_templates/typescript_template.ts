@@ -6,13 +6,20 @@
  *
  * This template provides a structure for creating TypeScript-based scrapers
  * that integrate with the PriceTracker worker system.
+ *
+ * CUSTOM FIELDS: You can scrape any additional fields you want! PriceTracker now supports
+ * custom fields, so feel free to extract specifications, descriptions, dimensions, or any
+ * other product data. Just add them to your ScrapedProductData interface and they will be
+ * stored as custom fields automatically.
+ *
+ * STOCK TRACKING: This template includes stock tracking interfaces. Add stock extraction
+ * logic to capture stock status, quantities, and availability information from your target
+ * site. Set both individual stock fields and the stock_data object for full compatibility.
  */
 
 // --- Dependencies ---
 // TODO: Install types: npm i --save-dev @types/yargs
-// @ts-expect-error - Suppress TS7016 error until types are installed
 import yargs from 'yargs'; // For command-line argument parsing
-// @ts-expect-error - Suppress TS7016 error until types are installed
 import { hideBin } from 'yargs/helpers';
 // import { promises as fs } from 'fs'; // Ensure this unused import is removed or commented
 // Add other necessary imports for your scraper here, e.g.:
@@ -21,15 +28,32 @@ import { hideBin } from 'yargs/helpers';
 
 // --- Types/Interfaces ---
 
+interface StockData {
+    quantity: number | null;
+    status: string | null;
+    availability_date: Date | null;
+    total_stock: number | null;
+    combinations_stock: Array<{
+        article_number: string;
+        stock: number;
+        price: number;
+        campaign_price?: number;
+        stock_type: number;
+        empty_stock_text?: string;
+    }> | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    raw_data: Record<string, any> | null;
+}
+
 /**
  * Defines the structure for scraped product data.
  * Align this with the `temp_competitors_scraped_data` table schema.
  */
 interface ScrapedProductData {
-    url: string;
+    competitor_url: string; // Renamed from url to match database schema
     name: string;
-    price: number | null;
-    currency: string | null;
+    competitor_price: number | null; // Updated field name to match temp_competitors_scraped_data table
+    currency_code: string | null; // Updated field name to match temp_competitors_scraped_data table
     sku?: string | null;
     brand?: string | null;
     ean?: string | null;
@@ -37,6 +61,12 @@ interface ScrapedProductData {
     image_url?: string | null;
     is_available: boolean;
     raw_price?: string | null; // Optional: Store the raw price string
+    stock_quantity?: number | null; // Stock quantity for temp_competitors_scraped_data
+    stock_status?: string | null; // Stock status for temp_competitors_scraped_data
+    availability_date?: Date | null; // Availability date for temp_competitors_scraped_data
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    raw_stock_data?: Record<string, any> | null; // Raw stock data for debugging
+    stock_data?: StockData | null; // Structured stock data to match worker expectations
     // Add other fields as needed
 }
 
@@ -49,7 +79,7 @@ interface ScriptMetadata {
     description: string;
     target_url: string; // Base URL or main entry point
     required_libraries?: string[]; // e.g., ['cheerio', 'node-fetch'] - Informational
-    batch_size?: number; // Recommended batch size
+    batch_size?: number; // Number of products to process before outputting a batch
     // Add other relevant metadata as needed
 }
 
@@ -162,8 +192,8 @@ async function scrape(context: ScriptContext): Promise<void> {
     logProgress(`Received context: ${JSON.stringify(context)}`); // Be careful logging full context
 
     // --- Import required libraries listed in get_metadata() HERE ---
-    let fetch: unknown; // Use 'unknown' for safer dynamic imports
-    let cheerio: unknown;
+    let _fetch: unknown; // Use 'unknown' for safer dynamic imports
+    let _cheerio: unknown;
     try {
         // Use dynamic import for libraries that might not be globally available
         // fetch = (await import('node-fetch')).default; // Commented out unused example assignment
@@ -233,9 +263,9 @@ async function scrape(context: ScriptContext): Promise<void> {
 
             const productData: ScrapedProductData = {
                 name: name,
-                price: price,
-                currency: "SEK", // Or detect from page
-                url: link,
+                competitor_price: price,
+                currency_code: "SEK", // Or detect from page
+                competitor_url: link, // Updated field name to match database schema
                 image_url: imageUrl,
                 sku: sku,
                 brand: brand,

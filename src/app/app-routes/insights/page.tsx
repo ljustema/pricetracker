@@ -2,7 +2,10 @@ import React from 'react';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/options';
 import { redirect } from 'next/navigation';
+import { ensureUUID } from '@/lib/utils/uuid';
+import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import InsightsComponent from '@/components/insights/InsightsComponent';
+import InsightsHeader from '@/components/insights/InsightsHeader';
 
 export const metadata = {
   title: 'Insights | PriceTracker',
@@ -12,16 +15,88 @@ export const metadata = {
 export default async function InsightsPage() {
   // Get the authenticated user's session
   const session = await getServerSession(authOptions);
-  
+
   // Redirect to login if not authenticated
-  if (!session?.user) {
+  if (!session?.user?.id) {
     redirect('/api/auth/signin');
+  }
+
+  // Convert the NextAuth user ID to a UUID
+  const userId = ensureUUID(session.user.id);
+  const supabase = createSupabaseAdminClient();
+
+  let stockData: {
+    competitors: Array<{
+      id: string;
+      name: string;
+      website?: string;
+    }>;
+    recentStockChanges: Array<{
+      id: string;
+      product_id: string;
+      competitor_id: string;
+      new_stock_quantity: number | null;
+      new_stock_status: string | null;
+      new_availability_date: string | null;
+      stock_change_quantity: number | null;
+      changed_at: string;
+      url?: string;
+      products?: {
+        name: string;
+        brand?: string;
+        sku?: string;
+      };
+      competitors?: {
+        name: string;
+      };
+    }>;
+    stockStats: {
+      totalProducts: number;
+      totalStockChanges: number;
+      productsWithStock: number;
+      outOfStockProducts: number;
+    } | null;
+  } | undefined = undefined;
+
+  try {
+    // Fetch stock data for the Stock Analysis tab
+    const { data: competitors } = await supabase
+      .from('competitors')
+      .select('id, name, website')
+      .eq('user_id', userId)
+      .order('name');
+
+    const { data: recentStockChanges } = await supabase
+      .from('stock_changes_competitors')
+      .select(`
+        *,
+        products(name, brand, sku),
+        competitors(name)
+      `)
+      .eq('user_id', userId)
+      .order('changed_at', { ascending: false })
+      .limit(50);
+
+    const { data: stockStats } = await supabase
+      .rpc('get_stock_summary_stats', {
+        p_user_id: userId
+      });
+
+    stockData = {
+      competitors: competitors || [],
+      recentStockChanges: recentStockChanges || [],
+      stockStats: stockStats || null
+    };
+  } catch (error) {
+    console.error('Error loading stock data:', error);
+    // Continue without stock data - the Stock Analysis tab will show an error message
+    stockData = undefined;
   }
 
   return (
     <div className="container mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold mb-6">Insights</h1>
-      <InsightsComponent />
+      <InsightsHeader />
+      <InsightsComponent stockData={stockData} />
     </div>
   );
 }

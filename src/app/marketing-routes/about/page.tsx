@@ -22,7 +22,7 @@ export default function AboutPage() {
             <figure className="border-l border-indigo-600 pl-8">
               <blockquote className="text-xl font-semibold leading-8 tracking-tight text-gray-900">
                 <p>
-                  "PriceTracker has transformed how we approach pricing strategy. We're now able to respond to market changes in real-time and stay ahead of our competitors."
+                  "                  &ldquo;PriceTracker has transformed how we approach pricing strategy. We&apos;re now able to respond to market changes in real-time and stay ahead of our competitors.&rdquo;"
                 </p>
               </blockquote>
               <figcaption className="mt-8 flex gap-x-4">
@@ -38,20 +38,20 @@ export default function AboutPage() {
               <h2 className="mt-2 text-2xl font-bold tracking-tight text-gray-900">Our Story</h2>
               <div className="max-w-xl">
                 <p className="mt-6">
-                  In today's fast-paced e-commerce landscape, pricing is more dynamic than ever. Competitors can change their prices multiple times per day, and staying competitive requires constant vigilance.
+                  In today&apos;s fast-paced e-commerce landscape, pricing is more dynamic than ever. Competitors can change their prices multiple times per day, and staying competitive requires constant vigilance.
                 </p>
                 <p className="mt-8">
-                  We built PriceTracker after experiencing this challenge firsthand. As e-commerce store owners, we struggled to keep track of our competitors' prices manually. We needed a solution that could automatically monitor competitor prices, alert us to changes, and provide actionable insights.
+                  We built PriceTracker after experiencing this challenge firsthand. As e-commerce store owners, we struggled to keep track of our competitors&apos; prices manually. We needed a solution that could automatically monitor competitor prices, alert us to changes, and provide actionable insights.
                 </p>
                 <p className="mt-8">
-                  When we couldn't find a solution that met our needs at an affordable price point, we decided to build it ourselves. PriceTracker was born out of this necessity, and we've been refining it based on real-world feedback ever since.
+                  When we couldn&apos;t find a solution that met our needs at an affordable price point, we decided to build it ourselves. PriceTracker was born out of this necessity, and we&apos;ve been refining it based on real-world feedback ever since.
                 </p>
                 <h2 className="mt-16 text-2xl font-bold tracking-tight text-gray-900">Our Mission</h2>
                 <p className="mt-6">
                   Our mission is to democratize access to competitive pricing intelligence. We believe that businesses of all sizes should have access to the tools they need to stay competitive in the market.
                 </p>
                 <p className="mt-8">
-                  We're committed to building a platform that is:
+                  We&apos;re committed to building a platform that is:
                 </p>
                 <ul className="mt-4 list-disc pl-8 space-y-2">
                   <li><strong>Easy to use:</strong> No technical expertise required</li>
@@ -69,7 +69,7 @@ export default function AboutPage() {
           <div className="mx-auto max-w-2xl lg:mx-0">
             <h2 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">Our Team</h2>
             <p className="mt-6 text-lg leading-8 text-gray-600">
-              We're a small but dedicated team of e-commerce experts, developers, and data scientists passionate about helping businesses succeed.
+              We&apos;re a small but dedicated team of e-commerce experts, developers, and data scientists passionate about helping businesses succeed.
             </p>
           </div>
           <ul role="list" className="mx-auto mt-20 grid max-w-2xl grid-cols-1 gap-x-8 gap-y-16 sm:grid-cols-2 lg:mx-0 lg:max-w-none lg:grid-cols-3">

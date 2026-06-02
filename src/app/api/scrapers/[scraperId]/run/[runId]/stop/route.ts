@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { ensureUUID } from "@/lib/utils/uuid";
 
 export const dynamic = 'force-dynamic';
 
@@ -22,18 +23,43 @@ export async function POST(
 
     console.log(`[Stop API] Attempting to stop run ${runId} for scraper ${scraperId}`);
 
-    // Get the database client
-    const supabase = await createSupabaseServerClient();
+    // Get the database client (use admin client to bypass RLS like other endpoints)
+    const supabase = createSupabaseAdminClient();
+    const userId = ensureUUID(session.user.id);
 
     // First, check if the run exists and belongs to the user
+    console.log(`[Stop API] Looking for run ${runId} for user ${userId}`);
+
     const { data: run, error: runError } = await supabase
       .from("scraper_runs")
       .select("id, scraper_id, user_id, status")
       .eq("id", runId)
       .single();
 
+    console.log(`[Stop API] Query result - run:`, run, `error:`, runError);
+
     if (runError || !run) {
       console.error(`[Stop API] Run not found: ${runError?.message}`);
+
+      // Additional debugging: check if run exists at all
+      const { data: anyRun, error: anyRunError } = await supabase
+        .from("scraper_runs")
+        .select("id, scraper_id, user_id, status")
+        .eq("id", runId)
+        .maybeSingle();
+
+      console.log(`[Stop API] Run exists check - anyRun:`, anyRun, `error:`, anyRunError);
+
+      return NextResponse.json(
+        { error: "Run not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    // Check if the run belongs to the current user
+    console.log(`[Stop API] Checking ownership - run.user_id: ${run.user_id}, userId: ${userId}`);
+    if (run.user_id !== userId) {
+      console.error(`[Stop API] Run ${runId} does not belong to user ${userId}`);
       return NextResponse.json(
         { error: "Run not found or access denied" },
         { status: 404 }

@@ -37,9 +37,6 @@ export class ScraperAIService {
           time: '02:00', // Run at 2 AM
         },
         is_active: false, // Default to inactive until tested
-        is_approved: false, // Default to not approved until tested
-        filter_by_active_brands: true, // Default to filtering by active brands
-        scrape_only_own_products: false, // Default to not filtering by own products
       };
 
       // Create the scraper
@@ -59,8 +56,8 @@ export class ScraperAIService {
    */
   static async generateScraperWithAI(
     url: string,
-    userId: string,
-    competitorId: string
+    _userId: string,
+    _competitorId: string
   ): Promise<{ script: string; metadata: ScraperMetadata }> {
     try {
       console.log(`Generating AI scraper for URL: ${url}`);
@@ -98,7 +95,7 @@ export class ScraperAIService {
       console.log('Extracting metadata from script...');
 
       // For now, create basic metadata
-      const baseUrl = getBaseUrl(url);
+      const _baseUrl = getBaseUrl(url);
       const hostname = new URL(url).hostname;
 
       const metadata: ScraperMetadata = {

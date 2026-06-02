@@ -7,6 +7,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -26,10 +27,10 @@ interface Product {
   category?: string | null;
   description?: string | null;
   image_url?: string | null;
-  our_price?: number | null;
-  wholesale_price?: number | null;
+  our_retail_price?: number | null;
+  our_wholesale_price?: number | null;
   currency_code?: string | null;
-  url?: string | null;
+  our_url?: string | null; // Renamed from url
 }
 
 interface DuplicateGroup {
@@ -81,8 +82,8 @@ export function MergeModal({
     { key: 'category', label: 'Category' },
     { key: 'description', label: 'Description' },
     { key: 'image_url', label: 'Image URL' },
-    { key: 'our_price', label: 'Our Price' },
-    { key: 'wholesale_price', label: 'Wholesale Price' },
+    { key: 'our_retail_price', label: 'Our Retail Price' },
+    { key: 'our_wholesale_price', label: 'Our Wholesale Price' },
   ];
 
   const handleMerge = async () => {
@@ -151,6 +152,9 @@ export function MergeModal({
       <DialogContent className="!max-w-[60vw] !w-[60vw] max-h-[90vh] overflow-y-auto sm:!max-w-[60vw]" style={{ width: '60vw', maxWidth: '60vw' }}>
         <DialogHeader>
           <DialogTitle>Merge Products - Enhanced Comparison</DialogTitle>
+          <DialogDescription>
+            Merge duplicate products by selecting which values to keep for each field. The primary product will be preserved and duplicates will be merged into it.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="py-4">

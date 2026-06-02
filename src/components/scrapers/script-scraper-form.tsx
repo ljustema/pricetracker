@@ -4,11 +4,12 @@ import { useState, useEffect } from "react";
 import { ScraperClientService } from "@/lib/services/scraper-client-service";
 import { UploadIcon, CheckCircleIcon, XCircleIcon } from "lucide-react";
 // Removed unused import: import TestResultsModal from "./test-results-modal";
-import { ScrapedProduct } from "@/lib/services/scraper-service";
+import { ValidationProduct } from "@/lib/services/scraper-types";
 import Image from "next/image";
 
 interface ScriptScraperFormProps { // Renamed interface
-  competitorId: string;
+  competitorId?: string; // Made optional for supplier scrapers
+  supplierId?: string; // Added for supplier scrapers
   scraperType: 'python' | 'typescript'; // Added scraperType prop
   onSuccess: (scraperId: string) => void;
   onCancel: () => void;
@@ -19,6 +20,7 @@ interface ScriptScraperFormProps { // Renamed interface
 
 export default function ScriptScraperForm({ // Renamed component
   competitorId,
+  supplierId,
   scraperType, // Added scraperType prop
   onSuccess,
   onCancel,
@@ -26,7 +28,7 @@ export default function ScriptScraperForm({ // Renamed component
   isUpdate = false,
   scraperId,
 }: ScriptScraperFormProps) { // Use renamed interface
-  const [competitorName, setCompetitorName] = useState("");
+  const [targetName, setTargetName] = useState(""); // Renamed from competitorName to targetName
   const [scriptContent, setScriptContent] = useState(initialScript || ""); // Renamed state variable and setter
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   // Add state for template type selection with Crawlee as default
@@ -36,7 +38,7 @@ export default function ScriptScraperForm({ // Renamed component
   const [validationResult, setValidationResult] = useState<{
     success: boolean;
     logs?: { ts: string; lvl: string; phase: string; msg: string; data?: Record<string, unknown> }[]; // Use actual log object type
-    sampleProducts?: ScrapedProduct[]; // Array of sample products
+    sampleProducts?: ValidationProduct[]; // Array of sample products
     error?: string; // General error message for API failure or validation issues
     metadata?: { target_url?: string }; // Add metadata to validationResult
   } | null>(null);
@@ -56,38 +58,48 @@ export default function ScriptScraperForm({ // Renamed component
 
   // Fetch competitor name when component mounts
   useEffect(() => {
-    const fetchCompetitorName = async () => {
+    const fetchTargetName = async () => {
       try {
-        if (!competitorId) {
-          console.warn("No competitor ID provided");
+        let targetType: string;
+        let apiEndpoint: string;
+
+        if (competitorId) {
+          targetType = "competitor";
+          apiEndpoint = `/api/competitors/${competitorId}`;
+        } else if (supplierId) {
+          targetType = "supplier";
+          apiEndpoint = `/api/suppliers/${supplierId}`;
+        } else {
+          console.warn("No competitor ID or supplier ID provided");
           return;
         }
 
-        const response = await fetch(`/api/competitors/${competitorId}`);
+        const response = await fetch(apiEndpoint);
         if (response.ok) {
-          const competitor = await response.json();
-          if (competitor && competitor.name) {
-            setCompetitorName(competitor.name);
+          const target = await response.json();
+          if (target && target.name) {
+            setTargetName(target.name);
           } else {
-            console.error("Competitor data missing name property", competitor);
+            console.error(`${targetType} data missing name property`, target);
             // Set a fallback name to prevent UI issues
-            setCompetitorName("Unknown Competitor");
+            setTargetName(`Unknown ${targetType.charAt(0).toUpperCase() + targetType.slice(1)}`);
           }
         } else {
           const errorText = await response.text().catch(() => "No response body");
-          console.error(`Failed to fetch competitor name: HTTP ${response.status}`, errorText);
+          console.error(`Failed to fetch ${targetType} name: HTTP ${response.status}`, errorText);
           // Set a fallback name to prevent UI issues
-          setCompetitorName("Unknown Competitor");
+          setTargetName(`Unknown ${targetType.charAt(0).toUpperCase() + targetType.slice(1)}`);
         }
       } catch (error) {
-        console.error("Error fetching competitor name:", error);
+        const targetType = competitorId ? "competitor" : "supplier";
+        console.error(`Error fetching ${targetType} name:`, error);
         // Set a fallback name to prevent UI issues
-        setCompetitorName("Unknown Competitor");
+        setTargetName(`Unknown ${targetType.charAt(0).toUpperCase() + targetType.slice(1)}`);
       }
     };
 
-    fetchCompetitorName();
-  }, [competitorId]);
+    fetchTargetName();
+  }, [competitorId, supplierId]);
 
   // When editing, pre-fill url from initialData (if available)
   useEffect(() => {
@@ -138,6 +150,9 @@ export default function ScriptScraperForm({ // Renamed component
 
     try {
       // Call the API endpoint directly using fetch
+      // IMPORTANT: When modifying validation request body, also update:
+      // - pricetracker/src/components/scrapers/ai-scraper-validation.tsx (validation calls)
+      // - pricetracker/src/app/app-routes/scrapers/[scraperId]/edit/page.tsx (props passed to this component)
       const response = await fetch('/api/scrapers/validate-script', {
         method: 'POST',
         headers: {
@@ -146,6 +161,9 @@ export default function ScriptScraperForm({ // Renamed component
         body: JSON.stringify({
           scraper_type: scraperType,  // Ändrat från 'type'
           scriptContent: scriptContent, // Use renamed state variable
+          // Pass supplier/competitor ID for context
+          ...(competitorId && { competitorId }),
+          ...(supplierId && { supplierId }),
         }),
       });
 
@@ -256,6 +274,7 @@ export default function ScriptScraperForm({ // Renamed component
         // Create new scraper using the updated service method
         const scraper = await ScraperClientService.createScriptScraper({
           competitor_id: competitorId,
+          supplier_id: supplierId,
           url: urlToSave,
           scraper_type: scraperType,
           scriptContent: scriptContent,
@@ -302,12 +321,12 @@ export default function ScriptScraperForm({ // Renamed component
             <input
               id="name"
               type="text"
-              value={competitorName ? `${competitorName} ${scraperType === 'python' ? 'Python' : 'TypeScript'} Scraper X` : "Loading..."}
+              value={targetName ? `${targetName} ${scraperType === 'python' ? 'Python' : 'TypeScript'} Scraper X` : "Loading..."}
               disabled
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm bg-gray-100 text-gray-500 sm:text-sm"
             />
             <p className="mt-1 text-xs text-gray-500">
-              Name is auto-generated following the pattern: [Competitor Name] {scraperType === 'python' ? 'Python' : 'TypeScript'} Scraper X {/* Dynamic Name Pattern */}
+              Name is auto-generated following the pattern: [{supplierId ? 'Supplier' : 'Competitor'} Name] {scraperType === 'python' ? 'Python' : 'TypeScript'} Scraper X {/* Dynamic Name Pattern */}
               <br />
               The X will be replaced with the next available number (1, 2, 3, etc.)
             </p>
@@ -481,7 +500,7 @@ export default function ScriptScraperForm({ // Renamed component
               Validation Logs
             </label>
             <pre className="mt-1 p-2 bg-blue-50 text-blue-900 rounded-md text-xs overflow-auto max-h-60 font-mono whitespace-pre-wrap break-words">
-              {validationResult.logs.map((log, index) =>
+              {validationResult.logs.map((log, _index) =>
                 `[${log.ts}] [${log.lvl}] [${log.phase}] ${log.msg}${log.data ? `\n  Data: ${JSON.stringify(log.data, null, 2)}` : ''}`
               ).join('\n')}
             </pre>
@@ -489,29 +508,42 @@ export default function ScriptScraperForm({ // Renamed component
         )} {/* <-- Correctly close the conditional rendering */}
         ) {/* <-- Moved closing parenthesis inside the curly braces */}
 
-          {/* Products Display Section - Show after validation */}
-          {/* Products Display Section - Use sampleProducts */}
-          {validationResult?.sampleProducts && validationResult.sampleProducts.length > 0 && (
+          {/* Approve Validation Section - Show for successful validations */}
+          {validationResult?.success && (
             <div className="mt-4">
               <div className="flex justify-between items-center mb-2">
                 <div className="flex items-center">
                   <label className="block text-sm font-medium text-gray-700">
-                    Sample Products ({validationResult.sampleProducts.length} found)
+                    {validationResult.sampleProducts && validationResult.sampleProducts.length > 0
+                      ? `Sample Products (${validationResult.sampleProducts.length} found)`
+                      : "Validation Results"
+                    }
                   </label>
-                  {/* Approve Validation button moved here */}
-                  {validationResult?.success && validationResult.sampleProducts && validationResult.sampleProducts.length > 0 && (
-                     <button
-                       type="button"
-                       disabled={isValidationApproved} // Only disable if already approved
-                       onClick={() => setIsValidationApproved(true)}
-                       className="ml-4 inline-flex items-center rounded-md border border-transparent bg-green-100 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                     >
-                       {isValidationApproved ? <><CheckCircleIcon className="h-4 w-4 mr-1.5" />Approved</> : "Approve Validation"}
-                     </button>
-                  )}
+                  {/* Approve Validation button - show for all successful validations */}
+                  <button
+                    type="button"
+                    disabled={isValidationApproved} // Only disable if already approved
+                    onClick={() => setIsValidationApproved(true)}
+                    className="ml-4 inline-flex items-center rounded-md border border-transparent bg-green-100 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isValidationApproved ? <><CheckCircleIcon className="h-4 w-4 mr-1.5" />Approved</> : "Approve Validation"}
+                  </button>
                 </div>
                 {/* Removed button container div */}
               </div>
+
+          {/* Show message for static validation (no products) */}
+          {(!validationResult.sampleProducts || validationResult.sampleProducts.length === 0) && (
+            <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-md">
+              <p className="text-sm text-blue-800">
+                Static validation completed successfully. Use "Test Run" after creating the scraper to validate execution and see sample products.
+              </p>
+            </div>
+          )}
+
+          {/* Products Display Section - Show only when products exist */}
+          {validationResult?.sampleProducts && validationResult.sampleProducts.length > 0 && (
+            <div className="mt-2">
 
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200">
@@ -562,13 +594,20 @@ export default function ScriptScraperForm({ // Renamed component
                           </div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs">
-                          <div className={`${product.price !== undefined ? 'text-green-600 font-medium' : 'text-red-500'}`}>
-                            {product.price !== undefined ? product.price : 'Missing'}
+                          <div className={`${
+                            supplierId
+                              ? (product.supplier_price !== undefined ? 'text-green-600 font-medium' : 'text-red-500')
+                              : (product.competitor_price !== undefined ? 'text-green-600 font-medium' : 'text-red-500')
+                          }`}>
+                            {supplierId
+                              ? (product.supplier_price !== undefined ? product.supplier_price : 'Missing')
+                              : (product.competitor_price !== undefined ? product.competitor_price : 'Missing')
+                            }
                           </div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs">
-                          <div className={`${product.currency ? 'text-gray-900' : (!product.ean ? 'text-red-500' : 'text-yellow-600 italic')}`}>
-                            {product.currency || 'Not set'}
+                          <div className={`${product.currency_code ? 'text-gray-900' : (!product.ean ? 'text-red-500' : 'text-yellow-600 italic')}`}>
+                            {product.currency_code || 'Not set'}
                           </div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs">
@@ -587,12 +626,24 @@ export default function ScriptScraperForm({ // Renamed component
                           </div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs">
-                          <div className={`${product.url ? 'text-blue-600 underline' : 'text-yellow-600 italic'}`}>
-                            {product.url ? (
-                              <a href={product.url} target="_blank" rel="noopener noreferrer" className="truncate block max-w-[100px]">
-                                {product.url}
-                              </a>
-                            ) : 'Not set'}
+                          <div className={`${
+                            supplierId
+                              ? ((product as unknown as Record<string, unknown>).supplier_url as string ? 'text-blue-600 underline' : 'text-yellow-600 italic')
+                              : ((product as unknown as Record<string, unknown>).competitor_url as string ? 'text-blue-600 underline' : 'text-yellow-600 italic')
+                          }`}>
+                            {supplierId ? (
+                              (product as unknown as Record<string, unknown>).supplier_url as string ? (
+                                <a href={(product as unknown as Record<string, unknown>).supplier_url as string} target="_blank" rel="noopener noreferrer" className="truncate block max-w-[100px]">
+                                  {(product as unknown as Record<string, unknown>).supplier_url as string}
+                                </a>
+                              ) : 'Not set'
+                            ) : (
+                              (product as unknown as Record<string, unknown>).competitor_url as string ? (
+                                <a href={(product as unknown as Record<string, unknown>).competitor_url as string} target="_blank" rel="noopener noreferrer" className="truncate block max-w-[100px]">
+                                  {(product as unknown as Record<string, unknown>).competitor_url as string}
+                                </a>
+                              ) : 'Not set'
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -603,6 +654,8 @@ export default function ScriptScraperForm({ // Renamed component
               <p className="mt-2 text-xs text-gray-500">
                 * Products require either an EAN or both Brand and SKU for matching.
               </p>
+            </div>
+          )}
             </div>
           )}
         </> {/* Fragment end */}

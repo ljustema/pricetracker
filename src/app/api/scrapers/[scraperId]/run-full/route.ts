@@ -11,7 +11,7 @@ type Params = {
   }>;
 };
 
-export async function POST(req: NextRequest, context: Params) {
+export async function POST(_req: NextRequest, context: Params) {
   const routeContext = 'API:scrapers/[scraperId]/run-full';
   logger.info(routeContext, 'Received scraper full run request');
   

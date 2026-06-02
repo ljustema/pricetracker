@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
       sitemapUrls: session_data.analysisData?.sitemapUrls || [],
       brandPages: session_data.analysisData?.brandPages || [],
       categoryPages: session_data.analysisData?.categoryPages || [],
-      productListingPages: session_data.analysisData?.productListingPages || [],
+      productPages: session_data.analysisData?.productListingPages || [],
       apiEndpoints: apiEndpoints,
       proposedStrategy: session_data.analysisData.proposedStrategy as 'api' | 'scraping',
       strategyDescription: session_data.analysisData?.strategyDescription || '',
@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
         listItem: '',
         name: '',
         price: '',
-        image: '',
+        imageUrl: '',
         link: ''
       }
     };
@@ -126,7 +126,19 @@ export async function POST(request: NextRequest) {
     };
 
     const dataExtractionResult: DataExtractionResult = {
-      products: session_data.dataExtractionData?.extractedProducts || [],
+      products: (session_data.dataExtractionData?.extractedProducts || []).map(product => ({
+        url: product.url,
+        name: product.name,
+        competitor_price: product.price,
+        currency_code: product.currency,
+        sku: product.sku,
+        brand: product.brand,
+        ean: product.ean,
+        description: product.description,
+        image_url: product.image_url,
+        is_available: product.is_available,
+        raw_price: product.raw_price
+      })),
       executionLog: [],
       generatedCode: session_data.dataExtractionData?.generatedCode || ''
     };

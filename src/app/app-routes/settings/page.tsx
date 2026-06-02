@@ -7,6 +7,7 @@ import UserSettings from "@/components/settings/UserSettings";
 import CompanySettings from "@/components/settings/CompanySettings";
 import SubscriptionBilling from "@/components/settings/SubscriptionBilling";
 import AdvancedSettings from "@/components/settings/AdvancedSettings";
+import ApiSettings from "@/components/settings/ApiSettings";
 import { useSession } from "next-auth/react";
 
 export default function SettingsPage() {
@@ -53,10 +54,11 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="user" value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="mb-8 grid w-full grid-cols-4">
+        <TabsList className="mb-8 grid w-full grid-cols-5">
           <TabsTrigger value="user">User Settings</TabsTrigger>
           <TabsTrigger value="company">Company Settings</TabsTrigger>
           <TabsTrigger value="subscription">Subscription & Billing</TabsTrigger>
+          <TabsTrigger value="api">API Settings</TabsTrigger>
           <TabsTrigger value="advanced">Advanced Settings</TabsTrigger>
         </TabsList>
         
@@ -71,7 +73,11 @@ export default function SettingsPage() {
         <TabsContent value="subscription">
           <SubscriptionBilling userId={session?.user?.id} />
         </TabsContent>
-        
+
+        <TabsContent value="api">
+          <ApiSettings userId={session?.user?.id} />
+        </TabsContent>
+
         <TabsContent value="advanced">
           <AdvancedSettings userId={session?.user?.id} />
         </TabsContent>
