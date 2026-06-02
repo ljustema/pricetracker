@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { AlertCircle, CheckCircle, Clock, Edit, Trash2, RefreshCw, History, FlaskConical } from 'lucide-react';
+import { AlertCircle, CheckCircle, Clock, Edit, Trash2, RefreshCw, History, FlaskConical, Power, PowerOff } from 'lucide-react';
 import { Integration } from '@/lib/services/integration-service';
 import { useToast } from '@/components/ui/use-toast';
 import { useRouter } from 'next/navigation';
@@ -16,6 +16,7 @@ interface IntegrationCardProps {
   onSync: (integration: Integration) => void;
   onViewHistory?: (integration: Integration) => void;
   onTestRun?: (integration: Integration) => void;
+  onToggleActive?: (integration: Integration, isActive: boolean) => Promise<void>;
   isRunning?: boolean;
   runId?: string;
 }
@@ -27,6 +28,7 @@ export function IntegrationCard({
   onSync,
   onViewHistory,
   onTestRun,
+  onToggleActive,
   isRunning = false,
   runId
 }: IntegrationCardProps) {
@@ -48,6 +50,15 @@ export function IntegrationCard({
         color: 'bg-blue-100 text-blue-800 hover:bg-blue-200',
         icon: <RefreshCw className="h-4 w-4 mr-1 animate-spin" />,
         text: 'Running',
+      };
+    }
+
+    // Otherwise show the regular status
+    if (!integration.is_active) {
+      return {
+        color: 'bg-gray-100 text-gray-800 hover:bg-gray-200',
+        icon: <PowerOff className="h-4 w-4 mr-1" />,
+        text: 'Inactive',
       };
     }
 
@@ -127,6 +138,23 @@ export function IntegrationCard({
     onTestRun(integration);
   };
 
+  const handleToggleActive = async () => {
+    if (!onToggleActive) return;
+    try {
+      await onToggleActive(integration, !integration.is_active);
+      toast({
+        title: integration.is_active ? 'Integration deactivated' : 'Integration activated',
+        description: `${integration.name} is now ${integration.is_active ? 'inactive' : 'active'}.`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Failed to toggle integration',
+        description: error instanceof Error ? error.message : 'Failed to update integration status',
+        variant: 'destructive',
+      });
+    }
+  };
+
   const statusBadge = getStatusBadge();
 
   return (
@@ -204,6 +232,28 @@ export function IntegrationCard({
             Edit
           </Button>
 
+          {onToggleActive && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleToggleActive}
+              disabled={isRunning}
+              className={integration.is_active ? 'text-orange-600 hover:text-orange-700' : 'text-green-600 hover:text-green-700'}
+            >
+              {integration.is_active ? (
+                <>
+                  <PowerOff className="h-4 w-4 mr-1" />
+                  Deactivate
+                </>
+              ) : (
+                <>
+                  <Power className="h-4 w-4 mr-1" />
+                  Activate
+                </>
+              )}
+            </Button>
+          )}
+
           <Button
             variant="outline"
             size="sm"
@@ -228,7 +278,7 @@ export function IntegrationCard({
               variant="outline"
               size="sm"
               onClick={handleTestRun}
-              disabled={isRunning}
+              disabled={isRunning || !integration.is_active}
               title={isRunning ? 'Integration is currently running' : ''}
               className="bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700 border-blue-200 ml-auto"
             >
@@ -242,7 +292,7 @@ export function IntegrationCard({
               variant="default"
               size="sm"
               onClick={handleSync}
-              disabled={isSyncing || isRunning || integration.status === 'pending_setup' || integration.status === 'pending_test_run'}
+              disabled={isSyncing || isRunning || !integration.is_active || integration.status === 'pending_setup' || integration.status === 'pending_test_run'}
               title={
                 isRunning
                   ? 'Integration is currently running'

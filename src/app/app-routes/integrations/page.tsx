@@ -165,6 +165,23 @@ export default function IntegrationsPage() {
     setDeleteDialogOpen(true);
   };
 
+  const handleToggleActive = async (integration: Integration, isActive: boolean) => {
+    const response = await fetch(`/api/integrations/${integration.id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ is_active: isActive }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to update integration status');
+    }
+
+    await fetchIntegrations();
+  };
+
   // Confirm deletion
   const confirmDelete = async () => {
     if (!integrationToDelete) return;
@@ -332,6 +349,7 @@ export default function IntegrationsPage() {
               onSync={handleSync}
               onViewHistory={handleViewHistory}
               onTestRun={handleTestRun}
+              onToggleActive={handleToggleActive}
               isRunning={!!activeRuns[integration.id]}
               runId={activeRuns[integration.id]}
             />

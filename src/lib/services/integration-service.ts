@@ -19,6 +19,7 @@ export interface Integration {
   api_url: string;
   api_key: string;
   status: 'pending_setup' | 'active' | 'inactive' | 'error';
+  is_active: boolean;
   last_sync_at: string | null;
   last_sync_status: 'success' | 'failed' | null;
   sync_frequency: string;
@@ -56,6 +57,7 @@ export interface UpdateIntegrationData {
   api_url?: string;
   api_key?: string;
   status?: 'pending_setup' | 'active' | 'inactive' | 'error';
+  is_active?: boolean;
   sync_frequency?: string;
   configuration?: IntegrationConfiguration;
 }
@@ -166,6 +168,7 @@ export async function updateIntegration(
     api_url?: string;
     api_key?: string;
     status?: 'pending_setup' | 'active' | 'inactive' | 'error';
+    is_active?: boolean;
     sync_frequency?: string;
     configuration?: IntegrationConfiguration;
   } = {
@@ -186,6 +189,10 @@ export async function updateIntegration(
 
   if (integrationData.status !== undefined) {
     dataToUpdate.status = integrationData.status;
+  }
+
+  if (integrationData.is_active !== undefined) {
+    dataToUpdate.is_active = integrationData.is_active;
   }
 
   if (integrationData.sync_frequency !== undefined) {

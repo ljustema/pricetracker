@@ -37,15 +37,18 @@ export async function POST(
     const supabase = await createSupabaseAdminClient();
 
     // Check if the integration exists
-    const { data: _integration, error: integrationError } = await supabase
+    const { data: integration, error: integrationError } = await supabase
       .from('integrations')
-      .select('id')
+      .select('id, is_active')
       .eq('id', integrationId)
       .eq('user_id', userId)
       .single();
 
     if (integrationError) {
       return NextResponse.json({ error: 'Integration not found' }, { status: 404 });
+    }
+    if (!integration.is_active) {
+      return NextResponse.json({ error: 'Integration is inactive' }, { status: 409 });
     }
 
     // Create a new integration run (test run)

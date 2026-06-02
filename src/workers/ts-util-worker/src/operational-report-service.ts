@@ -65,7 +65,7 @@ export class OperationalReportService {
     const [scrapersResult, scraperRunsResult, integrationsResult, integrationRunsResult] = await Promise.all([
       this.supabase.from('scrapers').select('id, name, last_run').eq('user_id', userId).eq('is_active', true),
       this.supabase.from('scraper_runs').select('scraper_id, status, error_message, created_at').eq('user_id', userId).gte('created_at', since),
-      this.supabase.from('integrations').select('id, name, last_sync_at').eq('user_id', userId).eq('status', 'active'),
+      this.supabase.from('integrations').select('id, name, last_sync_at').eq('user_id', userId).eq('is_active', true),
       this.supabase.from('integration_runs').select('integration_id, status, error_message, created_at').eq('user_id', userId).gte('created_at', since),
     ]);
     for (const result of [scrapersResult, scraperRunsResult, integrationsResult, integrationRunsResult]) {
