@@ -190,7 +190,7 @@ const ApiSettings: React.FC<ApiSettingsProps> = ({ userId }) => {
               <ul className="list-disc list-inside mt-1 text-xs text-gray-600">
                 <li><code>competitor_id</code> - Filter by specific competitor</li>
                 <li><code>brand_filter</code> - Filter by brand name</li>
-                <li><code>limit</code> - Maximum number of products (default: 10000)</li>
+                <li><code>limit</code> - Maximum number of products, or <code>all</code> for full batched export (default: all, max: 250000)</li>
                 <li><code>offset</code> - Skip number of products (default: 0)</li>
               </ul>
             </div>
