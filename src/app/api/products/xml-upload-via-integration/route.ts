@@ -5,6 +5,25 @@ import crypto from 'crypto';
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { XMLParser } from 'fast-xml-parser';
 
+function normalizeIdentityValue(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function getImportIdentityKey(row: { ean?: unknown; sku?: unknown; brand?: unknown }): string | null {
+  const ean = normalizeIdentityValue(row.ean);
+  if (ean) {
+    return `ean:${ean}`;
+  }
+
+  const sku = normalizeIdentityValue(row.sku);
+  const brand = normalizeIdentityValue(row.brand);
+  if (sku && brand) {
+    return `sku-brand:${sku}:${brand}`;
+  }
+
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   try {
     // Check authentication
@@ -141,6 +160,8 @@ export async function POST(req: NextRequest) {
     // Process each item in the XML and insert into temp_integrations_scraped_data
     const now = new Date().toISOString();
     let recordsInserted = 0;
+    let duplicatesSkipped = 0;
+    const seenProductKeys = new Set<string>();
 
     for (const item of items) {
       // Extract product data from XML item
@@ -149,6 +170,19 @@ export async function POST(req: NextRequest) {
       // Skip items without required data
       if (!extractedData.name || extractedData.name.trim() === '') {
         continue;
+      }
+
+      const identityKey = getImportIdentityKey({
+        ean: extractedData.ean,
+        sku: extractedData.sku,
+        brand: extractedData.brand,
+      });
+      if (identityKey && seenProductKeys.has(identityKey)) {
+        duplicatesSkipped++;
+        continue;
+      }
+      if (identityKey) {
+        seenProductKeys.add(identityKey);
       }
 
       // Insert into temp_integrations_scraped_data
@@ -213,6 +247,7 @@ export async function POST(req: NextRequest) {
       success: true,
       productsAdded: processResult?.products_created || 0,
       pricesUpdated: processResult?.products_updated || 0,
+      duplicatesSkipped,
       message: `Successfully processed XML file. Inserted ${recordsInserted} records into staging.`
     });
 

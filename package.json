@@ -12,7 +12,11 @@
     "build": "npm run build:next",
     "start": "next start",
     "start:with-options": "cross-env NODE_OPTIONS=\"--no-deprecation\" next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "supabase": "bash scripts/supabase-cli.sh",
+    "supabase:configure": "bash scripts/supabase-cli.sh configure-token",
+    "supabase:link": "bash scripts/supabase-cli.sh link",
+    "supabase:status": "bash scripts/supabase-cli.sh status"
   },
   "dependencies": {
     "@auth/supabase-adapter": "^1.8.0",

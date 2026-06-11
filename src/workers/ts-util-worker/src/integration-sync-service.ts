@@ -80,6 +80,7 @@ export class IntegrationSyncService {
   private supabase: SupabaseClient;
   private logs: Record<string, unknown>[] = [];
   private heartbeatInterval: NodeJS.Timeout | null = null;
+  private seenProductKeys = new Set<string>();
   // Postgres-side timestamp captured at sync start; used to attribute created/updated rows
   // to this run without being affected by client/server clock drift.
   private runStartedAt: string | null = null;
@@ -89,6 +90,54 @@ export class IntegrationSyncService {
     this.integrationId = integrationId;
     this.runId = runId;
     this.supabase = supabase;
+  }
+
+  private normalizeIdentityValue(value: unknown): string {
+    return String(value ?? '').trim().toLowerCase();
+  }
+
+  private getProductIdentityKey(product: { ean?: unknown; sku?: unknown; brand?: unknown }): string | null {
+    const ean = this.normalizeIdentityValue(product.ean);
+    if (ean) {
+      return `ean:${ean}`;
+    }
+
+    const sku = this.normalizeIdentityValue(product.sku);
+    const brand = this.normalizeIdentityValue(product.brand);
+    if (sku && brand) {
+      return `sku-brand:${sku}:${brand}`;
+    }
+
+    return null;
+  }
+
+  private filterDuplicateStagedProducts<T extends { ean?: unknown; sku?: unknown; brand?: unknown }>(
+    products: T[],
+    context: string
+  ): T[] {
+    const uniqueProducts: T[] = [];
+    let duplicateCount = 0;
+
+    for (const product of products) {
+      const key = this.getProductIdentityKey(product);
+
+      if (key && this.seenProductKeys.has(key)) {
+        duplicateCount++;
+        continue;
+      }
+
+      if (key) {
+        this.seenProductKeys.add(key);
+      }
+      uniqueProducts.push(product);
+    }
+
+    if (duplicateCount > 0) {
+      this.log('warn', 'DUPLICATE_PRODUCTS_SKIPPED',
+        `Skipped ${duplicateCount} duplicate product row(s) in ${context}`);
+    }
+
+    return uniqueProducts;
   }
 
   /**
@@ -312,9 +361,9 @@ export class IntegrationSyncService {
           this.log('info', 'BATCH_RECEIVED', `Received batch ${batchNumber} with ${productBatch.length} products (page ${currentPage}/${totalPages})`);
 
           // Process this batch immediately
-          await this.processProductBatch(productBatch, batchNumber, totalBatches || '?', integration);
+          const stagedCount = await this.processProductBatch(productBatch, batchNumber, totalBatches || '?', integration);
 
-          totalProductsProcessed += productBatch.length;
+          totalProductsProcessed += stagedCount;
 
           // Update the run status with progress more frequently to prevent stall detection
           try {
@@ -470,9 +519,9 @@ export class IntegrationSyncService {
 
         this.log('info', 'BATCH_PROCESSING', `Processing batch ${batchNumber}/${totalBatches} (${batch.length} items)`);
 
-        await this.processGoogleFeedBatch(batch, batchNumber, totalBatches);
+        const stagedCount = await this.processGoogleFeedBatch(batch, batchNumber, totalBatches);
 
-        productsProcessed += batch.length;
+        productsProcessed += stagedCount;
 
         // Update progress
         await this.updateRunStatus('processing', { productsProcessed });
@@ -509,7 +558,7 @@ export class IntegrationSyncService {
   /**
    * Process a batch of Google Feed XML items
    */
-  private async processGoogleFeedBatch(batch: Record<string, unknown>[], batchNumber: number, totalBatches: number): Promise<void> {
+  private async processGoogleFeedBatch(batch: Record<string, unknown>[], batchNumber: number, totalBatches: number): Promise<number> {
     const stagedProducts = batch.map(item => {
       const extractedData = this.extractProductDataFromXmlItem(item);
 
@@ -537,15 +586,21 @@ export class IntegrationSyncService {
       };
     }).filter(product => product !== null); // Remove null entries
 
-    if (stagedProducts.length === 0) {
+    const uniqueStagedProducts = this.filterDuplicateStagedProducts(
+      stagedProducts,
+      `Google Feed batch ${batchNumber}/${totalBatches}`
+    );
+
+    if (uniqueStagedProducts.length === 0) {
       this.log('warn', 'BATCH_EMPTY', `Batch ${batchNumber} contained no valid products`);
-      return;
+      return 0;
     }
 
     // Stage via SECURITY DEFINER RPC (60s statement_timeout) with retry/backoff
-    await this.stageBatchWithRetry(stagedProducts, batchNumber, totalBatches);
+    await this.stageBatchWithRetry(uniqueStagedProducts, batchNumber, totalBatches);
 
-    this.log('info', 'BATCH_STAGED', `Staged batch ${batchNumber}/${totalBatches} (${stagedProducts.length} products)`);
+    this.log('info', 'BATCH_STAGED', `Staged batch ${batchNumber}/${totalBatches} (${uniqueStagedProducts.length} products)`);
+    return uniqueStagedProducts.length;
   }
 
   /**
@@ -620,7 +675,7 @@ export class IntegrationSyncService {
   /**
    * Process a batch of products
    */
-  private async processProductBatch(batch: Record<string, unknown>[], batchNumber: number, totalBatches: number | string, integration: Integration): Promise<void> {
+  private async processProductBatch(batch: Record<string, unknown>[], batchNumber: number, totalBatches: number | string, integration: Integration): Promise<number> {
     this.log('info', 'BATCH_PROCESSING', `Processing batch ${batchNumber}/${totalBatches} (${batch.length} products)`);
 
     // Check if we should import raw data based on selective import settings
@@ -679,7 +734,17 @@ export class IntegrationSyncService {
     console.log('First product in batch:', JSON.stringify(stagedProducts[0], null, 2));
 
     // Set status to 'pending' for immediate processing
-    const stagedProductsWithStatus = stagedProducts.map(product => ({
+    const uniqueStagedProducts = this.filterDuplicateStagedProducts(
+      stagedProducts,
+      `Prestashop batch ${batchNumber}/${totalBatches}`
+    );
+
+    if (uniqueStagedProducts.length === 0) {
+      this.log('warn', 'BATCH_EMPTY', `Batch ${batchNumber}/${totalBatches} contained only duplicate products`);
+      return 0;
+    }
+
+    const stagedProductsWithStatus = uniqueStagedProducts.map(product => ({
       ...product,
       status: 'pending'
     }));
@@ -687,10 +752,11 @@ export class IntegrationSyncService {
     // Stage via SECURITY DEFINER RPC with retry/backoff (throws on permanent failure)
     await this.stageBatchWithRetry(stagedProductsWithStatus, batchNumber, totalBatches);
 
-    this.log('info', 'BATCH_STAGED', `Staged batch ${batchNumber}/${totalBatches} (${batch.length} products)`);
+    this.log('info', 'BATCH_STAGED', `Staged batch ${batchNumber}/${totalBatches} (${stagedProductsWithStatus.length} products)`);
 
     // Products are automatically processed via database triggers after insertion
     this.log('info', 'AUTO_PROCESSING', `Batch ${batchNumber}/${totalBatches} automatically processed via database triggers`);
+    return stagedProductsWithStatus.length;
   }
 
   /**
@@ -757,6 +823,8 @@ export class IntegrationSyncService {
    */
   async executeSync(): Promise<SyncResult> {
     try {
+      this.seenProductKeys.clear();
+
       // Start heartbeat to prevent stall detection
       this.startHeartbeat();
 

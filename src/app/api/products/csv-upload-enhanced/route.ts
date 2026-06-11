@@ -21,6 +21,46 @@ interface ProductUpdateData {
   our_wholesale_price?: number;
 }
 
+function normalizeIdentityValue(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function getImportIdentityKey(row: Record<string, unknown>): string | null {
+  const ean = normalizeIdentityValue(row.ean);
+  if (ean) {
+    return `ean:${ean}`;
+  }
+
+  const sku = normalizeIdentityValue(row.sku);
+  const brand = normalizeIdentityValue(row.brand);
+  if (sku && brand) {
+    return `sku-brand:${sku}:${brand}`;
+  }
+
+  return null;
+}
+
+function dedupeImportRows<T extends Record<string, unknown>>(rows: T[]) {
+  const seen = new Set<string>();
+  const uniqueRows: T[] = [];
+  let duplicatesSkipped = 0;
+
+  for (const row of rows) {
+    const key = getImportIdentityKey(row);
+    if (key && seen.has(key)) {
+      duplicatesSkipped++;
+      continue;
+    }
+
+    if (key) {
+      seen.add(key);
+    }
+    uniqueRows.push(row);
+  }
+
+  return { uniqueRows, duplicatesSkipped };
+}
+
 export async function POST(req: NextRequest) {
   try {
     // Check authentication
@@ -149,9 +189,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const { uniqueRows: rowsToImport, duplicatesSkipped } = dedupeImportRows(parsedCsv.data);
+
     // Validate headers for own products (support both old and new column names)
-    if (parsedCsv.data.length > 0) {
-      const headers = Object.keys(parsedCsv.data[0]);
+    if (rowsToImport.length > 0) {
+      const headers = Object.keys(rowsToImport[0]);
       const hasOurPrice = headers.includes('our_price') || headers.includes('our_retail_price');
       const hasWholesalePrice = headers.includes('wholesale_price') || headers.includes('our_wholesale_price');
 
@@ -171,7 +213,7 @@ export async function POST(req: NextRequest) {
     let productsAdded = 0;
     let pricesUpdated = 0;
 
-    for (const row of parsedCsv.data) {
+    for (const row of rowsToImport) {
       // Skip empty rows
       if (!row.name || row.name.trim() === '') {
         continue;
@@ -306,6 +348,7 @@ export async function POST(req: NextRequest) {
       success: true,
       productsAdded,
       pricesUpdated,
+      duplicatesSkipped,
       message: `Successfully processed CSV file. Added ${productsAdded} new products and updated ${pricesUpdated} prices.`
     });
 
