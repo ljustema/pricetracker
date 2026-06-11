@@ -19,6 +19,30 @@ interface PriorityProductData {
   most_competitive_competitor_name: string;
 }
 
+const EXPORT_BATCH_SIZE = 1000;
+const MAX_EXPORT_ROWS = 250000;
+
+function parseExportLimit(rawLimit: unknown): number {
+  if (rawLimit === undefined || rawLimit === null || rawLimit === '' || rawLimit === 'all') {
+    return MAX_EXPORT_ROWS;
+  }
+
+  const parsedLimit = typeof rawLimit === 'number' ? rawLimit : parseInt(String(rawLimit), 10);
+  if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+    return MAX_EXPORT_ROWS;
+  }
+
+  return Math.min(parsedLimit, MAX_EXPORT_ROWS);
+}
+
+function csvEscape(value: string | number): string | number {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
 /**
  * GET handler to fetch priority products for repricing
  * This answers: "Which products need price adjustments most urgently?"
@@ -110,24 +134,48 @@ export async function POST(request: NextRequest) {
     const {
       competitor_id,
       brand_filter,
-      limit = 1000,
+      limit: requestedLimit,
       offset = 0,
       format = 'csv'
     } = body;
 
-    // Call the database function
-    const { data: priorityProducts, error } = await supabase.rpc('get_priority_products_for_repricing', {
-      p_user_id: userId,
-      p_competitor_id: competitor_id || null,
-      p_brand_filter: brand_filter || null,
-      p_limit: limit,
-      p_offset: offset
-    });
+    const limit = format === 'csv'
+      ? parseExportLimit(requestedLimit)
+      : parseExportLimit(requestedLimit ?? 1000);
+    let currentOffset = Math.max(parseInt(String(offset || '0'), 10) || 0, 0);
+    let priorityProducts: PriorityProductData[] = [];
+    let hasMore = true;
+    let fetchError: { message: string } | null = null;
 
-    if (error) {
-      console.error('Error fetching priority products data for export:', error);
+    while (hasMore && priorityProducts.length < limit) {
+      const remainingLimit = Math.min(EXPORT_BATCH_SIZE, limit - priorityProducts.length);
+      const { data, error } = await supabase.rpc('get_priority_products_for_repricing', {
+        p_user_id: userId,
+        p_competitor_id: competitor_id || null,
+        p_brand_filter: brand_filter || null,
+        p_limit: remainingLimit,
+        p_offset: currentOffset
+      });
+
+      if (error) {
+        fetchError = error;
+        break;
+      }
+
+      const batchProducts = data || [];
+      priorityProducts = priorityProducts.concat(batchProducts);
+      hasMore = batchProducts.length === remainingLimit;
+      currentOffset += batchProducts.length;
+
+      if (format !== 'csv') {
+        break;
+      }
+    }
+
+    if (fetchError) {
+      console.error('Error fetching priority products data for export:', fetchError);
       return NextResponse.json(
-        { error: 'Failed to fetch priority products data for export', details: error.message },
+        { error: 'Failed to fetch priority products data for export', details: fetchError.message },
         { status: 500 }
       );
     }
@@ -140,7 +188,8 @@ export async function POST(request: NextRequest) {
         metadata: {
           limit,
           offset,
-          count: priorityProducts?.length || 0
+          count: priorityProducts?.length || 0,
+          truncated: priorityProducts.length >= MAX_EXPORT_ROWS
         }
       });
     } else if (format === 'csv') {
@@ -174,7 +223,7 @@ export async function POST(request: NextRequest) {
       const csvContent = [
         csvHeaders.join(','),
         ...csvRows.map((row: (string | number)[]) => row.map(cell =>
-          typeof cell === 'string' && cell.includes(',') ? `"${cell}"` : cell
+          csvEscape(cell)
         ).join(','))
       ].join('\n');
 
@@ -182,7 +231,10 @@ export async function POST(request: NextRequest) {
         status: 200,
         headers: {
           'Content-Type': 'text/csv',
-          'Content-Disposition': `attachment; filename="priority-products-${new Date().toISOString().split('T')[0]}.csv"`
+          'Content-Disposition': `attachment; filename="priority-products-${new Date().toISOString().split('T')[0]}.csv"`,
+          'X-Total-Rows': priorityProducts.length.toString(),
+          'X-Export-Limit': limit.toString(),
+          'X-Export-Truncated': (priorityProducts.length >= MAX_EXPORT_ROWS).toString()
         }
       });
     }

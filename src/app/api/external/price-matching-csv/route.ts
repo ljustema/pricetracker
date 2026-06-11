@@ -17,6 +17,22 @@ interface PriorityProductData {
   most_competitive_competitor_name: string;
 }
 
+const EXPORT_BATCH_SIZE = 1000;
+const MAX_EXPORT_ROWS = 250000;
+
+function parseExportLimit(rawLimit: string | null): number {
+  if (!rawLimit || rawLimit.toLowerCase() === 'all') {
+    return MAX_EXPORT_ROWS;
+  }
+
+  const parsedLimit = parseInt(rawLimit, 10);
+  if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+    return MAX_EXPORT_ROWS;
+  }
+
+  return Math.min(parsedLimit, MAX_EXPORT_ROWS);
+}
+
 /**
  * External API endpoint for downloading price matching CSV
  * Requires API key authentication
@@ -66,22 +82,21 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const competitorId = url.searchParams.get('competitor_id');
     const brandFilter = url.searchParams.get('brand_filter');
-    const limit = parseInt(url.searchParams.get('limit') || '10000');
-    const offset = parseInt(url.searchParams.get('offset') || '0');
+    const limit = parseExportLimit(url.searchParams.get('limit'));
+    const offset = Math.max(parseInt(url.searchParams.get('offset') || '0', 10) || 0, 0);
 
     console.log(`External API: Fetching price matching data for user ${userId}`);
 
     // Fetch all products in batches to avoid Supabase limits
     let allProducts: PriorityProductData[] = [];
     let currentOffset = offset;
-    const batchSize = 1000;
     let hasMore = true;
 
     // Set a longer statement timeout for complex product queries (especially after cold starts)
     await supabase.rpc('set_statement_timeout', { p_milliseconds: 45000 }); // 45 seconds
 
     while (hasMore && allProducts.length < limit) {
-      const remainingLimit = Math.min(batchSize, limit - allProducts.length);
+      const remainingLimit = Math.min(EXPORT_BATCH_SIZE, limit - allProducts.length);
 
       const { data: priorityProducts, error } = await supabase.rpc('get_priority_products_for_repricing', {
         p_user_id: userId,
@@ -136,13 +151,7 @@ export async function GET(request: NextRequest) {
       
       // Check if we got a full batch (indicating there might be more)
       hasMore = batchProducts.length === remainingLimit;
-      currentOffset += batchSize;
-
-      // Safety check to prevent infinite loops
-      if (currentOffset > 50000) {
-        console.warn('Reached safety limit of 50,000 products');
-        break;
-      }
+      currentOffset += batchProducts.length;
     }
 
     // Convert to CSV
@@ -189,6 +198,9 @@ export async function GET(request: NextRequest) {
     responseHeaders.set('Access-Control-Allow-Origin', '*');
     responseHeaders.set('Access-Control-Allow-Methods', 'GET');
     responseHeaders.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    responseHeaders.set('X-Total-Rows', allProducts.length.toString());
+    responseHeaders.set('X-Export-Limit', limit.toString());
+    responseHeaders.set('X-Export-Truncated', (allProducts.length >= MAX_EXPORT_ROWS).toString());
 
     console.log(`External API: Successfully exported ${allProducts.length} products for user ${userId}`);
 
