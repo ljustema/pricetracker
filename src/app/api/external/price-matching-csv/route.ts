@@ -19,6 +19,8 @@ interface PriorityProductData {
 
 const EXPORT_BATCH_SIZE = 1000;
 const MAX_EXPORT_ROWS = 250000;
+const EXPORT_MODES = ['priority', 'coverage'] as const;
+type ExportMode = typeof EXPORT_MODES[number];
 
 function parseExportLimit(rawLimit: string | null): number {
   if (!rawLimit || rawLimit.toLowerCase() === 'all') {
@@ -31,6 +33,14 @@ function parseExportLimit(rawLimit: string | null): number {
   }
 
   return Math.min(parsedLimit, MAX_EXPORT_ROWS);
+}
+
+function parseExportMode(rawMode: string | null): ExportMode {
+  if (rawMode && EXPORT_MODES.includes(rawMode as ExportMode)) {
+    return rawMode as ExportMode;
+  }
+
+  return 'priority';
 }
 
 /**
@@ -83,9 +93,13 @@ export async function GET(request: NextRequest) {
     const competitorId = url.searchParams.get('competitor_id');
     const brandFilter = url.searchParams.get('brand_filter');
     const limit = parseExportLimit(url.searchParams.get('limit'));
+    const mode = parseExportMode(url.searchParams.get('mode'));
     const offset = Math.max(parseInt(url.searchParams.get('offset') || '0', 10) || 0, 0);
+    const rpcName = mode === 'coverage'
+      ? 'get_price_matching_coverage_export'
+      : 'get_priority_products_for_repricing';
 
-    console.log(`External API: Fetching price matching data for user ${userId}`);
+    console.log(`External API: Fetching ${mode} price matching data for user ${userId}`);
 
     // Fetch all products in batches to avoid Supabase limits
     let allProducts: PriorityProductData[] = [];
@@ -98,7 +112,7 @@ export async function GET(request: NextRequest) {
     while (hasMore && allProducts.length < limit) {
       const remainingLimit = Math.min(EXPORT_BATCH_SIZE, limit - allProducts.length);
 
-      const { data: priorityProducts, error } = await supabase.rpc('get_priority_products_for_repricing', {
+      const { data: priorityProducts, error } = await supabase.rpc(rpcName, {
         p_user_id: userId,
         p_competitor_id: competitorId || null,
         p_brand_filter: brandFilter || null,
@@ -108,6 +122,18 @@ export async function GET(request: NextRequest) {
 
       if (error) {
         console.error('Error fetching priority products data:', error);
+
+        if (mode === 'coverage' && (error.code === '42883' || error.code === 'PGRST202')) {
+          return NextResponse.json(
+            {
+              error: 'Coverage export is not installed yet.',
+              details: 'The get_price_matching_coverage_export database function is missing. Use mode=priority until the coverage RPC is deployed.',
+              code: error.code,
+              retryable: false
+            },
+            { status: 501 }
+          );
+        }
 
         // Handle timeout errors specifically
         if (error.code === '57014') {
@@ -200,9 +226,10 @@ export async function GET(request: NextRequest) {
     responseHeaders.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
     responseHeaders.set('X-Total-Rows', allProducts.length.toString());
     responseHeaders.set('X-Export-Limit', limit.toString());
+    responseHeaders.set('X-Export-Mode', mode);
     responseHeaders.set('X-Export-Truncated', (allProducts.length >= MAX_EXPORT_ROWS).toString());
 
-    console.log(`External API: Successfully exported ${allProducts.length} products for user ${userId}`);
+    console.log(`External API: Successfully exported ${allProducts.length} ${mode} products for user ${userId}`);
 
     return new NextResponse(csvContent, {
       status: 200,
