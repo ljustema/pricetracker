@@ -19,6 +19,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const OVERDUE_MS = 30 * 60 * 60 * 1000;
 const STUCK_MS = 2 * 60 * 60 * 1000;
 const DAILY_REPORT_UTC_HOUR = 6;
+const REJECTION_WARNING_THRESHOLD = 25;
 
 export class OperationalReportService {
   private isRunning = false;
@@ -78,6 +79,28 @@ export class OperationalReportService {
     const integrationRuns = integrationRunsResult.data || [];
     const issues: Issue[] = [];
     const now = Date.now();
+    const scraperRejectionSummaries = await Promise.all(scrapers.map(async (scraper: { id: string; name: string }) => {
+      const countResult = await this.supabase
+        .from('scraper_run_rejections')
+        .select('id', { count: 'exact', head: true })
+        .eq('scraper_id', scraper.id)
+        .gte('rejected_at', since);
+      if (countResult.error) throw new Error(countResult.error.message);
+
+      const count = countResult.count || 0;
+      if (count < REJECTION_WARNING_THRESHOLD) return { scraper, count, sample: null };
+
+      const sampleResult = await this.supabase
+        .from('scraper_run_rejections')
+        .select('reason, sample_name, sample_url')
+        .eq('scraper_id', scraper.id)
+        .gte('rejected_at', since)
+        .order('rejected_at', { ascending: false })
+        .limit(1);
+      if (sampleResult.error) throw new Error(sampleResult.error.message);
+
+      return { scraper, count, sample: sampleResult.data?.[0] || null };
+    }));
 
     for (const item of scrapers) {
       if (!item.last_run || now - new Date(item.last_run).getTime() > OVERDUE_MS) {
@@ -89,6 +112,18 @@ export class OperationalReportService {
       if (run.status === 'failed') issues.push({ category: 'Scraper failed', name, detail: run.error_message || 'Unknown error' });
       else if (['pending', 'initializing', 'running'].includes(run.status) && now - new Date(run.created_at).getTime() > STUCK_MS) {
         issues.push({ category: 'Scraper job stuck', name, detail: `Status: ${run.status}` });
+      }
+    }
+    for (const rejectionSummary of scraperRejectionSummaries) {
+      if (rejectionSummary.count >= REJECTION_WARNING_THRESHOLD) {
+        const sample = rejectionSummary.sample;
+        const reason = sample?.reason ? ` Reason: ${sample.reason}.` : '';
+        const sampleName = sample?.sample_name ? ` Sample: ${sample.sample_name}.` : '';
+        issues.push({
+          category: 'Scraper rows rejected',
+          name: rejectionSummary.scraper.name,
+          detail: `${rejectionSummary.count} scraped rows were rejected in the last 24 hours.${reason}${sampleName}`,
+        });
       }
     }
     for (const item of integrations) {
