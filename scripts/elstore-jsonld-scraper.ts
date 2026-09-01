@@ -248,10 +248,10 @@ async function scrapeProductPage(url: string): Promise<ProductCandidate | null> 
     return null;
   }
 
-  const offer = first(toArray(product.offers));
+  const offer = first(toArray(product?.offers));
   const price = parsePrice(offer?.price);
   const currency = normalizeText(offer?.priceCurrency) || 'SEK';
-  const image = first(toArray(product.image));
+  const image = first(toArray(product?.image));
   const availability = normalizeText(offer?.availability);
 
   return {

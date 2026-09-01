@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/options";
-import { createClient } from "@supabase/supabase-js";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { ensureUUID } from "@/lib/utils/uuid";
 
 export async function POST(request: NextRequest) {
@@ -16,19 +16,6 @@ export async function POST(request: NextRequest) {
         { status: 401 }
       );
     }
-
-    // Create a Supabase client with the service role key to bypass RLS
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
-      return NextResponse.json(
-        { error: "Server configuration error" },
-        { status: 500 }
-      );
-    }
-
-    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
     // Parse the request body
     const body = await request.json();
@@ -52,74 +39,29 @@ export async function POST(request: NextRequest) {
     }
 
     const userId = ensureUUID(session.user.id);
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - older_than_days);
-    const cutoffDateString = cutoffDate.toISOString();
+    const supabase = createSupabaseAdminClient();
+    const { data: deletedCounts, error: cleanupError } = await supabase.rpc("cleanup_user_data", {
+      p_user_id: userId,
+      p_older_than_days: older_than_days,
+      p_include_products: Boolean(include_products),
+      p_include_price_changes: Boolean(include_price_changes),
+      p_include_temp_competitors_scraped_data: Boolean(include_temp_competitors_scraped_data),
+    });
 
-    let deletedCount = 0;
-
-    // Delete temp competitors scraped data if requested
-    if (include_temp_competitors_scraped_data) {
-      const { data: scrapedProductsData, error: scrapedProductsError } = await supabase
-        .from("temp_competitors_scraped_data")
-        .delete()
-        .eq("user_id", userId)
-        .lt("scraped_at", cutoffDateString)
-        .select("count");
-
-      if (scrapedProductsError) {
-        console.error("Error deleting temp competitors scraped data:", scrapedProductsError);
-        return NextResponse.json(
-          { error: "Failed to delete temp competitors scraped data" },
-          { status: 500 }
-        );
-      }
-
-      deletedCount += scrapedProductsData.length;
+    if (cleanupError) {
+      console.error("Error cleaning up user data:", cleanupError);
+      return NextResponse.json(
+        { error: cleanupError.message || "Failed to perform data cleanup" },
+        { status: 500 }
+      );
     }
 
-    // Delete price changes if requested
-    if (include_price_changes) {
-      const { data: priceChangesData, error: priceChangesError } = await supabase
-        .from("price_changes_competitors")
-        .delete()
-        .eq("user_id", userId)
-        .lt("changed_at", cutoffDateString)
-        .select("count");
-
-      if (priceChangesError) {
-        console.error("Error deleting price changes:", priceChangesError);
-        return NextResponse.json(
-          { error: "Failed to delete price changes" },
-          { status: 500 }
-        );
-      }
-
-      deletedCount += priceChangesData.length;
-    }
-
-    // Delete products if requested (be careful with this one!)
-    if (include_products) {
-      const { data: productsData, error: productsError } = await supabase
-        .from("products")
-        .delete()
-        .eq("user_id", userId)
-        .lt("created_at", cutoffDateString)
-        .select("count");
-
-      if (productsError) {
-        return NextResponse.json(
-          { error: "Failed to delete products. This may be due to foreign key constraints." },
-          { status: 500 }
-        );
-      }
-
-      deletedCount += productsData.length;
-    }
+    const deletedCount = Number(deletedCounts?.total ?? 0);
 
     return NextResponse.json({
       success: true,
       deleted_count: deletedCount,
+      deleted_counts: deletedCounts,
       message: `Successfully deleted ${deletedCount} records older than ${older_than_days} days.`
     });
   } catch (error) {
