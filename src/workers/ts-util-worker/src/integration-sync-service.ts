@@ -559,35 +559,45 @@ export class IntegrationSyncService {
    * Process a batch of Google Feed XML items
    */
   private async processGoogleFeedBatch(batch: Record<string, unknown>[], batchNumber: number, totalBatches: number): Promise<number> {
-    const stagedProducts = batch.map(item => {
-      const extractedData = this.extractProductDataFromXmlItem(item);
+    const stagedProducts = [];
+    const enrichmentConcurrency = 10;
 
-      // Skip items without required data
-      if (!extractedData.name || extractedData.name.trim() === '') {
-        return null;
-      }
+    for (let i = 0; i < batch.length; i += enrichmentConcurrency) {
+      const chunk = batch.slice(i, i + enrichmentConcurrency);
+      const stagedChunk = await Promise.all(chunk.map(async item => {
+        const extractedData = await this.extractProductDataFromXmlItem(item);
 
-      return {
-        integration_run_id: this.runId,
-        integration_id: this.integrationId,
-        user_id: this.userId,
-        name: extractedData.name.trim(),
-        sku: extractedData.sku || null,
-        ean: extractedData.ean || null,
-        brand: extractedData.brand || null,
-        our_retail_price: extractedData.our_retail_price,
-        our_wholesale_price: extractedData.our_wholesale_price,
-        image_url: extractedData.image_url || null,
-        our_url: extractedData.our_url || null, // Updated field name to match database schema
-        currency_code: extractedData.currency_code || null, // Let database set user's primary currency
-        raw_data: item, // Store the entire XML item for reference
-        status: 'pending',
-        created_at: new Date().toISOString()
-      };
-    }).filter(product => product !== null); // Remove null entries
+        // Skip items without required data
+        if (!extractedData.name || extractedData.name.trim() === '') {
+          return null;
+        }
+
+        return {
+          integration_run_id: this.runId,
+          integration_id: this.integrationId,
+          user_id: this.userId,
+          name: extractedData.name.trim(),
+          sku: extractedData.sku || null,
+          ean: extractedData.ean || null,
+          brand: extractedData.brand || null,
+          our_retail_price: extractedData.our_retail_price,
+          our_wholesale_price: extractedData.our_wholesale_price,
+          image_url: extractedData.image_url || null,
+          our_url: extractedData.our_url || null, // Updated field name to match database schema
+          currency_code: extractedData.currency_code || null, // Let database set user's primary currency
+          raw_data: item, // Store the entire XML item for reference
+          status: 'pending',
+          created_at: new Date().toISOString()
+        };
+      }));
+
+      stagedProducts.push(...stagedChunk);
+    }
+
+    const validStagedProducts = stagedProducts.filter(product => product !== null); // Remove null entries
 
     const uniqueStagedProducts = this.filterDuplicateStagedProducts(
-      stagedProducts,
+      validStagedProducts,
       `Google Feed batch ${batchNumber}/${totalBatches}`
     );
 
@@ -606,7 +616,7 @@ export class IntegrationSyncService {
   /**
    * Extract product data from XML item based on Google Feed format
    */
-  private extractProductDataFromXmlItem(item: Record<string, unknown>) {
+  private async extractProductDataFromXmlItem(item: Record<string, unknown>) {
     // Helper function to get value from XML item, handling both direct values and CDATA
     const getValue = (obj: Record<string, unknown> | null, key: string): string | null => {
       if (!obj || typeof obj !== 'object') return null;
@@ -653,6 +663,7 @@ export class IntegrationSyncService {
     const gtin = getValue(item, 'g:gtin');
     const brand = getValue(item, 'g:brand');
     const mpn = getValue(item, 'g:mpn');
+    const supplierArticleNumber = mpn || await this.fetchLjustemaSupplierArticleNumber(link);
 
     // Determine which price to use (sale price takes priority)
     const finalPrice = salePrice || price;
@@ -667,9 +678,35 @@ export class IntegrationSyncService {
       our_wholesale_price: wholesalePrice,
       ean: gtin,
       brand: brand,
-      sku: mpn,
+      sku: supplierArticleNumber,
       currency_code: null // Let database set user's primary currency, could be extracted from price string if needed
     };
+  }
+
+  private async fetchLjustemaSupplierArticleNumber(productUrl: string | null): Promise<string | null> {
+    if (!productUrl?.includes('ljustema.se')) return null;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const response = await fetch(productUrl, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36'
+        }
+      });
+
+      if (!response.ok) return null;
+
+      const html = await response.text();
+      const match = html.match(/<dt[^>]*>\s*Lev\.\s*Art\.nr\s*<\/dt>\s*<dd[^>]*>\s*([^<]+?)\s*<\/dd>/i);
+      return match?.[1]?.trim() || null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   /**
