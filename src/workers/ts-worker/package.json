@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node --test tests/*.test.cjs",
     "start": "node --expose-gc dist/index.js",
     "dev": "tsc -w & nodemon --expose-gc dist/index.js"
   },

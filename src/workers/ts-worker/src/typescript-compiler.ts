@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
@@ -21,7 +21,7 @@ export async function forceCleanupSharedDependencies(): Promise<void> {
 }
 
 /**
- * Simple TypeScript compiler - no shared dependencies, just compile each script independently
+ * Compile each script in its own temporary directory using the worker's locked dependencies
  */
 export async function compileTypeScriptScraper(
   scriptContent: string,
@@ -41,55 +41,28 @@ export async function compileTypeScriptScraper(
     await fsPromises.writeFile(tsFilePath, scriptContent, 'utf-8');
     debugLog(`TypeScript script written to ${tsFilePath}`);
 
-    // Create package.json with all dependencies
-    const packageJson = {
-      name: "temp-scraper",
-      version: "1.0.0",
-      private: true,
-      dependencies: {
-        "typescript": "^5.0.0",
-        "crawlee": "^3.13.3",
-        "playwright": "^1.40.0",
-        "yargs": "^17.6.2",
-        "fast-xml-parser": "^5.2.0",
-        "node-fetch": "^2.6.7",
-        "jsdom": "^21.1.0",
-        "@supabase/supabase-js": "^2.0.0",
-        "@babel/cli": "^7.0.0",
-        "@babel/core": "^7.0.0",
-        "@babel/preset-env": "^7.0.0",
-        "@babel/preset-typescript": "^7.0.0"
-      }
-    };
-
-    const packageJsonPath = path.join(tempDir, 'package.json');
-    await fsPromises.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf-8');
-    debugLog('Package.json created');
-
-    // Install dependencies
-    const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-    debugLog('Installing dependencies...');
-    
-    try {
-      const installResult = execSync(`${npmCommand} install --no-package-lock --no-save --prefer-offline --no-audit --no-fund`, {
-        cwd: tempDir,
-        stdio: 'pipe',
-        timeout: TIMEOUT_MS,
-        encoding: 'utf8'
-      });
-      debugLog('Dependencies installed successfully');
-      debugLog(`Install output: ${installResult}`);
-    } catch (installError: unknown) {
-      const errorMessage = installError instanceof Error ? installError.message : String(installError);
-      debugLog(`npm install failed: ${errorMessage}`);
-      throw new Error(`Failed to install dependencies: ${errorMessage}`);
-    }
+    // Reuse the dependencies installed by npm ci for this deployment. Installing
+    // floating ranges for each run bypassed our lockfile and pulled in a timeout
+    // regression that retained parsed pages until the scraper exhausted its heap.
+    // The script and storage still live in an isolated, disposable directory.
+    const nodeModulesPath = path.dirname(path.dirname(require.resolve('crawlee/package.json')));
+    await fsPromises.symlink(
+      nodeModulesPath,
+      path.join(tempDir, 'node_modules'),
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    await fsPromises.writeFile(
+      path.join(tempDir, 'package.json'),
+      JSON.stringify({ name: 'temp-scraper', version: '1.0.0', private: true, type: 'commonjs' }),
+      'utf-8'
+    );
+    debugLog('Using deployment-locked scraper dependencies');
 
     // Create babel.config.json
     const babelConfig = {
       presets: [
-        "@babel/preset-env",
-        "@babel/preset-typescript"
+        require.resolve('@babel/preset-env'),
+        require.resolve('@babel/preset-typescript')
       ]
     };
 
@@ -98,13 +71,12 @@ export async function compileTypeScriptScraper(
     debugLog('Babel config created');
 
     // Compile with Babel
-    const babelPath = path.join(tempDir, 'node_modules', '.bin', 'babel');
-    const babelCommand = process.platform === 'win32' ? `"${babelPath}.cmd"` : `"${babelPath}"`;
+    const babelPath = require.resolve('@babel/cli/bin/babel.js');
     const jsFilePath = path.join(tempDir, 'scraper.js');
 
     debugLog('Compiling TypeScript with Babel...');
     try {
-      execSync(`${babelCommand} scraper.ts --out-file scraper.js --extensions ".ts"`, {
+      execFileSync(process.execPath, [babelPath, tsFilePath, '--out-file', jsFilePath, '--extensions', '.ts', '--config-file', babelConfigPath], {
         cwd: tempDir,
         stdio: 'pipe',
         timeout: TIMEOUT_MS / 2

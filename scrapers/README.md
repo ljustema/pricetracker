@@ -60,3 +60,30 @@ Production verification on 2026-09-26:
   `~/.local/state/pricetracker/backups/scraper-fixes-20260926/`.
 
 Later on September 26, the live full Lampan run was progressing without ERROR-level logs, but 300 requests/minute was unnecessarily slow for 15,060 URLs. At user request, adjusted the stored script to concurrency 4 and 600 requests/minute for subsequent runs. The running process retains its loaded 2/300 configuration and was left uninterrupted. No evidence established that the previous 2,000/minute ceiling caused the earlier IP-specific block.
+
+## October 5, 2026 heap exhaustion
+
+Bright123 and Norrmalms El failed around the default 2 GB Node heap limit.
+The worker had Crawlee 3.16.0 and `@apify/timeout` 0.3.5 installed from its
+lockfile, but the script compiler ran `npm install --no-package-lock` for every
+job. This fetched Crawlee 3.18.1 and `@apify/timeout` 0.4.14 in the scraper's
+temporary directory, bypassing the deployment lockfile.
+
+A controlled Bright123 reproduction with the freshly installed dependencies
+reached 1,411 MB heap after 500 products; its heap snapshot retained millions
+of parsed HTML elements. Changing only `@apify/timeout` to the deployment's
+0.3.5 version allowed the same 2,500-URL workload to finish without increasing
+the 2 GB heap limit (2,496 products, sampled RSS below 600 MB).
+
+The compiler now links each isolated temporary script directory to the worker's
+`npm ci` dependencies and invokes its installed Babel CLI directly. No package
+installation happens during a scraper run. This applies to all TypeScript
+scrapers; database-backed scripts and their concurrency settings need no edits.
+Regression tests execute a compiled script, check deployment dependency identity,
+exercise static and dynamic fetch imports, and verify compilation cleanup.
+
+```sh
+cd src/workers/ts-worker
+npm ci
+npm test
+```
