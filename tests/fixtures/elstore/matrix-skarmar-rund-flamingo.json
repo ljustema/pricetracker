@@ -1,0 +1,116 @@
+{
+  "product": {
+    "name": "Matrix Skärmar Rund Flamingo",
+    "variants": [
+      {
+        "id": 15773,
+        "sku": "255144-20-200",
+        "price": {
+          "id": 44582,
+          "formatted_price": "209,82 kr",
+          "price": 1678560,
+          "formatted_compare_price": "269 kr",
+          "compare_price": 2152000,
+          "has_compare_price": true,
+          "save_percentage": 22,
+          "tier": 1,
+          "formatted_tier_price": "269 kr"
+        },
+        "available_stock": -2,
+        "display_stock": -2,
+        "always_orderable": true,
+        "image_id": 49176,
+        "primary_gtin": "7319502564318"
+      },
+      {
+        "id": 15774,
+        "sku": "255144-24-200",
+        "price": {
+          "id": 44583,
+          "formatted_price": "233,22 kr",
+          "price": 1865760,
+          "formatted_compare_price": "299 kr",
+          "compare_price": 2392000,
+          "has_compare_price": true,
+          "save_percentage": 22,
+          "tier": 1,
+          "formatted_tier_price": "299 kr"
+        },
+        "available_stock": -2,
+        "display_stock": -2,
+        "always_orderable": true,
+        "image_id": 49176,
+        "primary_gtin": "7319502564365"
+      },
+      {
+        "id": 15775,
+        "sku": "255144-30-200",
+        "price": {
+          "id": 44584,
+          "formatted_price": "319,02 kr",
+          "price": 2552160,
+          "formatted_compare_price": "409 kr",
+          "compare_price": 3272000,
+          "has_compare_price": true,
+          "save_percentage": 22,
+          "tier": 1,
+          "formatted_tier_price": "409 kr"
+        },
+        "available_stock": -1,
+        "display_stock": -1,
+        "always_orderable": true,
+        "image_id": 49176,
+        "primary_gtin": "7319502564419"
+      },
+      {
+        "id": 15776,
+        "sku": "255144-35-200",
+        "price": {
+          "id": 44585,
+          "formatted_price": "389,22 kr",
+          "price": 3113760,
+          "formatted_compare_price": "499 kr",
+          "compare_price": 3992000,
+          "has_compare_price": true,
+          "save_percentage": 22,
+          "tier": 1,
+          "formatted_tier_price": "499 kr"
+        },
+        "available_stock": 0,
+        "display_stock": 0,
+        "always_orderable": true,
+        "image_id": 49176,
+        "primary_gtin": "7319502564464"
+      }
+    ],
+    "images": [
+      {
+        "id": 49176,
+        "title": "",
+        "alt": null,
+        "image_url": "https://nycdn.nyehandel.se/store_85203767-e57a-4acc-bc34-1398b25102e1/images/GIE0Tgqpl8a5GAlf5Uz9A0G6JkRIKazI1IxwyCgs.jpg",
+        "thumb_url": "https://nycdn.nyehandel.se/store_85203767-e57a-4acc-bc34-1398b25102e1/images/GIE0Tgqpl8a5GAlf5Uz9A0G6JkRIKazI1IxwyCgs.jpg?width=400&height=400"
+      }
+    ]
+  },
+  "selected_variant": {
+    "id": 15776,
+    "sku": "255144-35-200",
+    "price": {
+      "id": 44585,
+      "formatted_price": "389,22 kr",
+      "price": 3113760,
+      "formatted_compare_price": "499 kr",
+      "compare_price": 3992000,
+      "has_compare_price": true,
+      "save_percentage": 22,
+      "tier": 1,
+      "formatted_tier_price": "499 kr"
+    },
+    "available_stock": 0,
+    "display_stock": 0,
+    "always_orderable": true,
+    "image_id": 49176,
+    "primary_gtin": "7319502564464"
+  }
+}

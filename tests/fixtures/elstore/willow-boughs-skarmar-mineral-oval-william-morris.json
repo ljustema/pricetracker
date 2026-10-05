@@ -1,0 +1,96 @@
+{
+  "product": {
+    "name": "Willow Boughs skärmar mineral oval William Morris",
+    "variants": [
+      {
+        "id": 13819,
+        "sku": "305112-20-130",
+        "price": {
+          "id": 41839,
+          "formatted_price": "248,82 kr",
+          "price": 1990560,
+          "formatted_compare_price": "319 kr",
+          "compare_price": 2552000,
+          "has_compare_price": true,
+          "save_percentage": 22,
+          "tier": 1,
+          "formatted_tier_price": "319 kr"
+        },
+        "available_stock": -3,
+        "display_stock": -3,
+        "always_orderable": true,
+        "image_id": 44532,
+        "primary_gtin": "7319503057309"
+      },
+      {
+        "id": 13820,
+        "sku": "305112-25-130",
+        "price": {
+          "id": 41840,
+          "formatted_price": "326,82 kr",
+          "price": 2614560,
+          "formatted_compare_price": "419 kr",
+          "compare_price": 3352000,
+          "has_compare_price": true,
+          "save_percentage": 22,
+          "tier": 1,
+          "formatted_tier_price": "419 kr"
+        },
+        "available_stock": -2,
+        "display_stock": -2,
+        "always_orderable": true,
+        "image_id": 44532,
+        "primary_gtin": "7319503057323"
+      },
+      {
+        "id": 13821,
+        "sku": "305112-30-130",
+        "price": {
+          "id": 41841,
+          "formatted_price": "503,1 kr",
+          "price": 4024800,
+          "formatted_compare_price": "645 kr",
+          "compare_price": 5160000,
+          "has_compare_price": true,
+          "save_percentage": 22,
+          "tier": 1,
+          "formatted_tier_price": "645 kr"
+        },
+        "available_stock": 0,
+        "display_stock": 0,
+        "always_orderable": true,
+        "image_id": 44532,
+        "primary_gtin": "7319503057347"
+      }
+    ],
+    "images": [
+      {
+        "id": 44532,
+        "title": "",
+        "alt": null,
+        "image_url": "https://nycdn.nyehandel.se/store_85203767-e57a-4acc-bc34-1398b25102e1/images/7J4inheq5del6tGeCPjeqjDnuum71lSP3sqsv4aC.jpg",
+        "thumb_url": "https://nycdn.nyehandel.se/store_85203767-e57a-4acc-bc34-1398b25102e1/images/7J4inheq5del6tGeCPjeqjDnuum71lSP3sqsv4aC.jpg?width=400&height=400"
+      }
+    ]
+  },
+  "selected_variant": {
+    "id": 13821,
+    "sku": "305112-30-130",
+    "price": {
+      "id": 41841,
+      "formatted_price": "503,1 kr",
+      "price": 4024800,
+      "formatted_compare_price": "645 kr",
+      "compare_price": 5160000,
+      "has_compare_price": true,
+      "save_percentage": 22,
+      "tier": 1,
+      "formatted_tier_price": "645 kr"
+    },
+    "available_stock": 0,
+    "display_stock": 0,
+    "always_orderable": true,
+    "image_id": 44532,
+    "primary_gtin": "7319503057347"
+  }
+}
