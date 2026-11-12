@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { ensureUUID } from '@/lib/utils/uuid';
 
 interface PriorityProductData {
+  competitor_price_verified_at: string;
   product_id: string;
   product_name: string;
   product_sku: string;
@@ -95,9 +96,7 @@ export async function GET(request: NextRequest) {
     const limit = parseExportLimit(url.searchParams.get('limit'));
     const mode = parseExportMode(url.searchParams.get('mode'));
     const offset = Math.max(parseInt(url.searchParams.get('offset') || '0', 10) || 0, 0);
-    const rpcName = mode === 'coverage'
-      ? 'get_price_matching_coverage_export'
-      : 'get_priority_products_for_repricing';
+    const rpcName = 'get_fresh_price_matching_export';
 
     console.log(`External API: Fetching ${mode} price matching data for user ${userId}`);
 
@@ -117,17 +116,18 @@ export async function GET(request: NextRequest) {
         p_competitor_id: competitorId || null,
         p_brand_filter: brandFilter || null,
         p_limit: remainingLimit,
-        p_offset: currentOffset
+        p_offset: currentOffset,
+        p_mode: mode
       });
 
       if (error) {
         console.error('Error fetching priority products data:', error);
 
-        if (mode === 'coverage' && (error.code === '42883' || error.code === 'PGRST202')) {
+        if (error.code === '42883' || error.code === 'PGRST202') {
           return NextResponse.json(
             {
-              error: 'Coverage export is not installed yet.',
-              details: 'The get_price_matching_coverage_export database function is missing. Use mode=priority until the coverage RPC is deployed.',
+              error: 'Fresh-price export is not installed yet.',
+              details: 'Apply the competitor-price freshness migration before exporting. No fallback to unverified prices is allowed.',
               code: error.code,
               retryable: false
             },
@@ -181,13 +181,6 @@ export async function GET(request: NextRequest) {
     }
 
     // Convert to CSV
-    if (allProducts.length === 0) {
-      return NextResponse.json(
-        { error: 'No products found that need price matching' },
-        { status: 404 }
-      );
-    }
-
     const headers = [
       'Product Name',
       'SKU',
@@ -198,7 +191,8 @@ export async function GET(request: NextRequest) {
       'Price Difference',
       'Price Difference %',
       'Competitor Count',
-      'Competitor with lowest price'
+      'Competitor with lowest price',
+      'Competitor Price Verified At'
     ];
 
     const csvContent = [
@@ -213,7 +207,8 @@ export async function GET(request: NextRequest) {
         product.price_difference || '',
         product.price_difference_percentage || '',
         product.competitor_count || '',
-        `"${product.most_competitive_competitor_name?.replace(/"/g, '""') || ''}"`
+        `"${product.most_competitive_competitor_name?.replace(/"/g, '""') || ''}"`,
+        `"${product.competitor_price_verified_at || ''}"`
       ].join(','))
     ].join('\n');
 

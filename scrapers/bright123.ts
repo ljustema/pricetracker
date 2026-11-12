@@ -247,14 +247,11 @@ const CONFIG = {
       // Create a new Configuration instance explicitly for memory storage
       const memoryConfig = new Configuration({
         persistStorage: false, // Use memory-only storage to avoid permission issues
-        storageClient: {
-          useMemoryStorage: true, // Force memory storage to avoid file system issues
-        },
       });
 
       // Set global configuration to use memory storage
       Configuration.getGlobalConfig().set('persistStorage', false);
-      Configuration.getGlobalConfig().set('storageClient.useMemoryStorage', true);
+      Configuration.getGlobalConfig().useStorageClient(memoryConfig.getStorageClient());
 
       logProgress(`Created minimal Crawlee Configuration for memory-only storage.`);
       return memoryConfig;
@@ -517,7 +514,7 @@ const CONFIG = {
 
       // Handle failed requests
       failedRequestHandler: async ({ request, error }) => {
-        logError(`Request ${request.url} failed: ${error.message}`);
+        logError(`Request ${request.url} failed: ${error instanceof Error ? error.message : String(error)}`);
 
         // If sitemap approach fails, try category pages as fallback
         if (allProductUrls.length === 0) {
@@ -1157,7 +1154,7 @@ function productPassesFilters(product: ScrapedProductData, context: ScriptContex
 
         // Handle failed requests
         failedRequestHandler: async ({ request, error }) => {
-          logError(`Request ${request.url} failed: ${error.message}`);
+          logError(`Request ${request.url} failed: ${error instanceof Error ? error.message : String(error)}`);
 
           // Increment processed count to maintain accurate progress reporting
           processedCount++;

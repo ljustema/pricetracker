@@ -19,7 +19,8 @@ next-env.d.ts
 /src/workers/*/dist
 
 # Documentation
-/docs
+/docs/*
+!/docs/competitor-price-freshness.md
 # Allow deployment and architecture documentation
 !/docs/deployment
 !/docs/architecture
