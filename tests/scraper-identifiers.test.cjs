@@ -28,11 +28,12 @@ for (const name of ['bright123', 'stockholms-ljusbutik']) {
 const lampan = fs.readFileSync('scrapers/lampan.ts', 'utf8');
 const lampanAst = ts.createSourceFile('lampan.ts', lampan, ts.ScriptTarget.Latest, true);
 const sitemapFunction = lampanAst.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === 'fetchSitemapUrls').getText(lampanAst);
+const transportFunction = lampanAst.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === 'fetchLampanText').getText(lampanAst);
 test('Lampan: sitemap failure rejects instead of reporting a successful empty run', async () => {
   let requests = 0;
-  const ctx = { AbortSignal, fetch: async () => { requests++; return { ok: false, status: 403, statusText: 'Forbidden' }; }, logProgress() {}, logError() {}, setTimeout: f => f() };
+  const ctx = { URL, AbortSignal, CONFIG:{PERFORMANCE:{REQUEST_DELAY:0}},lastLampanRequestStarted:0,fetch: async () => { requests++; return { ok: false, status: 403, statusText: 'Forbidden' }; }, logProgress() {}, logError() {}, setTimeout: f => f() };
   vm.createContext(ctx);
-  vm.runInContext(ts.transpile(sitemapFunction), ctx);
+  vm.runInContext(ts.transpileModule(transportFunction+'\n'+sitemapFunction,{compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText, ctx);
   await assert.rejects(ctx.fetchSitemapUrls('https://lampan.se/sitemap.xml'), /403 Forbidden/);
-  assert.equal(requests, 5);
+  assert.equal(requests, 1);
 });

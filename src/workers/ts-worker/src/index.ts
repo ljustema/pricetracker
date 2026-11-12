@@ -1,4 +1,6 @@
-import 'dotenv/config'; // Load environment variables
+import 'dotenv/config';
+import { StringDecoder } from 'string_decoder';
+import { OrderedLines, KeyedTasks } from './ordered-lines';
 import { debugLog, logToDatabase } from './debug-logger'; // Import our debug logger
 
 // Log that the worker has started
@@ -316,6 +318,7 @@ async function fetchAndProcessJob() {
     }
 
     job = claimedJobs[0]; // Assign the first (and should be only) claimed job
+    const claimedJob = job;
 
     // SET JOB PROCESSING STATE - Prevent race conditions
     isProcessingJob = true;
@@ -332,7 +335,7 @@ async function fetchAndProcessJob() {
     // 3. Fetch the scraper script and related information
     const { data: scraper, error: scraperError } = await supabase
       .from('scrapers')
-      .select('typescript_script, filter_by_active_brands, scrape_only_own_products, supplier_id, competitor_id') // Add supplier_id and competitor_id
+      .select('typescript_script, script_metadata, filter_by_active_brands, scrape_only_own_products, supplier_id, competitor_id')
       .eq('id', job.scraper_id)
       .single();
 
@@ -410,35 +413,46 @@ async function fetchAndProcessJob() {
     let activeBrandIds: string[] = [];
     let ownProductEans: string[] = [];
     let ownProductSkuBrands: { sku: string; brand: string; brand_id?: string }[] = [];
+    let lampanCatalog: unknown = null;
+    const usesLampanCatalog = scraper.script_metadata?.catalog_plan === 'lampan_v1';
+    const { fetchAllCatalogRows } = await import('./catalog-context');
 
-    if (scraper.filter_by_active_brands) {
+    if (usesLampanCatalog) {
+        const result = await supabase.rpc('get_competitor_catalog_context', { p_scraper_id: job.scraper_id });
+        if (result.error || !result.data || result.data.version !== 1) {
+            throw new Error('Could not load complete Lampan catalog context');
+        }
+        lampanCatalog = result.data;
+        activeBrandNames = result.data.brands.flatMap((brand: any) => [brand.name, ...brand.aliases]);
+        activeBrandIds = result.data.brands.map((brand: any) => brand.id);
+        logStructured(job.id, 'info', 'SETUP', `Loaded complete Lampan catalog: ${result.data.ownProducts.length} own products, ${result.data.brands.length} brands, ${result.data.known.length} known URLs`);
+    }
+
+    if (scraper.filter_by_active_brands && !usesLampanCatalog) {
         logStructured(job.id, 'info', 'SETUP', 'Fetching active brands for filtering...');
-        const { data: brands, error: brandError } = await supabase
+        const brands = await fetchAllCatalogRows((from, to) => supabase
             .from('brands')
             .select('id, name')
-            .eq('user_id', job.user_id)
-            .eq('is_active', true);
+            .eq('user_id', claimedJob.user_id)
+            .eq('is_active', true).order('id').range(from, to));
 
-        if (brandError) {
-            logStructured(job.id, 'warn', 'SETUP', `Failed to fetch active brands: ${brandError.message}. Proceeding without brand filter.`);
-        } else if (brands) {
+        if (brands) {
             activeBrandNames = brands.map((b: { name: unknown }) => String(b.name));
             activeBrandIds = brands.map((b: { id: unknown }) => String(b.id));
             logStructured(job.id, 'info', 'SETUP', `Fetched ${activeBrandNames.length} active brands.`);
         }
     }
 
-    if (scraper.scrape_only_own_products) {
+    if (scraper.scrape_only_own_products && !usesLampanCatalog) {
         logStructured(job.id, 'info', 'SETUP', 'Fetching own product identifiers for filtering...');
-        const { data: products, error: productError } = await supabase
+        const products = await fetchAllCatalogRows((from, to) => supabase
             .from('products')
             .select('ean, sku, brand, brand_id')
-            .eq('user_id', job.user_id)
-            .eq('is_active', true); // Only consider active products in the user's catalog
+            .eq('user_id', claimedJob.user_id)
+            .eq('is_active', true)
+            .not('our_retail_price', 'is', null).order('id').range(from, to));
 
-        if (productError) {
-            logStructured(job.id, 'warn', 'SETUP', `Failed to fetch own products: ${productError.message}. Proceeding without own product filter.`);
-        } else if (products) {
+        if (products) {
             ownProductEans = products.map((p: { ean: unknown }) => p.ean).filter((ean: unknown): ean is string => typeof ean === 'string' && !!ean);
             ownProductSkuBrands = products
                 .filter((p: { sku: unknown; brand: unknown; brand_id: unknown }) => p.sku && (p.brand || p.brand_id))
@@ -555,7 +569,7 @@ async function fetchAndProcessJob() {
         const path = await import('path');
 
         // Spawn subprocess - simplified approach
-        const command = 'node';
+        const command = process.execPath;
 
         // Prepare the context object for the scraper script
         // Ensure this matches the ScriptContext interface expected by the scraper scripts
@@ -569,13 +583,17 @@ async function fetchAndProcessJob() {
           isTestRun: job.is_test_run ?? false, // Default to false if undefined
           isValidation: job.is_validation_run ?? false, // Assuming a field like is_validation_run on the job, or default
           run_id: job.id,
+          ...(usesLampanCatalog && { lampanCatalog }),
           // Include supplier information if this is a supplier scraper
           ...(supplierInfo && { supplierInfo }),
         };
         const scriptContextString = JSON.stringify(scriptContextForScraper);
         const base64ContextString = Buffer.from(scriptContextString).toString('base64');
 
-        const args = [tmpScriptPath, 'scrape', '--context', base64ContextString];
+        const contextPath = path.join(path.dirname(tmpScriptPath), 'scraper-context.base64');
+        const contextFileFs = await import('fs/promises');
+        await contextFileFs.writeFile(contextPath, base64ContextString, { encoding: 'utf8', mode: 0o600 });
+        const args = [path.join(__dirname, 'context-launcher.js'), tmpScriptPath, contextPath];
         // Log the command we're about to execute
         debugLog(`Executing command: ${command} ${args.join(' ')}`);
         // Removed excessive database logging
@@ -689,7 +707,7 @@ async function fetchAndProcessJob() {
         // Fix TypeScript type issues with spawn
         const childProcess = spawn(command, args as string[], {
             stdio: ['pipe', 'pipe', 'pipe'], // stdin, stdout, stderr
-            shell: true, // Use shell to ensure proper command execution on Windows
+            shell: false,
             cwd: path.dirname(tmpScriptPath), // Set working directory to the script directory
             detached: false, // Make sure the child process is attached to the parent
             windowsHide: true // Hide the console window on Windows
@@ -731,10 +749,16 @@ async function fetchAndProcessJob() {
             }
         });
 
-        // Handle stdout
-        childProcess.stdout?.on('data', async (data: Buffer) => {
+        // Serialize asynchronous stdout handling and drain it before finalizing
+        // the run, including discovery progress that must never count as price.
+        let stdoutChain: Promise<void> = Promise.resolve();
+        const stdoutDecoder = new StringDecoder('utf8');
+        const { handleCatalogEvent } = await import('./catalog-events');
+        childProcess.stdout?.on('data', (data: Buffer) => {
+          lastOutputTime = Date.now();
+          stdoutChain = stdoutChain.then(async () => {
             lastOutputTime = Date.now(); // Update activity timestamp
-            stdoutData += data.toString();
+            stdoutData += stdoutDecoder.write(data);
             // Process line by line
             let newlineIndex;
             while ((newlineIndex = stdoutData.indexOf('\n')) >= 0) {
@@ -753,6 +777,16 @@ async function fetchAndProcessJob() {
 
                     try {
                         const product = JSON.parse(line);
+                        if (product?.type === 'lampan_url_checks') {
+                            try {
+                                await handleCatalogEvent(product, usesLampanCatalog, claimedJob.scraper_id, supabase);
+                            } catch (error) {
+                                const message = error instanceof Error ? error.message : String(error);
+                                scriptErrors.push(message);
+                                logStructured(claimedJob.id, 'error', 'CATALOG_PROGRESS', message);
+                            }
+                            continue;
+                        }
                         // Validate product structure for both competitor and supplier scrapers
                         const hasName = typeof product === 'object' && product !== null && product.name;
                         const hasCompetitorPrice = product.competitor_price !== undefined && product.competitor_price !== null;
@@ -821,13 +855,16 @@ async function fetchAndProcessJob() {
                     }
                 }
             }
+          }).catch((error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            scriptErrors.push(message);
+            logStructured(claimedJob.id, 'error', 'STDOUT_PROCESSING', message);
+            childProcess.kill();
+          });
         });
 
-        // Handle stderr with improved error capture
-        childProcess.stderr?.on('data', (data: Buffer) => {
-            lastOutputTime = Date.now(); // Update activity timestamp
-            const lines = data.toString().split('\n');
-            lines.forEach(async (line: string) => {
+        // Drain complete UTF8 stderr lines and async status updates in order.
+        const stderrLines = new OrderedLines(async (line: string) => {
                 line = line.trim();
                 if (!line) return;
                 stderrData += line + '\n'; // Store for potential error details
@@ -899,8 +936,7 @@ async function fetchAndProcessJob() {
                                 .update({
                                     current_batch: currentProgress,
                                     total_batches: totalProgress,
-                                    // Also update product_count to match current progress for consistency
-                                    product_count: currentProgress
+                                    // Price counts come only from validated stdout product rows.
                                 })
                                 .eq('id', job.id);
 
@@ -964,6 +1000,15 @@ async function fetchAndProcessJob() {
                 } else if (job) {
                     logStructured(job.id, 'debug', 'SCRIPT_STDERR', line);
                 }
+
+        });
+        childProcess.stderr?.on('data', (data: Buffer) => {
+            lastOutputTime = Date.now();
+            stderrLines.push(data).catch((error: unknown) => {
+                const message = error instanceof Error ? error.message : String(error);
+                scriptErrors.push(message);
+                logStructured(claimedJob.id, 'error', 'STDERR_PROCESSING', message);
+                childProcess.kill();
             });
         });
 
@@ -1016,6 +1061,14 @@ async function fetchAndProcessJob() {
             childProcess.on('close', async (code: number | null) => {
                 clearTimeout(timeout);
                 clearInterval(inactivityCheck);
+                try {
+                    await stdoutChain;
+                    stdoutData += stdoutDecoder.end();
+                    await stderrLines.finish();
+                } catch (error) {
+                    reject(error instanceof Error ? error : new Error(String(error)));
+                    return;
+                }
 
                 // Guard clause: if job is null, we can't proceed with job-specific operations
                 if (!job) {
@@ -1495,7 +1548,11 @@ const MAX_PROGRESS_MESSAGES = 200; // Maximum progress messages to keep (prevent
 const IMPORTANT_PHASES = ['ERROR', 'ERROR_DETAILS', 'COMPLETION', 'JOB_CLAIMED']; // Removed PHASE_UPDATE to reduce frequency
 
 // Function to flush a batch of log messages to the database
+const logFlushes = new KeyedTasks();
 async function flushLogBatch(jobId: string, supabaseClient?: ReturnType<typeof import('@supabase/supabase-js').createClient>) {
+    return logFlushes.run(jobId, () => flushLogBatchSerial(jobId, supabaseClient));
+}
+async function flushLogBatchSerial(jobId: string, supabaseClient?: ReturnType<typeof import('@supabase/supabase-js').createClient>) {
     if (!LOG_BATCHES[jobId] || LOG_BATCHES[jobId].messages.length === 0) return;
 
     const batch = LOG_BATCHES[jobId];

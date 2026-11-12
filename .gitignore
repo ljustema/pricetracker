@@ -21,6 +21,7 @@ next-env.d.ts
 # Documentation
 /docs/*
 !/docs/competitor-price-freshness.md
+!/docs/lampan-nightly.md
 # Allow deployment and architecture documentation
 !/docs/deployment
 !/docs/architecture
