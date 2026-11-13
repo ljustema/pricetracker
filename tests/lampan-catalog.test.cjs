@@ -74,3 +74,27 @@ test('new own products without EAN can match by SKU/brand; contradictory variant
  plan.ownProducts.push({id:'p2',brandId:'b1',sku:'A100',ean:'7318303297953'});
  assert.equal(ctx.catalogIdentifierConflict({...incoming,ean:null},ctx.buildCatalogIndex(plan)),'ambiguous_own_sku_brand');
 });
+test('temporary 5xx retries recover and persistent failures stop after three requests',async()=>{
+ let calls=0;const a=load(async()=>++calls<3?reply('',500):reply('recovered'));
+ assert.equal(await a.ctx.fetchLampanText('https://lampan.se/p/a/','text/html'),'recovered');
+ assert.equal(calls,3);assert.deepEqual(a.waits,[5000,10000]);
+ calls=0;const b=load(async()=>{calls++;return reply('',503)});
+ await assert.rejects(b.ctx.fetchLampanText('https://lampan.se/p/a/','text/html'),/503/);assert.equal(calls,3);
+});
+test('isolated persistent product 500 is skipped without emitting a verified price',async()=>{
+ const a=load(async url=>url.endsWith('/bad/')?reply('',500):reply('valid'));
+ const plan=base();plan.urlChecks=true;plan.known=['bad','good'].map(x=>({url:`https://lampan.se/p/${x}/`,brandId:'b1'}));
+ a.ctx.discoverCatalogListings=async()=>[];a.ctx.extractProductData=async()=>({name:'good',brand:'By Rydens',sku:'A100',ean:'7318303297953',competitor_price:123});a.ctx.productPassesFilters=()=>true;
+ const logs=[];a.ctx.logProgress=msg=>logs.push(msg);
+ await a.ctx.runLampanCatalog({isTestRun:true,lampanCatalog:plan});
+ assert.equal(a.outputs.filter(x=>x.competitor_price===123).length,1);
+ assert.ok(logs.some(x=>x.includes('price not verified')));assert.ok(logs.some(x=>x.includes('"serverErrors":1')));
+ assert.equal(a.outputs.filter(x=>x.type==='lampan_url_checks').length,1);
+});
+test('repeated product server errors abort, while 403 remains fatal on first request',async()=>{
+ for(const status of [500,403]){
+  let calls=0;const a=load(async()=>{calls++;return reply('',status)});const plan=base();plan.known=['a','b','c','d'].map(x=>({url:`https://lampan.se/p/${x}/`,brandId:'b1'}));
+  await assert.rejects(a.ctx.runLampanCatalog({isTestRun:true,lampanCatalog:plan}),status===500?/safety limit/:/403/);
+  assert.equal(calls,status===500?9:1);assert.equal(a.outputs.length,0);
+ }
+});

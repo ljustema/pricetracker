@@ -161,6 +161,13 @@ async function fetchLampanText(url: string, accept: string): Promise<string> {
    await new Promise(resolve=>setTimeout(resolve,wait));
    continue;
   }
+  if([500,502,503,504].includes(response.status)&&attempt<2) {
+   const wait=5000*(attempt+1);
+   logProgress(`Temporary server error HTTP ${response.status}; waiting ${wait}ms before retry ${attempt+2}/3: ${target.pathname}`,2);
+   await response.arrayBuffer();
+   await new Promise(resolve=>setTimeout(resolve,wait));
+   continue;
+  }
   if(!response.ok)throw new Error(`Lampan HTTP ${response.status} ${response.statusText}: ${target.pathname}`);
   let bytes=Buffer.from(await response.arrayBuffer());
   if(bytes[0]===0x1f&&bytes[1]===0x8b)bytes=gunzipSync(bytes,{maxOutputLength:25000000});
@@ -301,13 +308,22 @@ async function runLampanCatalog(context:ScriptContext):Promise<void> {
  const maximum=context.isValidation?20:context.isTestRun?CONFIG.TEST_SETTINGS.TEST_MODE_LIMIT:2100;
  const discoveryBudget=context.isValidation?5:context.isTestRun?Math.ceil(maximum/5):100;
  const known=[...new Set(plan.known.filter(p=>isLampanProductUrl(p.url)&&plan.brands.some(b=>b.id===p.brandId)).map(p=>p.url))].slice(0,maximum-discoveryBudget);
- const checked:string[]=[];let pages=0;let accepted=0;let identityConflicts=0;const conflictUrls:string[]=[];
+ const checked:string[]=[];let pages=0;let accepted=0;let serverErrors=0;let consecutiveServerErrors=0;let identityConflicts=0;const conflictUrls:string[]=[];
  const flushChecks=()=>{if(checked.length&&plan.urlChecks)console.log(JSON.stringify({type:'lampan_url_checks',urls:checked.splice(0)}));else checked.length=0;};
  const read=async(url:string)=>{
   visited.add(url);
   let html:string;
   try{html=await fetchLampanText(url,'text/html');}
-  catch(error){if(error instanceof Error&&/Lampan HTTP (404|410) /.test(error.message)){checked.push(url);pages++;if(checked.length>=20)flushChecks();logProgress(`Product page removed: ${url}`,2);return;}throw error;}
+  catch(error){
+   if(error instanceof Error&&/Lampan HTTP (500|502|503|504) /.test(error.message)) {
+    serverErrors++;consecutiveServerErrors++;pages++;checked.push(url);
+    logProgress(`WARNING: Product skipped after server error retries; price not verified: ${url}`,2);
+    if(consecutiveServerErrors>=3||serverErrors>=10)throw new Error(`Lampan server errors exceeded safety limit (${consecutiveServerErrors} consecutive, ${serverErrors} total): ${url}`);
+    if(checked.length>=20)flushChecks();
+    return;
+   }
+   if(error instanceof Error&&/Lampan HTTP (404|410) /.test(error.message)){checked.push(url);pages++;if(checked.length>=20)flushChecks();logProgress(`Product page removed: ${url}`,2);return;}throw error;}
+  consecutiveServerErrors=0;
   const product=await extractProductData(cheerio.load(html),url);pages++;checked.push(url);
   const brandId=product?index.brandFor(product.brand||''):null;
   const identityConflict=product?catalogIdentifierConflict(product,index):null;
@@ -328,7 +344,7 @@ async function runLampanCatalog(context:ScriptContext):Promise<void> {
   logProgress(`Discovery checks: ${discovery.length} product pages within owned brands`,1);
   for(const url of discovery)await read(url);
  }finally{flushChecks();}
- logProgress(`LAMPAN_CATALOG_COMPLETE ${JSON.stringify({pages,accepted,known:known.length,ownedBrands:plan.brands.length,identityConflicts,conflictUrls})}`,2);
+ logProgress(`LAMPAN_CATALOG_COMPLETE ${JSON.stringify({pages,accepted,known:known.length,ownedBrands:plan.brands.length,serverErrors,identityConflicts,conflictUrls})}`,2);
 }
 
 

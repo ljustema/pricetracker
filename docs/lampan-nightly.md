@@ -4,6 +4,13 @@ The collector reads public product/brand pages with a named PriceTracker client,
 sequential requests and at least 3,000 ms between request starts. HTTP 403 or a
 challenge page stops the run. HTTP 429 allows two bounded retries, honoring
 Retry-After; a requested wait over three minutes stops instead of retrying early.
+Temporary HTTP 500/502/503/504 responses receive two retries after 5 and 10
+seconds. A product page still failing is logged as skipped and counted in the
+final `serverErrors` summary; its price is never emitted or reverified. A URL
+check records the attempt separately from price freshness. Three consecutive
+failing product pages or ten total stop the run, as do exhausted listing-page
+requests. Access blocks (403/challenge) remain immediately fatal.
+
 The official gzip sitemap remains supported, with byte-based decompression.
 
 ## Priority and discovery
