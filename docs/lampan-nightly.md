@@ -11,6 +11,13 @@ check records the attempt separately from price freshness. Three consecutive
 failing product pages or ten total stop the run, as do exhausted listing-page
 requests. Access blocks (403/challenge) remain immediately fatal.
 
+Request timeouts (including response-body reads) share the same three-attempt
+budget as HTTP retries, with 5 and 10 second backoff. Each attempt has a fresh
+30-second deadline and logs the full URL (including pagination query), attempt
+number and timeout. Exhausted timeouts stop the run with the URL in the error;
+no price is emitted or reverified from a timed-out response. Non-timeout network
+errors and access blocks still fail immediately.
+
 The official gzip sitemap remains supported, with byte-based decompression.
 
 ## Priority and discovery
@@ -116,3 +123,17 @@ For a disposable PostgreSQL 17 database, apply the existing freshness fixture,
 the 72-hour migration, `tests/sql/competitor-catalog.fixture.sql`, the new
 migration, then `competitor-catalog.test.sql` and `own-import-matching.test.sql`.
 These fixtures contain no credentials or production catalog rows.
+
+### Timeout handling update, 2026-11-16 (script 2.0.2)
+
+- Up to three total attempts for request/body timeouts, fresh 30-second deadlines,
+  5/10-second backoff, and full URL/attempt logging. HTTP and timeout retries
+  share the budget; Retry-After remains respected even if the 429 body times out.
+- Exhausted timeouts still fail closed. The 72-hour guard and identity checks
+  are unchanged.
+- 36 focused regression tests and strict standalone TypeScript checking passed.
+- Production-worker fault-injection smoke `4eed792d-a95c-478f-8dc0-5571e4e0ef58`:
+  simulated one brand-index AbortError, logged URL, recovered on attempt 2 after
+  five seconds, then completed 20 pages / 20 prices / zero errors in 81.7 seconds.
+- Published the production database script with concurrent-change guards and
+  exact readback, preserving schedule and activation. Worker code is unchanged.

@@ -98,3 +98,43 @@ test('repeated product server errors abort, while 403 remains fatal on first req
   assert.equal(calls,status===500?9:1);assert.equal(a.outputs.length,0);
  }
 });
+
+test('fetch timeouts retry twice with fresh deadlines and URL/attempt diagnostics',async()=>{
+ const url='https://lampan.se/varumarken/by-rydens/?page=2',signals=[],logs=[];
+ let calls=0;const a=load(async(request,options)=>{signals.push(options.signal);if(++calls<3)throw Object.assign(new Error('aborted'),{name:'AbortError'});return reply('recovered');});
+ a.ctx.logProgress=msg=>logs.push(msg);
+ assert.equal(await a.ctx.fetchLampanText(url,'text/html'),'recovered');
+ assert.equal(calls,3);assert.equal(new Set(signals).size,3);assert.deepEqual(a.waits,[5000,10000]);
+ for(let i=1;i<=3;i++)assert.ok(logs.some(x=>x.includes(`request ${i}/3 (timeout 30000ms): ${url}`)));
+ assert.equal(logs.filter(x=>x.includes('Lampan timeout on attempt')).length,2);
+ assert.ok(logs.every(x=>x.includes(url)));
+});
+
+test('body timeouts stop after three attempts and include the full URL',async()=>{
+ const url='https://lampan.se/varumarken/by-rydens/?page=2';let calls=0;
+ const a=load(async()=>{calls++;return {...reply(''),arrayBuffer:async()=>{throw Object.assign(new Error('deadline'),{name:'TimeoutError'});}};});
+ await assert.rejects(a.ctx.fetchLampanText(url,'text/html'),error=>error.message===`Lampan timeout after 3 attempts (30000ms each): ${url}`);
+ assert.equal(calls,3);assert.deepEqual(a.waits,[5000,10000]);
+});
+
+test('HTTP and timeout retries share a budget; other network errors do not retry',async()=>{
+ let calls=0;const a=load(async()=>{if(++calls===1)return reply('',503);throw Object.assign(new Error('aborted'),{name:'AbortError'});});
+ await assert.rejects(a.ctx.fetchLampanText('https://lampan.se/p/a/','text/html'),/timeout after 3 attempts/);
+ assert.equal(calls,3);assert.deepEqual(a.waits,[5000,10000]);
+ calls=0;const b=load(async()=>{calls++;throw Object.assign(new Error('socket reset'),{code:'ECONNRESET'});});
+ await assert.rejects(b.ctx.fetchLampanText('https://lampan.se/p/a/','text/html'),/socket reset/);assert.equal(calls,1);assert.deepEqual(b.waits,[]);
+});
+
+test('exhausted product timeout flushes previous checks without verifying the failed price',async()=>{
+ let failedCalls=0;const a=load(async url=>{if(url.endsWith('/bad/')){failedCalls++;throw Object.assign(new Error('aborted'),{name:'AbortError'});}return reply('valid');});
+ const plan=base();plan.urlChecks=true;plan.known=['good','bad'].map(x=>({url:`https://lampan.se/p/${x}/`,brandId:'b1'}));
+ a.ctx.extractProductData=async()=>({name:'good',brand:'By Rydens',sku:'A100',ean:'7318303297953',competitor_price:123});a.ctx.productPassesFilters=()=>true;
+ await assert.rejects(a.ctx.runLampanCatalog({isTestRun:true,lampanCatalog:plan}),/timeout after 3 attempts.*https:\/\/lampan.se\/p\/bad\//);
+ assert.equal(failedCalls,3);assert.equal(a.outputs.filter(x=>x.competitor_price===123).length,1);
+ assert.deepEqual(JSON.parse(JSON.stringify(a.outputs.find(x=>x.type==='lampan_url_checks').urls)),['https://lampan.se/p/good/']);
+});
+
+test('timeout reading a 429 body still honors Retry-After',async()=>{
+ let calls=0;const a=load(async()=>++calls===1?{...reply('',429,'45'),arrayBuffer:async()=>{throw Object.assign(new Error('aborted'),{name:'AbortError'});}}:reply('recovered'));
+ assert.equal(await a.ctx.fetchLampanText('https://lampan.se/p/a/','text/html'),'recovered');assert.equal(calls,2);assert.deepEqual(a.waits,[45000]);
+});

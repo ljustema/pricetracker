@@ -150,32 +150,44 @@ async function fetchLampanText(url: string, accept: string): Promise<string> {
   const pause=CONFIG.PERFORMANCE.REQUEST_DELAY-(Date.now()-lastLampanRequestStarted);
   if(pause>0)await new Promise(resolve=>setTimeout(resolve,pause));
   lastLampanRequestStarted=Date.now();
-  const response=await fetch(url,{headers:{'User-Agent':'PriceTracker/1.0 (+https://www.pricetracker.se)','Accept':accept,'Accept-Language':'sv-SE,sv;q=0.9'},signal:AbortSignal.timeout(30000),size:25000000});
-  if(response.status===429&&attempt<2) {
-   const retry=response.headers.get('retry-after');
-   const requested=retry?(/^\d+$/.test(retry)?Number(retry)*1000:Date.parse(retry)-Date.now()):15000*(attempt+1);
-   if(!Number.isFinite(requested)||requested>180000)throw new Error(`Lampan HTTP 429: long Retry-After ${retry||'unknown'}, run stopped`);
-   const wait=Math.max(requested,15000*(attempt+1));
-   logProgress(`Rate limited; waiting ${wait}ms before retry ${attempt+2}/3`,2);
-   await response.arrayBuffer();
+  logProgress(`Lampan request ${attempt+1}/3 (timeout 30000ms): ${target.href}`,2);
+  let timeoutRetryDelay=5000*(attempt+1);
+  try {
+   const response=await fetch(url,{headers:{'User-Agent':'PriceTracker/1.0 (+https://www.pricetracker.se)','Accept':accept,'Accept-Language':'sv-SE,sv;q=0.9'},signal:AbortSignal.timeout(30000),size:25000000});
+   if(response.status===429&&attempt<2) {
+    const retry=response.headers.get('retry-after');
+    const requested=retry?(/^\d+$/.test(retry)?Number(retry)*1000:Date.parse(retry)-Date.now()):15000*(attempt+1);
+    if(!Number.isFinite(requested)||requested>180000)throw new Error(`Lampan HTTP 429: long Retry-After ${retry||'unknown'}, run stopped`);
+    const wait=Math.max(requested,15000*(attempt+1));
+    timeoutRetryDelay=wait;
+    logProgress(`Rate limited; waiting ${wait}ms before retry ${attempt+2}/3: ${target.href}`,2);
+    await response.arrayBuffer();
+    await new Promise(resolve=>setTimeout(resolve,wait));
+    continue;
+   }
+   if([500,502,503,504].includes(response.status)&&attempt<2) {
+    const wait=5000*(attempt+1);
+    logProgress(`Temporary server error HTTP ${response.status}; waiting ${wait}ms before retry ${attempt+2}/3: ${target.href}`,2);
+    await response.arrayBuffer();
+    await new Promise(resolve=>setTimeout(resolve,wait));
+    continue;
+   }
+   if(!response.ok)throw new Error(`Lampan HTTP ${response.status} ${response.statusText}: ${target.href}`);
+   let bytes=Buffer.from(await response.arrayBuffer());
+   if(bytes[0]===0x1f&&bytes[1]===0x8b)bytes=gunzipSync(bytes,{maxOutputLength:25000000});
+   const text=bytes.toString('utf8');
+   if(!text.trim()||/<title>\s*Just a moment|cf-chl-/i.test(text))throw new Error(`Lampan returned an empty page or access challenge: ${target.href}`);
+   return text;
+  } catch(error) {
+   const name=error&&typeof error==='object'&&'name' in error?error.name:null;
+   if(name!=='AbortError'&&name!=='TimeoutError')throw error;
+   if(attempt===2)throw new Error(`Lampan timeout after 3 attempts (30000ms each): ${target.href}`);
+   const wait=timeoutRetryDelay;
+   logProgress(`Lampan timeout on attempt ${attempt+1}/3; waiting ${wait}ms before retry ${attempt+2}/3: ${target.href}`,2);
    await new Promise(resolve=>setTimeout(resolve,wait));
-   continue;
   }
-  if([500,502,503,504].includes(response.status)&&attempt<2) {
-   const wait=5000*(attempt+1);
-   logProgress(`Temporary server error HTTP ${response.status}; waiting ${wait}ms before retry ${attempt+2}/3: ${target.pathname}`,2);
-   await response.arrayBuffer();
-   await new Promise(resolve=>setTimeout(resolve,wait));
-   continue;
-  }
-  if(!response.ok)throw new Error(`Lampan HTTP ${response.status} ${response.statusText}: ${target.pathname}`);
-  let bytes=Buffer.from(await response.arrayBuffer());
-  if(bytes[0]===0x1f&&bytes[1]===0x8b)bytes=gunzipSync(bytes,{maxOutputLength:25000000});
-  const text=bytes.toString('utf8');
-  if(!text.trim()||/<title>\s*Just a moment|cf-chl-/i.test(text))throw new Error('Lampan returned an empty page or access challenge');
-  return text;
  }
- throw new Error('Lampan request attempts exhausted');
+ throw new Error(`Lampan request attempts exhausted: ${target.href}`);
 }
 
 
